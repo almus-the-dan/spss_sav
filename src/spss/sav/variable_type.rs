@@ -26,3 +26,23 @@ impl fmt::Display for VariableType {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_numeric() {
+        assert_eq!(VariableType::Numeric.to_string(), "numeric");
+    }
+
+    #[test]
+    fn display_string_short() {
+        assert_eq!(VariableType::String(8).to_string(), "string(8)");
+    }
+
+    #[test]
+    fn display_string_long() {
+        assert_eq!(VariableType::String(2048).to_string(), "string(2048)");
+    }
+}

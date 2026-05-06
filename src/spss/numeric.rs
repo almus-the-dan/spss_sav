@@ -24,3 +24,31 @@ impl Numeric {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn present_returns_inner_value() {
+        assert_eq!(Numeric::Present(1.5).present(), Some(1.5));
+    }
+
+    #[test]
+    fn present_returns_none_for_system_missing() {
+        assert_eq!(Numeric::Missing(MissingValue::System).present(), None);
+    }
+
+    #[test]
+    fn present_returns_none_for_user_defined_missing() {
+        assert_eq!(
+            Numeric::Missing(MissingValue::UserDefined(99.0)).present(),
+            None,
+        );
+    }
+
+    #[test]
+    fn present_negative_zero_returns_some() {
+        assert_eq!(Numeric::Present(-0.0).present(), Some(-0.0));
+    }
+}

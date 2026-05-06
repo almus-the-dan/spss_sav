@@ -30,3 +30,23 @@ impl ValueLabelEntry {
         &self.label
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accessors_return_stored_values() {
+        let entry = ValueLabelEntry::new(ValueLabelValue::Numeric(1.5), "label-text".to_owned());
+        assert_eq!(*entry.value(), ValueLabelValue::Numeric(1.5));
+        assert_eq!(entry.label(), "label-text");
+    }
+
+    #[test]
+    fn accessors_return_string_key() {
+        let key = *b"Male    ";
+        let entry = ValueLabelEntry::new(ValueLabelValue::String(key), "Male".to_owned());
+        assert_eq!(*entry.value(), ValueLabelValue::String(key));
+        assert_eq!(entry.label(), "Male");
+    }
+}

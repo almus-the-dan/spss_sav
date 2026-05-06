@@ -14,3 +14,13 @@ pub enum EncodingStrategy {
     /// [`SavWarning::EncodingOverridden`](crate::spss::sav::sav_warning::SavWarning::EncodingOverridden).
     Override,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_is_fallback() {
+        assert_eq!(EncodingStrategy::default(), EncodingStrategy::Fallback);
+    }
+}

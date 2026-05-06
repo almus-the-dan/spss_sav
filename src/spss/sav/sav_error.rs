@@ -289,3 +289,122 @@ impl std::error::Error for SavError {
 
 /// Convenience alias for results from SAV operations.
 pub type Result<T> = std::result::Result<T, SavError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn section_display() {
+        assert_eq!(Section::Header.to_string(), "header");
+        assert_eq!(Section::Schema.to_string(), "schema");
+        assert_eq!(Section::ValueLabels.to_string(), "value labels");
+        assert_eq!(Section::Documents.to_string(), "documents");
+        assert_eq!(Section::Extensions.to_string(), "extensions");
+        assert_eq!(Section::Records.to_string(), "records");
+    }
+
+    #[test]
+    fn field_display() {
+        assert_eq!(Field::Magic.to_string(), "magic");
+        assert_eq!(Field::FileLabel.to_string(), "file label");
+        assert_eq!(Field::CompressionBias.to_string(), "compression bias");
+        assert_eq!(Field::ValueLabelEntry.to_string(), "value-label entry");
+        assert_eq!(
+            Field::ExtensionElementCount.to_string(),
+            "extension element count",
+        );
+    }
+
+    #[test]
+    fn format_error_kind_display_invalid_magic() {
+        assert_eq!(
+            FormatErrorKind::InvalidMagic.to_string(),
+            "invalid magic bytes"
+        );
+    }
+
+    #[test]
+    fn format_error_kind_display_truncated() {
+        let kind = FormatErrorKind::Truncated {
+            expected: 10,
+            actual: 5,
+        };
+        assert_eq!(kind.to_string(), "truncated: expected 10 bytes, got 5");
+    }
+
+    #[test]
+    fn format_error_kind_display_unexpected_value() {
+        let kind = FormatErrorKind::UnexpectedValue {
+            field: Field::CompressionCode,
+        };
+        assert_eq!(kind.to_string(), "unexpected value in compression code");
+    }
+
+    #[test]
+    fn format_error_carries_section_position_kind() {
+        let err = FormatError::new(Section::Schema, 42, FormatErrorKind::InvalidMagic);
+        assert_eq!(err.section(), Section::Schema);
+        assert_eq!(err.position(), 42);
+        assert_eq!(err.kind(), FormatErrorKind::InvalidMagic);
+    }
+
+    #[test]
+    fn format_error_display_includes_context() {
+        let err = FormatError::new(Section::Header, 0, FormatErrorKind::InvalidMagic);
+        assert_eq!(
+            err.to_string(),
+            "format error in header section at byte 0: invalid magic bytes",
+        );
+    }
+
+    #[test]
+    fn sav_error_display_invalid_encoding() {
+        let err = SavError::InvalidEncoding;
+        assert_eq!(
+            err.to_string(),
+            "string value cannot be encoded in the requested encoding",
+        );
+    }
+
+    #[test]
+    fn sav_error_display_string_too_long() {
+        let err = SavError::StringTooLong { actual: 12 };
+        assert_eq!(
+            err.to_string(),
+            "string value-label key is 12 bytes; the SAV format caps it at 8",
+        );
+    }
+
+    #[test]
+    fn sav_error_display_too_many_missing_values() {
+        let err = SavError::TooManyMissingValues { actual: 5 };
+        assert_eq!(
+            err.to_string(),
+            "discrete missing-value list has 5 entries; the SAV format caps it at 3",
+        );
+    }
+
+    #[test]
+    fn sav_error_display_io_includes_section() {
+        let err = SavError::io(
+            Section::Records,
+            std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "boom"),
+        );
+        assert!(err.to_string().contains("records section"));
+        assert!(err.to_string().contains("boom"));
+    }
+
+    #[test]
+    fn sav_error_format_constructor() {
+        let err = SavError::format(Section::Header, 8, FormatErrorKind::InvalidCompressionBias);
+        match err {
+            SavError::Format(format_err) => {
+                assert_eq!(format_err.section(), Section::Header);
+                assert_eq!(format_err.position(), 8);
+                assert_eq!(format_err.kind(), FormatErrorKind::InvalidCompressionBias);
+            }
+            _ => panic!("expected SavError::Format"),
+        }
+    }
+}

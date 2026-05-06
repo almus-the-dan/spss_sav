@@ -27,3 +27,23 @@ impl MissingValue {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_defined_returns_inner_value() {
+        assert_eq!(MissingValue::UserDefined(1.5).user_defined(), Some(1.5));
+    }
+
+    #[test]
+    fn user_defined_returns_none_for_system() {
+        assert_eq!(MissingValue::System.user_defined(), None);
+    }
+
+    #[test]
+    fn user_defined_zero_is_some() {
+        assert_eq!(MissingValue::UserDefined(0.0).user_defined(), Some(0.0));
+    }
+}

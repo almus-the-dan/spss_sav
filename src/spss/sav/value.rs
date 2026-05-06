@@ -20,12 +20,33 @@ pub enum Value<'a> {
     String(Cow<'a, str>),
 }
 
-impl<'a> Value<'a> {
-    /// Convenience constructor for a borrowed string cell. Equivalent
-    /// to `Value::String(Cow::Borrowed(s))`.
-    #[must_use]
-    #[inline]
-    pub fn string(s: &'a str) -> Self {
+impl<'a> From<&'a str> for Value<'a> {
+    fn from(s: &'a str) -> Self {
         Self::String(Cow::Borrowed(s))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_str_borrows_input() {
+        let v = Value::from("hello");
+        match v {
+            Value::String(Cow::Borrowed(b)) => assert_eq!(b, "hello"),
+            _ => panic!("expected Cow::Borrowed"),
+        }
+    }
+
+    #[test]
+    fn from_str_equality() {
+        assert_eq!(Value::from("hi"), Value::String(Cow::Borrowed("hi")));
+    }
+
+    #[test]
+    fn into_works_with_type_inference() {
+        let v: Value<'_> = "x".into();
+        assert_eq!(v, Value::String(Cow::Borrowed("x")));
     }
 }
