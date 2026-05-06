@@ -1,5 +1,7 @@
 //! Typed key for a value-label entry.
 
+use core::hash::{Hash, Hasher};
+
 use encoding_rs::Encoding;
 
 use crate::spss::sav::sav_error::{Result, SavError};
@@ -11,13 +13,49 @@ const VALUE_LABEL_KEY_WIDTH: usize = 8;
 /// SAV value-label keys are always eight bytes on disk: an `f64`
 /// for numeric variables, or a fixed eight-byte string slot
 /// (right-padded with spaces) for short-string variables.
-#[derive(Debug, Clone, Copy, PartialEq)]
+///
+/// `PartialEq`/`Eq`/`Hash` use IEEE 754 **bit-pattern** equality on
+/// the numeric variant — the same comparison rule the SAV format
+/// itself uses for matching values against
+/// [`MissingValueSpec::Discrete`](crate::spss::sav::missing_value_spec::MissingValueSpec::Discrete).
+/// Bit-pattern comparison is reflexive (every NaN bit pattern
+/// matches itself) but distinguishes IEEE-equal-but-different-bits
+/// values like `+0.0` and `-0.0`. This makes `ValueLabelValue`
+/// usable directly as a `HashMap` key.
+#[derive(Debug, Clone, Copy)]
 pub enum ValueLabelValue {
     /// Numeric key.
     Numeric(f64),
     /// String key — eight raw bytes from the file, in the file's
     /// declared encoding.
     String([u8; VALUE_LABEL_KEY_WIDTH]),
+}
+
+impl PartialEq for ValueLabelValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Numeric(a), Self::Numeric(b)) => a.to_bits() == b.to_bits(),
+            (Self::String(a), Self::String(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ValueLabelValue {}
+
+impl Hash for ValueLabelValue {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Self::Numeric(value) => {
+                0u8.hash(state);
+                value.to_bits().hash(state);
+            }
+            Self::String(bytes) => {
+                1u8.hash(state);
+                bytes.hash(state);
+            }
+        }
+    }
 }
 
 impl ValueLabelValue {
@@ -47,25 +85,6 @@ impl ValueLabelValue {
         let mut bytes = [b' '; VALUE_LABEL_KEY_WIDTH];
         bytes[..encoded.len()].copy_from_slice(&encoded);
         Ok(Self::String(bytes))
-    }
-}
-
-/// Compares two [`ValueLabelValue`]s using IEEE 754 bit-pattern
-/// equality on the numeric variant.
-///
-/// Crate-internal — keeps the bit-pattern semantics off
-/// [`ValueLabelValue`]'s public API while providing one canonical
-/// implementation for both [`ValueLabelSet::label_for`] and the
-/// cache-key wrapper inside `value_label_table`.
-///
-/// [`ValueLabelSet::label_for`]: crate::spss::sav::value_label_set::ValueLabelSet::label_for
-pub(crate) fn bit_equals(a: &ValueLabelValue, b: &ValueLabelValue) -> bool {
-    match (a, b) {
-        (ValueLabelValue::Numeric(av), ValueLabelValue::Numeric(bv)) => {
-            av.to_bits() == bv.to_bits()
-        }
-        (ValueLabelValue::String(ab), ValueLabelValue::String(bb)) => ab == bb,
-        _ => false,
     }
 }
 
@@ -124,45 +143,82 @@ mod tests {
     }
 
     #[test]
-    fn bit_equals_numeric_same_bits() {
+    fn eq_numeric_same_bits() {
         let a = ValueLabelValue::Numeric(1.5);
         let b = ValueLabelValue::Numeric(1.5);
-        assert!(bit_equals(&a, &b));
+        assert_eq!(a, b);
     }
 
     #[test]
-    fn bit_equals_numeric_distinguishes_pos_neg_zero() {
+    fn eq_numeric_distinguishes_pos_neg_zero() {
         // 0.0 == -0.0 in IEEE but their bit patterns differ.
         let a = ValueLabelValue::Numeric(0.0);
         let b = ValueLabelValue::Numeric(-0.0);
-        assert!(!bit_equals(&a, &b));
+        assert_ne!(a, b);
     }
 
     #[test]
-    fn bit_equals_nan_matches_same_bit_pattern() {
+    fn eq_nan_matches_same_bit_pattern() {
         let nan_a = ValueLabelValue::Numeric(f64::from_bits(0x7FF8_0000_0000_0001));
         let nan_b = ValueLabelValue::Numeric(f64::from_bits(0x7FF8_0000_0000_0001));
-        assert!(bit_equals(&nan_a, &nan_b));
+        assert_eq!(nan_a, nan_b);
     }
 
     #[test]
-    fn bit_equals_different_nans_dont_match() {
+    fn eq_different_nans_dont_match() {
         let nan_a = ValueLabelValue::Numeric(f64::from_bits(0x7FF8_0000_0000_0001));
         let nan_b = ValueLabelValue::Numeric(f64::from_bits(0x7FF8_0000_0000_0002));
-        assert!(!bit_equals(&nan_a, &nan_b));
+        assert_ne!(nan_a, nan_b);
     }
 
     #[test]
-    fn bit_equals_string_match() {
+    fn eq_string_match() {
         let a = ValueLabelValue::String(*b"Male    ");
         let b = ValueLabelValue::String(*b"Male    ");
-        assert!(bit_equals(&a, &b));
+        assert_eq!(a, b);
     }
 
     #[test]
-    fn bit_equals_numeric_and_string_never_match() {
+    fn eq_numeric_and_string_never_match() {
         let a = ValueLabelValue::Numeric(0.0);
         let b = ValueLabelValue::String([0; 8]);
-        assert!(!bit_equals(&a, &b));
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn hash_consistent_with_eq() {
+        use std::collections::hash_map::DefaultHasher;
+
+        fn hash_of(v: &ValueLabelValue) -> u64 {
+            let mut hasher = DefaultHasher::new();
+            v.hash(&mut hasher);
+            hasher.finish()
+        }
+
+        // Equal values must hash equal.
+        let a = ValueLabelValue::Numeric(1.5);
+        let b = ValueLabelValue::Numeric(1.5);
+        assert_eq!(hash_of(&a), hash_of(&b));
+
+        let s1 = ValueLabelValue::String(*b"Male    ");
+        let s2 = ValueLabelValue::String(*b"Male    ");
+        assert_eq!(hash_of(&s1), hash_of(&s2));
+    }
+
+    #[test]
+    fn usable_as_hashmap_key() {
+        use std::collections::HashMap;
+
+        let mut map: HashMap<ValueLabelValue, &str> = HashMap::new();
+        map.insert(ValueLabelValue::Numeric(1.0), "one");
+        map.insert(ValueLabelValue::Numeric(2.0), "two");
+        map.insert(ValueLabelValue::String(*b"M       "), "Male");
+
+        assert_eq!(map.get(&ValueLabelValue::Numeric(1.0)), Some(&"one"));
+        assert_eq!(map.get(&ValueLabelValue::Numeric(2.0)), Some(&"two"));
+        assert_eq!(
+            map.get(&ValueLabelValue::String(*b"M       ")),
+            Some(&"Male"),
+        );
     }
 }

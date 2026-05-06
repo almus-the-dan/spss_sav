@@ -1,12 +1,11 @@
 //! In-memory lookup table for value-label sets.
 
-use core::hash::{Hash, Hasher};
 use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::spss::sav::value_label_set::ValueLabelSet;
-use crate::spss::sav::value_label_value::{ValueLabelValue, bit_equals};
+use crate::spss::sav::value_label_value::ValueLabelValue;
 
 /// Minimum entries in a set before [`ValueLabelTable::label_for`]
 /// builds and caches a hash-indexed lookup. Below this, a linear
@@ -20,8 +19,9 @@ const INDEX_THRESHOLD: usize = 10;
 /// cached hash index on the first hit; smaller sets stay on a linear
 /// scan.
 ///
-/// Numeric value-label keys are compared by IEEE 754 bit pattern,
-/// matching how the SAV format compares values against
+/// Numeric value-label keys are compared by IEEE 754 bit pattern via
+/// [`ValueLabelValue`]'s `PartialEq`/`Hash`, matching how the SAV
+/// format compares values against
 /// [`MissingValueSpec::Discrete`](crate::spss::sav::missing_value_spec::MissingValueSpec::Discrete).
 /// A cell value carrying a particular bit pattern resolves the same
 /// way in both the missing-value check and the value-label lookup.
@@ -31,7 +31,7 @@ pub struct ValueLabelTable {
     // Lazily built per set name. Kept in lockstep with `sets`: every
     // mutation that touches `sets` does the matching touch on
     // `indexes` so `label_for` can rely on the parallel structure.
-    indexes: HashMap<Rc<str>, OnceCell<HashMap<ValueLabelKey, String>>>,
+    indexes: HashMap<Rc<str>, OnceCell<HashMap<ValueLabelValue, String>>>,
 }
 
 impl ValueLabelTable {
@@ -102,56 +102,20 @@ impl ValueLabelTable {
             return set.label_for(value);
         };
         let index = cell.get_or_init(|| build_index(set));
-        index.get(&ValueLabelKey(*value)).map(String::as_str)
+        index.get(value).map(String::as_str)
     }
 }
 
-/// Builds a first-wins `ValueLabelKey → label` index from a set's
+/// Builds a first-wins `ValueLabelValue → label` index from a set's
 /// entries.
-fn build_index(set: &ValueLabelSet) -> HashMap<ValueLabelKey, String> {
+fn build_index(set: &ValueLabelSet) -> HashMap<ValueLabelValue, String> {
     let mut index = HashMap::with_capacity(set.entries().len());
     for entry in set.entries() {
         index
-            .entry(ValueLabelKey(*entry.value()))
+            .entry(*entry.value())
             .or_insert_with(|| entry.label().to_owned());
     }
     index
-}
-
-// ---------------------------------------------------------------------------
-// Internal: hashable wrapper around ValueLabelValue for cache keys.
-// ---------------------------------------------------------------------------
-
-/// Bit-pattern-equality wrapper around [`ValueLabelValue`] for use
-/// as a `HashMap` key.
-///
-/// Module-private — keeps the bit-pattern hash semantics out of
-/// [`ValueLabelValue`]'s public API, where users would reasonably
-/// expect numeric `PartialEq` to follow IEEE 754 rules.
-#[derive(Debug, Clone, Copy)]
-struct ValueLabelKey(ValueLabelValue);
-
-impl PartialEq for ValueLabelKey {
-    fn eq(&self, other: &Self) -> bool {
-        bit_equals(&self.0, &other.0)
-    }
-}
-
-impl Eq for ValueLabelKey {}
-
-impl Hash for ValueLabelKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        match &self.0 {
-            ValueLabelValue::Numeric(value) => {
-                0u8.hash(state);
-                value.to_bits().hash(state);
-            }
-            ValueLabelValue::String(bytes) => {
-                1u8.hash(state);
-                bytes.hash(state);
-            }
-        }
-    }
 }
 
 #[cfg(test)]

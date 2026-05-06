@@ -1,7 +1,7 @@
 //! A named set of value-label mappings.
 
 use crate::spss::sav::value_label_entry::ValueLabelEntry;
-use crate::spss::sav::value_label_value::{ValueLabelValue, bit_equals};
+use crate::spss::sav::value_label_value::ValueLabelValue;
 
 /// A named collection of [`ValueLabelEntry`] mappings.
 ///
@@ -36,17 +36,15 @@ impl ValueLabelSet {
 
     /// Returns the label for `value`, or `None` if no entry matches.
     ///
-    /// Linear scan with bit-pattern equality on numeric keys
-    /// (matching the SAV-format rule for
-    /// [`MissingValueSpec::Discrete`](crate::spss::sav::missing_value_spec::MissingValueSpec::Discrete)).
-    /// On duplicate keys, the first entry wins. For fast repeated
-    /// lookups across many sets, use
+    /// Linear scan; numeric keys compare by IEEE 754 bit pattern via
+    /// [`ValueLabelValue`]'s `PartialEq`. On duplicate keys, the first
+    /// entry wins. For fast repeated lookups across many sets, use
     /// [`ValueLabelTable`](crate::spss::sav::value_label_table::ValueLabelTable).
     #[must_use]
     pub fn label_for(&self, value: &ValueLabelValue) -> Option<&str> {
         self.entries
             .iter()
-            .find(|entry| bit_equals(entry.value(), value))
+            .find(|entry| entry.value() == value)
             .map(ValueLabelEntry::label)
     }
 }
