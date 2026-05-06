@@ -1,0 +1,48 @@
+//! Recoverable issues raised during SAV reading or writing.
+
+/// A recoverable issue surfaced during SAV processing.
+///
+/// Warnings are accumulated in the reader/writer's per-phase state
+/// and exposed via `.warnings()` after each operation. They never
+/// halt processing — they only annotate it. The `Vec<SavWarning>` is
+/// reused across phases and cleared at the start of each
+/// `read_*`/`write_*` call.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum SavWarning {
+    /// A `(format-kind, width, decimals)` triple does not match any
+    /// valid SPSS display-format combination. The triple is preserved
+    /// verbatim; the writer's `finish()` surfaces accumulated
+    /// warnings.
+    InvalidFormatCombination {
+        /// Format-kind code as written.
+        kind: u8,
+        /// Declared width.
+        width: u8,
+        /// Declared decimal places.
+        decimals: u8,
+    },
+    /// The reader's encoding strategy was `Override` and the override
+    /// differed from the encoding the file declared.
+    EncodingOverridden {
+        /// Encoding label declared by the file.
+        declared: &'static str,
+        /// Encoding label actually used by the reader.
+        used: &'static str,
+    },
+    /// An extension subtype this library does not yet recognize was
+    /// preserved verbatim in
+    /// [`ExtensionRecord::Unknown`](crate::spss::sav::extensions::Unknown).
+    UnknownExtensionSubtype {
+        /// Subtype number from the extension record header.
+        subtype: u32,
+    },
+    /// The header's measurement-level byte was not 1, 2, or 3 — the
+    /// variable was assigned the unknown level.
+    UnknownMeasurementLevel {
+        /// 0-based variable index.
+        variable_index: u32,
+        /// Raw byte read from disk.
+        byte: u8,
+    },
+}
