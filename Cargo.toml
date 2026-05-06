@@ -1,0 +1,39 @@
+[package]
+name = "spss_sav"
+version = "0.1.0"
+edition = "2024"
+description = "Pure Rust streaming reader and writer for SPSS's SAV and ZSAV file formats."
+license = "MIT"
+homepage = "https://github.com/almus-the-dan/spss_sav"
+repository = "https://github.com/almus-the-dan/spss_sav"
+readme = "README.md"
+exclude = [
+    "precommit-check.ps1",
+    "profile.sh",
+    "profile.ps1",
+    ".github/",
+    "plans/",
+    "benches/data/",
+]
+keywords = ["spss", "sav", "zsav", "data", "statistics"]
+categories = ["parser-implementations", "encoding", "science"]
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std"], optional = true }
+encoding_rs = "0.8.35"
+flate2 = "1"
+ibm_hfp = "0.1.0"
+tokio = { version = "1", features = ["io-util", "fs"], optional = true }
+vax-floating = "0.2.0"
+
+[features]
+chrono = ["dep:chrono"]
+tokio = ["dep:tokio"]
+
+[lints.rust]
+rust_2018_idioms = "warn"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
