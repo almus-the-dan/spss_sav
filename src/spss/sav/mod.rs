@@ -1,5 +1,13 @@
-/// Byte order of multi-byte values in a SAV file.
+/// Display alignment of a SAV variable.
+pub mod alignment;
+/// Byte order of multibyte values in a SAV file.
 pub mod byte_order;
+/// Compression scheme of a SAV file.
+pub mod compression;
+/// One typed record from the SAV dictionary section.
+pub mod dictionary_record;
+/// Free-text document lines from a SAV file.
+pub mod document_record;
 /// Reader policy for choosing a text encoding.
 pub mod encoding_strategy;
 /// SAV extension records (subtypes 3, 4, 5, 6, 7, 7B, 8, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, ...).
@@ -8,12 +16,26 @@ pub mod extensions;
 pub mod file_encoding;
 /// On-disk floating-point representation of `f64` values.
 pub mod float_format;
+/// A single data record decoded on demand.
+pub mod lazy_sav_record;
+/// Measurement level of a SAV variable.
+pub mod measurement_level;
 /// A variable's missing-value specification.
 pub mod missing_value_spec;
+/// Successfully parsed SAV creation timestamp.
+pub mod parsed_sav_timestamp;
 /// Endpoint of a missing-value range.
 pub mod range_bound;
+/// Creation timestamp recorded in a SAV file header.
+pub mod sav_creation_timestamp;
 /// SAV-format-specific errors.
 pub mod sav_error;
+/// SAV variable display-format kind.
+pub mod sav_format_kind;
+/// A single decoded SAV data record.
+pub mod sav_record;
+/// Wire-level fields of a single SAV type-2 variable record.
+pub mod sav_variable_header;
 /// Recoverable issues raised during SAV reading or writing.
 pub mod sav_warning;
 /// A single SAV cell value.
@@ -26,5 +48,7 @@ pub mod value_label_set;
 pub mod value_label_table;
 /// Typed key for a value-label entry.
 pub mod value_label_value;
-/// Storage type of a SAV variable.
+/// One custom attribute on a SAV variable.
+pub mod variable_attribute;
+/// SAV variable storage type.
 pub mod variable_type;

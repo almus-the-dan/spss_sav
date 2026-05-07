@@ -34,11 +34,13 @@ pub enum SavWarning {
     /// preserved verbatim in
     /// [`ExtensionRecord::Unknown`](crate::spss::sav::extensions::Unknown).
     UnknownExtensionSubtype {
-        /// Subtype number from the extension record header.
+        /// The subtype number from the extension record header.
         subtype: u32,
     },
-    /// The header's measurement-level byte was not 1, 2, or 3 — the
-    /// variable was assigned the unknown level.
+    /// The on-disk measurement-level byte was outside the canonical
+    /// `0..=3` range. The raw byte is preserved verbatim in the
+    /// resulting
+    /// [`MeasurementLevel::Unknown`](crate::spss::sav::measurement_level::MeasurementLevel::Unknown).
     UnknownMeasurementLevel {
         /// 0-based variable index.
         variable_index: u32,
