@@ -4,6 +4,8 @@ pub mod alignment;
 pub mod byte_order;
 /// Compression scheme of a SAV file.
 pub mod compression;
+/// Streaming reader for the SAV dictionary section.
+pub mod dictionary_reader;
 /// One typed record from the SAV dictionary section.
 pub mod dictionary_record;
 /// Free-text document lines from a SAV file.
@@ -16,6 +18,12 @@ pub mod extensions;
 pub mod file_encoding;
 /// On-disk floating-point representation of `f64` values.
 pub mod float_format;
+/// On-disk byte layout of the 176-byte SAV file header.
+mod header_format;
+/// Pure parse helpers for the SAV file header.
+mod header_parse;
+/// Reader for the 176-byte SAV file header.
+pub mod header_reader;
 /// A single data record decoded on demand.
 pub mod lazy_sav_record;
 /// Measurement level of a SAV variable.
@@ -26,6 +34,8 @@ pub mod missing_value_spec;
 pub mod parsed_sav_timestamp;
 /// Endpoint of a missing-value range.
 pub mod range_bound;
+/// Crate-internal per-reader state.
+mod reader_state;
 /// Creation timestamp recorded in a SAV file header.
 pub mod sav_creation_timestamp;
 /// SAV-format-specific errors.
@@ -36,6 +46,8 @@ pub mod sav_format;
 pub mod sav_format_kind;
 /// SAV file header.
 pub mod sav_header;
+/// Entry point for reading a SAV file.
+pub mod sav_reader;
 /// A single decoded SAV data record.
 pub mod sav_record;
 /// Schema of variables in a SAV file.

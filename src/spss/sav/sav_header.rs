@@ -17,6 +17,7 @@ use crate::spss::sav::sav_creation_timestamp::SavCreationTimestamp;
 /// itself.
 #[derive(Debug, Clone)]
 pub struct SavHeader {
+    product_name: String,
     file_label: String,
     creation_timestamp: SavCreationTimestamp,
     compression: Compression,
@@ -34,6 +35,16 @@ impl SavHeader {
     #[inline]
     pub fn builder() -> SavHeaderBuilder {
         SavHeaderBuilder::default()
+    }
+
+    /// Free-text product-name string (the 60-byte `prod_name` header
+    /// field). Typically begins with `"@(#) SPSS DATA FILE"` and
+    /// identifies the writing software. Empty when no product name was
+    /// declared.
+    #[must_use]
+    #[inline]
+    pub fn product_name(&self) -> &str {
+        &self.product_name
     }
 
     /// Free-text file label (≤ 64 bytes on disk).
@@ -104,6 +115,7 @@ impl SavHeader {
 /// Builder for [`SavHeader`].
 #[derive(Debug, Default, Clone)]
 pub struct SavHeaderBuilder {
+    product_name: Option<String>,
     file_label: Option<String>,
     creation_timestamp: Option<SavCreationTimestamp>,
     compression: Option<Compression>,
@@ -116,6 +128,15 @@ pub struct SavHeaderBuilder {
 }
 
 impl SavHeaderBuilder {
+    /// Sets the free-text product-name string (the 60-byte `prod_name`
+    /// header field). Empty by default.
+    #[must_use]
+    #[inline]
+    pub fn product_name(mut self, name: impl Into<String>) -> Self {
+        self.product_name = Some(name.into());
+        self
+    }
+
     /// Sets the free-text file label.
     #[must_use]
     #[inline]
