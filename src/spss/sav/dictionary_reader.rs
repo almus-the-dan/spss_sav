@@ -11,8 +11,10 @@
 //! finalization that produces a [`SavSchema`] land in Phase 5.
 
 use std::io::Read;
+
 use crate::spss::sav::dictionary_record::DictionaryRecord;
 use crate::spss::sav::reader_state::ReaderState;
+use crate::spss::sav::record_reader::RecordReader;
 use crate::spss::sav::sav_error::Result;
 use crate::spss::sav::sav_header::SavHeader;
 use crate::spss::sav::sav_warning::SavWarning;
@@ -30,12 +32,32 @@ use crate::spss::sav::sav_warning::SavWarning;
 pub struct DictionaryReader<R> {
     state: ReaderState<R>,
     header: SavHeader,
+    #[allow(dead_code)] // exercised once the dictionary reader phase lands.
+    weight_variable_index: Option<usize>,
 }
 
 impl<R> DictionaryReader<R> {
-    #[allow(dead_code)] // exercised once the header reader lands.
-    pub(crate) fn new(state: ReaderState<R>, header: SavHeader) -> Self {
-        Self { state, header }
+    pub(crate) fn new(
+        state: ReaderState<R>,
+        header: SavHeader,
+        weight_variable_index: Option<usize>,
+    ) -> Self {
+        Self {
+            state,
+            header,
+            weight_variable_index,
+        }
+    }
+
+    /// 0-based index of the declared weight variable, if any.
+    /// Surfaced via [`SavHeader::weight_variable`] (the long name)
+    /// only after the dictionary phase finalizes; before then,
+    /// callers can inspect the raw index here.
+    #[allow(dead_code)] // exercised once the dictionary reader phase lands.
+    #[must_use]
+    #[inline]
+    pub(crate) fn weight_variable_index(&self) -> Option<usize> {
+        self.weight_variable_index
     }
 
     /// The file header parsed by the upstream
@@ -53,7 +75,6 @@ impl<R> DictionaryReader<R> {
     /// [`HeaderReader::read_header`](crate::spss::sav::header_reader::HeaderReader::read_header)
     /// for the first call). Cleared at the start of each
     /// `read_record` invocation.
-    #[allow(dead_code)] // exercised once the dictionary reader body lands.
     #[must_use]
     #[inline]
     pub fn warnings(&self) -> &[SavWarning] {
@@ -86,16 +107,4 @@ impl<R: Read> DictionaryReader<R> {
     pub fn into_record_reader(self) -> Result<RecordReader<R>> {
         todo!("body lands with the record reader phase")
     }
-}
-
-/// Placeholder record-reader type. Lands in full in Phase 6.
-///
-/// Defined here as a unit shell so
-/// [`DictionaryReader::into_record_reader`] can name its return
-/// type today. The real definition (with `header()`, `schema()`,
-/// `read_record()`, etc.) lands alongside the data-section reader.
-#[derive(Debug)]
-#[allow(dead_code)] // exercised once the record reader lands.
-pub struct RecordReader<R> {
-    _placeholder: core::marker::PhantomData<R>,
 }

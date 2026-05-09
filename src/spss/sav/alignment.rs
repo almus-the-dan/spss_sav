@@ -29,6 +29,7 @@ pub enum Alignment {
 impl Alignment {
     /// On-disk byte representation of this alignment.
     #[must_use]
+    #[allow(dead_code)] // Will be implemented as part of the dictionary parsing phase
     pub(crate) fn to_byte(self) -> u8 {
         match self {
             Self::Left => 0,

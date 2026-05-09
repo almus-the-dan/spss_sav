@@ -47,4 +47,21 @@ pub enum SavWarning {
         /// Raw byte read from disk.
         byte: u8,
     },
+    /// The header's `compression` field declared a different
+    /// compression scheme than the magic bytes implied. The
+    /// `compression` field is taken as authoritative (matching
+    /// `ReadStat`'s behavior).
+    CompressionMismatch {
+        /// Magic bytes from the start of the file (`$FL2` or `$FL3`).
+        rec_type: [u8; 4],
+        /// Raw `compression` field value.
+        code: i32,
+    },
+    /// The header's `compression` field held a value outside the
+    /// recognized set (`0` = none, `1` = bytecode, `2` = zlib). The
+    /// reader treats the file as uncompressed.
+    UnknownCompressionCode {
+        /// Raw `compression` field value.
+        code: i32,
+    },
 }

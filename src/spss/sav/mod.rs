@@ -30,12 +30,12 @@ pub mod lazy_sav_record;
 pub mod measurement_level;
 /// A variable's missing-value specification.
 pub mod missing_value_spec;
-/// Successfully parsed SAV creation timestamp.
-pub mod parsed_sav_timestamp;
 /// Endpoint of a missing-value range.
 pub mod range_bound;
 /// Crate-internal per-reader state.
 mod reader_state;
+/// Reader for the data-record section of a SAV file.
+pub mod record_reader;
 /// Creation timestamp recorded in a SAV file header.
 pub mod sav_creation_timestamp;
 /// SAV-format-specific errors.
@@ -52,6 +52,8 @@ pub mod sav_reader;
 pub mod sav_record;
 /// Schema of variables in a SAV file.
 pub mod sav_schema;
+/// A SAV timestamp.
+pub mod sav_timestamp;
 /// A reconciled SAV variable.
 pub mod sav_variable;
 /// Wire-level fields of a single SAV type-2 variable record.

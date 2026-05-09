@@ -102,6 +102,7 @@ impl SavFormatKind {
     ///
     /// The mapping follows PSPP's canonical numeric assignments.
     #[must_use]
+    #[allow(dead_code)] // Will be implemented as part of the dictionary parsing phase
     pub(crate) fn to_byte(self) -> u8 {
         match self {
             Self::Unspecified => 0,

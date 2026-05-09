@@ -4,9 +4,8 @@
 //! header record. No I/O. Both the sync and async header readers
 //! and writers share these.
 
-#![allow(dead_code)] // exercised once the header reader/writer land.
-
 /// Total size of the SAV header record, in bytes.
+#[allow(dead_code)] // exercised by the tile-coverage test and once the writer lands.
 pub(super) const HEADER_LEN: usize = 176;
 
 /// Magic bytes for an uncompressed or bytecode-compressed SAV file.
@@ -16,12 +15,12 @@ pub(super) const MAGIC_FL2: &[u8; 4] = b"$FL2";
 pub(super) const MAGIC_FL3: &[u8; 4] = b"$FL3";
 
 /// Byte offset and length of the 4-byte `rec_type` magic field.
-pub(super) const REC_TYPE_OFFSET: usize = 0;
-pub(super) const REC_TYPE_LEN: usize = 4;
+pub(super) const RECORD_TYPE_OFFSET: usize = 0;
+pub(super) const RECORD_TYPE_LEN: usize = 4;
 
 /// Byte offset and length of the 60-byte `prod_name` field.
-pub(super) const PROD_NAME_OFFSET: usize = 4;
-pub(super) const PROD_NAME_LEN: usize = 60;
+pub(super) const PRODUCT_NAME_OFFSET: usize = 4;
+pub(super) const PRODUCT_NAME_LEN: usize = 60;
 
 /// Byte offset of the 4-byte little-endian `layout_code` field
 /// (used for byte-order detection: equals `2` or `3` in the file's
@@ -51,6 +50,7 @@ pub(super) const NCASES_OFFSET: usize = 80;
 
 /// Byte offset and length of the 8-byte `bias` field
 /// (compression bias, typically `100.0`).
+#[allow(dead_code)] // exercised by the tile-coverage test and once the writer lands.
 pub(super) const BIAS_OFFSET: usize = 84;
 pub(super) const BIAS_LEN: usize = 8;
 
@@ -73,6 +73,7 @@ pub(super) const FILE_LABEL_OFFSET: usize = 109;
 pub(super) const FILE_LABEL_LEN: usize = 64;
 
 /// Byte offset and length of the 3-byte trailing padding.
+#[allow(dead_code)] // exercised by the tile-coverage test and once the writer lands.
 pub(super) const TRAILING_PADDING_OFFSET: usize = 173;
 pub(super) const TRAILING_PADDING_LEN: usize = 3;
 
@@ -82,9 +83,9 @@ mod tests {
 
     #[test]
     fn field_offsets_tile_the_header_exactly() {
-        assert_eq!(REC_TYPE_OFFSET, 0);
-        assert_eq!(REC_TYPE_OFFSET + REC_TYPE_LEN, PROD_NAME_OFFSET);
-        assert_eq!(PROD_NAME_OFFSET + PROD_NAME_LEN, LAYOUT_CODE_OFFSET);
+        assert_eq!(RECORD_TYPE_OFFSET, 0);
+        assert_eq!(RECORD_TYPE_OFFSET + RECORD_TYPE_LEN, PRODUCT_NAME_OFFSET);
+        assert_eq!(PRODUCT_NAME_OFFSET + PRODUCT_NAME_LEN, LAYOUT_CODE_OFFSET);
         assert_eq!(LAYOUT_CODE_OFFSET + 4, NOMINAL_CASE_SIZE_OFFSET);
         assert_eq!(NOMINAL_CASE_SIZE_OFFSET + 4, COMPRESSION_OFFSET);
         assert_eq!(COMPRESSION_OFFSET + 4, WEIGHT_INDEX_OFFSET);

@@ -27,6 +27,7 @@ pub struct SavHeader {
     bias: f64,
     weight_variable: Option<String>,
     case_count: Option<u32>,
+    nominal_case_size: Option<u32>,
 }
 
 impl SavHeader {
@@ -110,6 +111,17 @@ impl SavHeader {
     pub fn case_count(&self) -> Option<u32> {
         self.case_count
     }
+
+    /// Declared variable count from the header's
+    /// `nominal_case_size` field, or `None` when the file recorded
+    /// `-1` (or any other negative). The actual variable count
+    /// always comes from the schema; this accessor exposes the
+    /// header-declared value for diagnostics.
+    #[must_use]
+    #[inline]
+    pub fn nominal_case_size(&self) -> Option<u32> {
+        self.nominal_case_size
+    }
 }
 
 /// Builder for [`SavHeader`].
@@ -125,6 +137,7 @@ pub struct SavHeaderBuilder {
     bias: Option<f64>,
     weight_variable: Option<String>,
     case_count: Option<u32>,
+    nominal_case_size: Option<u32>,
 }
 
 impl SavHeaderBuilder {
@@ -215,17 +228,52 @@ impl SavHeaderBuilder {
     /// `write_record_count_and_finish()` when the underlying writer
     /// also implements [`Seek`](std::io::Seek). The reader populates
     /// it from the header's `case_count` field.
-    #[allow(dead_code)] // exercised once the reader/writer land.
     #[inline]
     pub(crate) fn case_count(mut self, case_count: Option<u32>) -> Self {
         self.case_count = case_count;
         self
     }
 
-    /// Finalizes this builder into a [`SavHeader`].
-    #[must_use]
+    /// Sets the declared `nominal_case_size`.
+    ///
+    /// Crate-internal — the writer derives this from the schema's
+    /// variable count. The reader populates it from the header's
+    /// `nominal_case_size` field.
     #[inline]
+    pub(crate) fn nominal_case_size(mut self, value: Option<u32>) -> Self {
+        self.nominal_case_size = value;
+        self
+    }
+
+    /// Finalizes this builder into a [`SavHeader`].
+    ///
+    /// Unset fields take spec-canonical defaults: empty strings for
+    /// `product_name` and `file_label`; an empty
+    /// [`SavCreationTimestamp::Unparsed`] for the timestamp;
+    /// [`Compression::None`], [`FloatFormat::Ieee754`],
+    /// [`FileEncoding::Unknown`], `bias = 100.0`. Byte order
+    /// defaults to little-endian — the dominant choice in
+    /// SPSS-authored files since the late 1990s. Required-vs-
+    /// optional checks live at write time, not here.
+    #[must_use]
     pub fn build(self) -> SavHeader {
-        todo!("body lands with the header reader / writer")
+        SavHeader {
+            product_name: self.product_name.unwrap_or_default(),
+            file_label: self.file_label.unwrap_or_default(),
+            creation_timestamp: self.creation_timestamp.unwrap_or_else(|| {
+                SavCreationTimestamp::Unparsed {
+                    date: String::new(),
+                    time: String::new(),
+                }
+            }),
+            compression: self.compression.unwrap_or(Compression::None),
+            byte_order: self.byte_order.unwrap_or(ByteOrder::LittleEndian),
+            float_format: self.float_format.unwrap_or(FloatFormat::Ieee754),
+            file_encoding: self.file_encoding.unwrap_or(FileEncoding::Unknown),
+            bias: self.bias.unwrap_or(100.0),
+            weight_variable: self.weight_variable,
+            case_count: self.case_count,
+            nominal_case_size: self.nominal_case_size,
+        }
     }
 }

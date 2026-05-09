@@ -12,9 +12,12 @@
 //! uncompressed, so phases through the dictionary reader do not
 //! need it.
 
+use std::io::Read;
+
 use encoding_rs::Encoding;
 
 use crate::spss::sav::byte_order::ByteOrder;
+use crate::spss::sav::sav_error::{Result, SavError, Section};
 use crate::spss::sav::sav_warning::SavWarning;
 
 /// Crate-internal state threaded through the reader typestate
@@ -22,7 +25,6 @@ use crate::spss::sav::sav_warning::SavWarning;
 /// via the `into_*()` consuming transitions, so the warnings vec
 /// and scratch buffer keep their capacity across phases.
 #[derive(Debug)]
-#[allow(dead_code)] // exercised once the header reader lands.
 pub(crate) struct ReaderState<R> {
     reader: R,
     encoding: &'static Encoding,
@@ -33,8 +35,7 @@ pub(crate) struct ReaderState<R> {
 }
 
 impl<R> ReaderState<R> {
-    #[allow(dead_code)] // exercised once the header reader lands.
-    pub(crate) fn new(reader: R, encoding: &'static Encoding) -> Self {
+    pub fn new(reader: R, encoding: &'static Encoding) -> Self {
         Self {
             reader,
             encoding,
@@ -48,56 +49,111 @@ impl<R> ReaderState<R> {
     /// Returns a new state with the given encoding, preserving the
     /// reader, buffer allocation, position, byte order, and
     /// warnings vec.
-    #[allow(dead_code)] // exercised once the header reader lands.
-    pub(crate) fn with_encoding(self, encoding: &'static Encoding) -> Self {
+    #[allow(dead_code)] // exercised once the dictionary reader lands.
+    pub fn with_encoding(self, encoding: &'static Encoding) -> Self {
         Self { encoding, ..self }
     }
 
     /// Byte offset in the file.
-    #[allow(dead_code)] // exercised once the header reader lands.
-    pub(crate) fn position(&self) -> u64 {
+    pub fn position(&self) -> u64 {
         self.position
     }
 
     /// The active character encoding.
-    #[allow(dead_code)] // exercised once the header reader lands.
-    pub(crate) fn encoding(&self) -> &'static Encoding {
+    pub fn encoding(&self) -> &'static Encoding {
         self.encoding
     }
 
     /// The detected byte order, or `None` before the header reader
     /// has determined it.
-    #[allow(dead_code)] // exercised once the header reader lands.
-    pub(crate) fn byte_order(&self) -> Option<ByteOrder> {
+    #[allow(dead_code)] // exercised once the dictionary reader lands.
+    pub fn byte_order(&self) -> Option<ByteOrder> {
         self.byte_order
     }
 
     /// Records the byte order detected from the header's
     /// `layout_code` field.
-    #[allow(dead_code)] // exercised once the header reader lands.
-    pub(crate) fn set_byte_order(&mut self, byte_order: ByteOrder) {
+    pub fn set_byte_order(&mut self, byte_order: ByteOrder) {
         self.byte_order = Some(byte_order);
     }
 
     /// Warnings accumulated during the most recent advance. Each
     /// `read_*` / `write_*` operation clears this vec at the start
     /// of its logic, then appends fresh warnings while running.
-    #[allow(dead_code)] // exercised once the header reader lands.
-    pub(crate) fn warnings(&self) -> &[SavWarning] {
+    pub fn warnings(&self) -> &[SavWarning] {
         &self.warnings
     }
 
     /// Mutable access to the warnings vec, for the parser to push
     /// onto during an advance.
-    #[allow(dead_code)] // exercised once the header reader lands.
-    pub(crate) fn warnings_mut(&mut self) -> &mut Vec<SavWarning> {
+    pub fn warnings_mut(&mut self) -> &mut Vec<SavWarning> {
         &mut self.warnings
     }
 
     /// Internal scratch buffer, populated by the most recent
     /// `read_exact`-style call.
-    #[allow(dead_code)] // exercised once the header reader lands.
-    pub(crate) fn buffer(&self) -> &[u8] {
+    #[allow(dead_code)] // exercised once the dictionary reader lands.
+    pub fn buffer(&self) -> &[u8] {
         &self.buffer
+    }
+}
+
+impl<R: Read> ReaderState<R> {
+    /// Resizes the internal buffer to `len`, reads exactly `len`
+    /// bytes into it, and returns the filled slice. The same
+    /// allocation is reused across calls.
+    pub fn read_exact(&mut self, len: usize, section: Section) -> Result<&[u8]> {
+        self.buffer.resize(len, 0);
+        self.reader
+            .read_exact(&mut self.buffer)
+            .map_err(|e| SavError::io(section, e))?;
+        self.position += u64::try_from(len).expect("buffer length exceeds u64");
+        Ok(&self.buffer)
+    }
+
+    /// Reads exactly `N` bytes into a stack-allocated array.
+    pub fn read_array<const N: usize>(&mut self, section: Section) -> Result<[u8; N]> {
+        let mut out = [0u8; N];
+        self.reader
+            .read_exact(&mut out)
+            .map_err(|e| SavError::io(section, e))?;
+        self.position += u64::try_from(N).expect("array length exceeds u64");
+        Ok(out)
+    }
+
+    /// Reads `len` bytes and discards them.
+    pub fn skip(&mut self, len: usize, section: Section) -> Result<()> {
+        self.read_exact(len, section)?;
+        Ok(())
+    }
+
+    /// Reads a single byte.
+    #[allow(dead_code)] // exercised once the dictionary reader lands.
+    pub fn read_u8(&mut self, section: Section) -> Result<u8> {
+        let [byte] = self.read_array::<1>(section)?;
+        Ok(byte)
+    }
+
+    /// Reads a 4-byte unsigned integer in the file's byte order.
+    #[allow(dead_code)] // exercised once the dictionary reader lands.
+    pub fn read_u32(&mut self, byte_order: ByteOrder, section: Section) -> Result<u32> {
+        let bytes = self.read_array::<4>(section)?;
+        let value = byte_order.read_u32(bytes);
+        Ok(value)
+    }
+
+    /// Reads a 4-byte signed integer in the file's byte order.
+    pub fn read_i32(&mut self, byte_order: ByteOrder, section: Section) -> Result<i32> {
+        let bytes = self.read_array::<4>(section)?;
+        let value = byte_order.read_i32(bytes);
+        Ok(value)
+    }
+
+    /// Reads an 8-byte IEEE 754 double in the file's byte order.
+    #[allow(dead_code)] // exercised once the bias decoder lands.
+    pub fn read_f64(&mut self, byte_order: ByteOrder, section: Section) -> Result<f64> {
+        let bytes = self.read_array::<8>(section)?;
+        let value = byte_order.read_f64(bytes);
+        Ok(value)
     }
 }

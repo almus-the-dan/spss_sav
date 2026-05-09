@@ -135,6 +135,13 @@ pub enum FormatErrorKind {
     DanglingValueLabel,
     /// Bytecode compression bias did not match the expected value.
     InvalidCompressionBias,
+    /// The header's `layout_code` field decoded to neither `2` nor
+    /// `3` under either little-endian or big-endian interpretation.
+    UnreadableLayoutCode,
+    /// The header's `bias` field could not be decoded as the
+    /// canonical value (`100.0`) under any of the recognized
+    /// floating-point formats (IEEE 754, IBM HFP, VAX).
+    UnknownFloatFormat,
 }
 
 impl fmt::Display for FormatErrorKind {
@@ -151,6 +158,8 @@ impl fmt::Display for FormatErrorKind {
             Self::InvalidEncoding { field } => write!(f, "invalid encoding in {field}"),
             Self::DanglingValueLabel => f.write_str("value-label references a missing variable"),
             Self::InvalidCompressionBias => f.write_str("bytecode compression bias mismatch"),
+            Self::UnreadableLayoutCode => f.write_str("unreadable layout code"),
+            Self::UnknownFloatFormat => f.write_str("unknown floating-point format"),
         }
     }
 }
@@ -164,7 +173,6 @@ pub struct FormatError {
 }
 
 impl FormatError {
-    #[allow(dead_code)] // exercised once the SAV reader/writer land.
     pub(crate) fn new(section: Section, position: u64, kind: FormatErrorKind) -> Self {
         Self {
             section,
@@ -241,13 +249,11 @@ pub enum SavError {
 
 impl SavError {
     /// Constructs an [`Io`](Self::Io) variant tagged with `section`.
-    #[allow(dead_code)] // exercised once the SAV reader/writer land.
     pub(crate) fn io(section: Section, source: std::io::Error) -> Self {
         Self::Io { section, source }
     }
 
     /// Constructs a [`Format`](Self::Format) variant from its parts.
-    #[allow(dead_code)] // exercised once the SAV reader/writer land.
     pub(crate) fn format(section: Section, position: u64, kind: FormatErrorKind) -> Self {
         Self::Format(FormatError::new(section, position, kind))
     }

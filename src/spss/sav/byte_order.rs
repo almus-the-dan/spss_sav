@@ -13,3 +13,36 @@ pub enum ByteOrder {
     /// Least-significant byte first.
     LittleEndian,
 }
+
+impl ByteOrder {
+    /// Decodes a `u32` from a 4-byte array.
+    #[allow(dead_code)] // exercised once the dictionary reader lands.
+    #[must_use]
+    #[inline]
+    pub(crate) fn read_u32(self, bytes: [u8; 4]) -> u32 {
+        match self {
+            Self::BigEndian => u32::from_be_bytes(bytes),
+            Self::LittleEndian => u32::from_le_bytes(bytes),
+        }
+    }
+
+    /// Decodes an `i32` from a 4-byte array.
+    #[must_use]
+    #[inline]
+    pub(crate) fn read_i32(self, bytes: [u8; 4]) -> i32 {
+        match self {
+            Self::BigEndian => i32::from_be_bytes(bytes),
+            Self::LittleEndian => i32::from_le_bytes(bytes),
+        }
+    }
+
+    /// Decodes an `f64` from an 8-byte array.
+    #[must_use]
+    #[inline]
+    pub(crate) fn read_f64(self, bytes: [u8; 8]) -> f64 {
+        match self {
+            Self::BigEndian => f64::from_be_bytes(bytes),
+            Self::LittleEndian => f64::from_le_bytes(bytes),
+        }
+    }
+}
