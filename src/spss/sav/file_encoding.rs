@@ -16,7 +16,7 @@ use encoding_rs::Encoding;
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub enum FileEncoding {
-    /// Declared via a character encoding extension record (subtype
+    /// Declared via a character-encoding extension record (subtype
     /// 20).
     Declared(&'static Encoding),
     /// Inferred from the integer info record's `character_code` field

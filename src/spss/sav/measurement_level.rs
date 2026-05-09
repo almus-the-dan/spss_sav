@@ -35,7 +35,7 @@ pub enum MeasurementLevel {
 impl MeasurementLevel {
     /// On-disk byte representation of this measurement level.
     #[must_use]
-    pub fn to_byte(self) -> u8 {
+    pub(crate) fn to_byte(self) -> u8 {
         match self {
             Self::Unspecified => 0,
             Self::Nominal => 1,

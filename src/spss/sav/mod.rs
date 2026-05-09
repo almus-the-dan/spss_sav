@@ -30,10 +30,18 @@ pub mod range_bound;
 pub mod sav_creation_timestamp;
 /// SAV-format-specific errors.
 pub mod sav_error;
+/// SAV variable display format.
+pub mod sav_format;
 /// SAV variable display-format kind.
 pub mod sav_format_kind;
+/// SAV file header.
+pub mod sav_header;
 /// A single decoded SAV data record.
 pub mod sav_record;
+/// Schema of variables in a SAV file.
+pub mod sav_schema;
+/// A reconciled SAV variable.
+pub mod sav_variable;
 /// Wire-level fields of a single SAV type-2 variable record.
 pub mod sav_variable_header;
 /// Recoverable issues raised during SAV reading or writing.

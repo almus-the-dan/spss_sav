@@ -59,21 +59,21 @@ impl Hash for ValueLabelValue {
 }
 
 impl ValueLabelValue {
-    /// Constructs a [`String`](Self::String) key by encoding `s` with
+    /// Constructs a [`String`](Self::String) key by encoding `value` with
     /// `encoding`. The encoded bytes are right-padded with spaces
     /// (`0x20`) to fill the eight-byte slot.
     ///
     /// # Errors
     ///
-    /// - [`SavError::InvalidEncoding`] when `s` contains characters
+    /// - [`SavError::InvalidEncoding`] when `value` contains characters
     ///   that cannot be represented in `encoding`.
     /// - [`SavError::StringTooLong`] when the encoded form exceeds
     ///   eight bytes.
     ///
     /// [`SavError::StringTooLong`]: crate::spss::sav::sav_error::SavError::StringTooLong
     /// [`SavError::InvalidEncoding`]: crate::spss::sav::sav_error::SavError::InvalidEncoding
-    pub fn from_str(s: &str, encoding: &'static Encoding) -> Result<Self> {
-        let (encoded, _, had_unmappable) = encoding.encode(s);
+    pub fn from_str(value: &str, encoding: &'static Encoding) -> Result<Self> {
+        let (encoded, _, had_unmappable) = encoding.encode(value);
         if had_unmappable {
             return Err(SavError::InvalidEncoding);
         }

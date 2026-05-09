@@ -78,6 +78,7 @@ impl ValueLabelTable {
     }
 
     /// Yields the stored sets.
+    #[inline]
     pub fn iter(&self) -> impl Iterator<Item = &ValueLabelSet> {
         self.sets.values()
     }

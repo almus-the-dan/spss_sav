@@ -1,0 +1,210 @@
+//! SAV file header.
+
+use crate::spss::sav::byte_order::ByteOrder;
+use crate::spss::sav::compression::Compression;
+use crate::spss::sav::file_encoding::FileEncoding;
+use crate::spss::sav::float_format::FloatFormat;
+use crate::spss::sav::sav_creation_timestamp::SavCreationTimestamp;
+
+/// SAV file header.
+///
+/// `SavHeader` is the user-facing summary of the file's preamble.
+/// On the reader side it is populated from the on-disk header; on
+/// the writer side the user constructs it via
+/// [`SavHeaderBuilder`] to drive how the file is emitted. All
+/// file-attribute writer options (compression, byte order, float
+/// format, file label, …) live here rather than on the writer
+/// itself.
+#[derive(Debug, Clone)]
+pub struct SavHeader {
+    file_label: String,
+    creation_timestamp: SavCreationTimestamp,
+    compression: Compression,
+    byte_order: ByteOrder,
+    float_format: FloatFormat,
+    file_encoding: FileEncoding,
+    bias: f64,
+    weight_variable: Option<String>,
+    case_count: Option<u32>,
+}
+
+impl SavHeader {
+    /// Returns a fresh [`SavHeaderBuilder`].
+    #[must_use]
+    #[inline]
+    pub fn builder() -> SavHeaderBuilder {
+        SavHeaderBuilder::default()
+    }
+
+    /// Free-text file label (≤ 64 bytes on disk).
+    #[must_use]
+    #[inline]
+    pub fn file_label(&self) -> &str {
+        &self.file_label
+    }
+
+    /// Creation timestamp recorded in the header.
+    #[must_use]
+    #[inline]
+    pub fn creation_timestamp(&self) -> &SavCreationTimestamp {
+        &self.creation_timestamp
+    }
+
+    /// Compression scheme of the data section.
+    #[must_use]
+    #[inline]
+    pub fn compression(&self) -> Compression {
+        self.compression
+    }
+
+    /// Byte order of multibyte values.
+    #[must_use]
+    #[inline]
+    pub fn byte_order(&self) -> ByteOrder {
+        self.byte_order
+    }
+
+    /// On-disk floating-point representation.
+    #[must_use]
+    #[inline]
+    pub fn float_format(&self) -> FloatFormat {
+        self.float_format
+    }
+
+    /// What the file declared about its text encoding.
+    #[must_use]
+    #[inline]
+    pub fn file_encoding(&self) -> FileEncoding {
+        self.file_encoding
+    }
+
+    /// Bytecode-compression bias (typically `100.0`).
+    #[must_use]
+    #[inline]
+    pub fn bias(&self) -> f64 {
+        self.bias
+    }
+
+    /// Long name of the weight variable, if one was declared.
+    #[must_use]
+    #[inline]
+    pub fn weight_variable(&self) -> Option<&str> {
+        self.weight_variable.as_deref()
+    }
+
+    /// Declared case count, or `None` when the file recorded `-1`
+    /// ("unknown").
+    #[must_use]
+    #[inline]
+    pub fn case_count(&self) -> Option<u32> {
+        self.case_count
+    }
+}
+
+/// Builder for [`SavHeader`].
+#[derive(Debug, Default, Clone)]
+pub struct SavHeaderBuilder {
+    file_label: Option<String>,
+    creation_timestamp: Option<SavCreationTimestamp>,
+    compression: Option<Compression>,
+    byte_order: Option<ByteOrder>,
+    float_format: Option<FloatFormat>,
+    file_encoding: Option<FileEncoding>,
+    bias: Option<f64>,
+    weight_variable: Option<String>,
+    case_count: Option<u32>,
+}
+
+impl SavHeaderBuilder {
+    /// Sets the free-text file label.
+    #[must_use]
+    #[inline]
+    pub fn file_label(mut self, label: impl Into<String>) -> Self {
+        self.file_label = Some(label.into());
+        self
+    }
+
+    /// Sets the creation timestamp.
+    #[must_use]
+    #[inline]
+    pub fn creation_timestamp(mut self, timestamp: SavCreationTimestamp) -> Self {
+        self.creation_timestamp = Some(timestamp);
+        self
+    }
+
+    /// Sets the compression scheme.
+    #[must_use]
+    #[inline]
+    pub fn compression(mut self, compression: Compression) -> Self {
+        self.compression = Some(compression);
+        self
+    }
+
+    /// Sets the byte order.
+    #[must_use]
+    #[inline]
+    pub fn byte_order(mut self, byte_order: ByteOrder) -> Self {
+        self.byte_order = Some(byte_order);
+        self
+    }
+
+    /// Sets the on-disk floating-point representation.
+    #[must_use]
+    #[inline]
+    pub fn float_format(mut self, float_format: FloatFormat) -> Self {
+        self.float_format = Some(float_format);
+        self
+    }
+
+    /// Sets the declared file encoding.
+    #[must_use]
+    #[inline]
+    pub fn file_encoding(mut self, file_encoding: FileEncoding) -> Self {
+        self.file_encoding = Some(file_encoding);
+        self
+    }
+
+    /// Sets the bytecode-compression bias.
+    #[must_use]
+    #[inline]
+    pub fn bias(mut self, bias: f64) -> Self {
+        self.bias = Some(bias);
+        self
+    }
+
+    /// Sets the weight variable's long name.
+    #[must_use]
+    #[inline]
+    pub fn weight_variable(mut self, name: impl Into<String>) -> Self {
+        self.weight_variable = Some(name.into());
+        self
+    }
+
+    /// Clears the weight variable's long name.
+    #[must_use]
+    #[inline]
+    pub fn clear_weight_variable(mut self) -> Self {
+        self.weight_variable = None;
+        self
+    }
+
+    /// Sets the declared case count.
+    ///
+    /// Crate-internal — the writer patches this in via
+    /// `write_record_count_and_finish()` when the underlying writer
+    /// also implements [`Seek`](std::io::Seek). The reader populates
+    /// it from the header's `case_count` field.
+    #[allow(dead_code)] // exercised once the reader/writer land.
+    #[inline]
+    pub(crate) fn case_count(mut self, case_count: Option<u32>) -> Self {
+        self.case_count = case_count;
+        self
+    }
+
+    /// Finalizes this builder into a [`SavHeader`].
+    #[must_use]
+    #[inline]
+    pub fn build(self) -> SavHeader {
+        todo!("body lands with the header reader / writer")
+    }
+}

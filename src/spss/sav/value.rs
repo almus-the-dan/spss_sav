@@ -21,8 +21,16 @@ pub enum Value<'a> {
 }
 
 impl<'a> From<&'a str> for Value<'a> {
+    #[inline]
     fn from(s: &'a str) -> Self {
         Self::String(Cow::Borrowed(s))
+    }
+}
+
+impl From<Numeric> for Value<'_> {
+    #[inline]
+    fn from(value: Numeric) -> Self {
+        Self::Numeric(value)
     }
 }
 

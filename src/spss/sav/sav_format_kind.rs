@@ -102,7 +102,7 @@ impl SavFormatKind {
     ///
     /// The mapping follows PSPP's canonical numeric assignments.
     #[must_use]
-    pub fn to_byte(self) -> u8 {
+    pub(crate) fn to_byte(self) -> u8 {
         match self {
             Self::Unspecified => 0,
             Self::A => 1,

@@ -1,8 +1,8 @@
-//! Storage type of a SAV variable.
+//! A SAV variable storage type.
 
 use core::fmt;
 
-/// Storage type of a SAV variable.
+/// A SAV variable storage type.
 ///
 /// SAV recognises two storage classes: numeric (one `f64` per cell)
 /// and string (a fixed-width byte slot per cell). String widths are

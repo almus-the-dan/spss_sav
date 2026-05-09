@@ -29,7 +29,7 @@ pub enum Alignment {
 impl Alignment {
     /// On-disk byte representation of this alignment.
     #[must_use]
-    pub fn to_byte(self) -> u8 {
+    pub(crate) fn to_byte(self) -> u8 {
         match self {
             Self::Left => 0,
             Self::Right => 1,
