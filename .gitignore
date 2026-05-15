@@ -32,3 +32,6 @@ Cargo.lock
 
 # Bench files
 benches/data
+
+# Vendor sources kept for reference but never committed
+/tmp

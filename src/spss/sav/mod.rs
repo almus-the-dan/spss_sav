@@ -4,6 +4,10 @@ pub mod alignment;
 pub mod byte_order;
 /// Compression scheme of a SAV file.
 pub mod compression;
+/// On-disk byte layout of the SAV dictionary section.
+mod dictionary_format;
+/// Pure parse helpers for the SAV dictionary section.
+mod dictionary_parse;
 /// Streaming reader for the SAV dictionary section.
 pub mod dictionary_reader;
 /// One typed record from the SAV dictionary section.
