@@ -36,6 +36,8 @@ pub mod measurement_level;
 pub mod missing_value_spec;
 /// Endpoint of a missing-value range.
 pub mod range_bound;
+/// Wire-level missing-value bytes from a variable record.
+pub mod raw_missing_values;
 /// Crate-internal per-reader state.
 mod reader_state;
 /// Reader for the data-record section of a SAV file.
