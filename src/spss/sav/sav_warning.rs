@@ -64,4 +64,15 @@ pub enum SavWarning {
         /// Raw `compression` field value.
         code: i32,
     },
+    /// The variable record's `n_missing_values` field carried an
+    /// undocumented `-1`. The dictionary reader treats it as a
+    /// single discrete missing value (matching `ReadStat`'s data
+    /// outcome).
+    InvalidMissingValueCount {
+        /// 0-based index of the variable in the order it was yielded
+        /// by the dictionary reader.
+        variable_index: u32,
+        /// Raw `n_missing_values` field value.
+        value: i32,
+    },
 }

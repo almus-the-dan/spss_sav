@@ -82,9 +82,20 @@ impl SavFormatBuilder {
     }
 
     /// Finalizes this builder into a [`SavFormat`].
+    ///
+    /// Unset fields take canonical defaults: [`SavFormatKind::Unspecified`]
+    /// for the kind, `0` for width and decimals. Invalid
+    /// `(kind, width, decimals)` triples are stored verbatim; the
+    /// writer surfaces them via
+    /// [`SavWarning::InvalidFormatCombination`](crate::spss::sav::sav_warning::SavWarning::InvalidFormatCombination)
+    /// at finish time.
     #[must_use]
     #[inline]
     pub fn build(self) -> SavFormat {
-        todo!("body lands with the writer phase")
+        SavFormat {
+            kind: self.kind.unwrap_or(SavFormatKind::Unspecified),
+            width: self.width,
+            decimals: self.decimals,
+        }
     }
 }

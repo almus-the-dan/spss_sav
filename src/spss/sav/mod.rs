@@ -66,6 +66,8 @@ pub mod sav_variable;
 pub mod sav_variable_header;
 /// Recoverable issues raised during SAV reading or writing.
 pub mod sav_warning;
+/// Shared helpers for decoding fixed-width text fields.
+mod text_field;
 /// A single SAV cell value.
 pub mod value;
 /// A single value-label mapping.

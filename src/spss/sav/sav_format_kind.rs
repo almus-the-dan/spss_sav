@@ -98,11 +98,58 @@ pub enum SavFormatKind {
 }
 
 impl SavFormatKind {
+    /// Decodes the on-disk format-kind byte. Bytes outside the
+    /// PSPP-canonical range round-trip as [`Unknown`](Self::Unknown).
+    #[must_use]
+    pub(crate) fn from_byte(byte: u8) -> Self {
+        match byte {
+            0 => Self::Unspecified,
+            1 => Self::A,
+            2 => Self::AHex,
+            3 => Self::Comma,
+            4 => Self::Dollar,
+            5 => Self::F,
+            6 => Self::IB,
+            7 => Self::PIBHex,
+            8 => Self::P,
+            9 => Self::PIB,
+            10 => Self::PK,
+            11 => Self::RB,
+            12 => Self::RBHex,
+            15 => Self::Z,
+            16 => Self::N,
+            17 => Self::E,
+            20 => Self::Date,
+            21 => Self::Time,
+            22 => Self::DateTime,
+            23 => Self::ADate,
+            24 => Self::JDate,
+            25 => Self::DTime,
+            26 => Self::WkDay,
+            27 => Self::Month,
+            28 => Self::MoYr,
+            29 => Self::QYr,
+            30 => Self::WkYr,
+            31 => Self::Pct,
+            32 => Self::Dot,
+            33 => Self::CCA,
+            34 => Self::CCB,
+            35 => Self::CCC,
+            36 => Self::CCD,
+            37 => Self::CCE,
+            38 => Self::EDate,
+            39 => Self::SDate,
+            40 => Self::MTime,
+            41 => Self::YmdHms,
+            other => Self::Unknown(other),
+        }
+    }
+
     /// On-disk byte representation of this format kind.
     ///
     /// The mapping follows PSPP's canonical numeric assignments.
     #[must_use]
-    #[allow(dead_code)] // Will be implemented as part of the dictionary parsing phase
+    #[allow(dead_code)] // exercised once the writer phase lands.
     pub(crate) fn to_byte(self) -> u8 {
         match self {
             Self::Unspecified => 0,
@@ -219,5 +266,35 @@ mod tests {
         assert_eq!(SavFormatKind::Unknown(13).to_byte(), 13);
         assert_eq!(SavFormatKind::Unknown(42).to_byte(), 42);
         assert_eq!(SavFormatKind::Unknown(255).to_byte(), 255);
+    }
+
+    #[test]
+    fn from_byte_round_trips_canonical_kinds() {
+        for byte in [0_u8, 1, 5, 17, 22, 32, 41] {
+            assert_eq!(SavFormatKind::from_byte(byte).to_byte(), byte);
+        }
+    }
+
+    #[test]
+    fn from_byte_unspecified() {
+        assert_eq!(SavFormatKind::from_byte(0), SavFormatKind::Unspecified);
+    }
+
+    #[test]
+    fn from_byte_recognized_picks_named_variant() {
+        assert_eq!(SavFormatKind::from_byte(5), SavFormatKind::F);
+        assert_eq!(SavFormatKind::from_byte(22), SavFormatKind::DateTime);
+        assert_eq!(SavFormatKind::from_byte(41), SavFormatKind::YmdHms);
+    }
+
+    #[test]
+    fn from_byte_gaps_become_unknown() {
+        // 13, 14, 18, 19, and 42+ are not assigned in the canonical
+        // PSPP table; they must round-trip via Unknown.
+        assert_eq!(SavFormatKind::from_byte(13), SavFormatKind::Unknown(13));
+        assert_eq!(SavFormatKind::from_byte(14), SavFormatKind::Unknown(14));
+        assert_eq!(SavFormatKind::from_byte(18), SavFormatKind::Unknown(18));
+        assert_eq!(SavFormatKind::from_byte(19), SavFormatKind::Unknown(19));
+        assert_eq!(SavFormatKind::from_byte(99), SavFormatKind::Unknown(99));
     }
 }

@@ -168,12 +168,23 @@ impl SavVariableHeaderBuilder {
     /// Finalizes this builder into a [`SavVariableHeader`].
     ///
     /// Unset fields take wire-canonical defaults: empty short name,
-    /// numeric variable type, no label, and
+    /// [`VariableType::Numeric`], no label, and
     /// [`RawMissingValues::None`]. Print and write formats default to
     /// a freshly built [`SavFormat`]. Required vs. optional checks
     /// live at write time, not here.
     #[must_use]
     pub fn build(self) -> SavVariableHeader {
-        todo!("body lands with the dictionary reader implementation")
+        SavVariableHeader {
+            short_name: self.short_name.unwrap_or_default(),
+            variable_type: self.variable_type.unwrap_or(VariableType::Numeric),
+            label: self.label,
+            missing_values: self.missing_values.unwrap_or_default(),
+            print_format: self
+                .print_format
+                .unwrap_or_else(|| SavFormat::builder().build()),
+            write_format: self
+                .write_format
+                .unwrap_or_else(|| SavFormat::builder().build()),
+        }
     }
 }

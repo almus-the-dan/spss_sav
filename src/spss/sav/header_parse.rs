@@ -15,6 +15,7 @@ use crate::spss::sav::float_format::FloatFormat;
 use crate::spss::sav::header_format::{CANONICAL_BIAS, LAYOUT_CODE_VALUES, MAGIC_FL2, MAGIC_FL3};
 use crate::spss::sav::sav_error::{FormatErrorKind, Result, SavError, Section};
 use crate::spss::sav::sav_warning::SavWarning;
+use crate::spss::sav::text_field::decode_trimmed;
 
 /// Which magic-bytes family the file starts with.
 ///
@@ -179,22 +180,6 @@ pub(super) fn parse_file_label(bytes: &[u8], encoding: &'static Encoding) -> Str
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
-
-/// Decodes a fixed-width byte string through `encoding` and trims
-/// trailing whitespace and NULs.
-fn decode_trimmed(bytes: &[u8], encoding: &'static Encoding) -> String {
-    let trimmed = trim_trailing_padding(bytes);
-    let (cow, _, _) = encoding.decode(trimmed);
-    cow.into_owned()
-}
-
-fn trim_trailing_padding(bytes: &[u8]) -> &[u8] {
-    let end = bytes
-        .iter()
-        .rposition(|&b| b != b' ' && b != 0)
-        .map_or(0, |p| p + 1);
-    &bytes[..end]
-}
 
 fn decode_ibm_hfp_bias(bytes: [u8; 8], byte_order: ByteOrder) -> f64 {
     let ibm = match byte_order {

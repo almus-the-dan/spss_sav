@@ -3,20 +3,27 @@
 use core::fmt;
 
 /// Section of a SAV file where an error occurred.
+///
+/// SAV is structurally three sections: a fixed-size header, a
+/// stream of interleaved typed dictionary records terminated by the
+/// `999` marker, and the data records that follow. The dictionary
+/// records (variables, value-label sets, documents, extensions) are
+/// not separable subsections of the file — their kind is captured
+/// instead by the specific
+/// [`FormatErrorKind`](FormatErrorKind)
+/// variant or the relevant
+/// [`Field`](Field).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Section {
     /// File header (magic, file label, byte order, creation timestamp).
     Header,
-    /// Variable records and the schema they form.
-    Schema,
-    /// Value-label records.
-    ValueLabels,
-    /// Document records.
-    Documents,
-    /// Extension records.
-    Extensions,
-    /// Compressed/uncompressed data records.
+    /// Dictionary section: variable records, value-label records,
+    /// document records, and extension records, freely interleaved
+    /// between the header and the `999` end-of-dictionary marker.
+    Dictionary,
+    /// Compressed or uncompressed data records that follow the
+    /// dictionary terminator.
     Records,
 }
 
@@ -24,10 +31,7 @@ impl fmt::Display for Section {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Header => "header",
-            Self::Schema => "schema",
-            Self::ValueLabels => "value labels",
-            Self::Documents => "documents",
-            Self::Extensions => "extensions",
+            Self::Dictionary => "dictionary",
             Self::Records => "records",
         })
     }
@@ -57,6 +61,10 @@ pub enum Field {
     VariableName,
     /// Variable label.
     VariableLabel,
+    /// Variable type code from a type-2 record.
+    VariableType,
+    /// Variable record's `n_missing_values` field.
+    MissingValueCount,
     /// Variable display format.
     VariableFormat,
     /// Variable measurement level.
@@ -90,6 +98,8 @@ impl fmt::Display for Field {
             Self::CompressionBias => "compression bias",
             Self::VariableName => "variable name",
             Self::VariableLabel => "variable label",
+            Self::VariableType => "variable type code",
+            Self::MissingValueCount => "missing value count",
             Self::VariableFormat => "variable format",
             Self::MeasurementLevel => "measurement level",
             Self::ValueLabelName => "value-label name",
@@ -142,6 +152,23 @@ pub enum FormatErrorKind {
     /// canonical value (`100.0`) under any of the recognized
     /// floating-point formats (IEEE 754, IBM HFP, VAX).
     UnknownFloatFormat,
+    /// The dictionary section yielded a record-type tag outside the
+    /// recognized set (`2`, `3`, `4`, `6`, `7`, `999`).
+    UnknownRecordType {
+        /// Raw record-type tag.
+        value: i32,
+    },
+    /// A type-2 record carried `type == -1` (continuation) when no
+    /// string variable was expecting one — either before any variable
+    /// record, or after the previous string variable's continuations
+    /// were already exhausted.
+    UnexpectedContinuationRecord,
+    /// A non-continuation record appeared while the previous string
+    /// variable's continuation run was still incomplete.
+    MissingContinuationRecord {
+        /// Number of continuation records still expected.
+        expected_remaining: u32,
+    },
 }
 
 impl fmt::Display for FormatErrorKind {
@@ -160,6 +187,14 @@ impl fmt::Display for FormatErrorKind {
             Self::InvalidCompressionBias => f.write_str("bytecode compression bias mismatch"),
             Self::UnreadableLayoutCode => f.write_str("unreadable layout code"),
             Self::UnknownFloatFormat => f.write_str("unknown floating-point format"),
+            Self::UnknownRecordType { value } => write!(f, "unknown record type {value}"),
+            Self::UnexpectedContinuationRecord => {
+                f.write_str("continuation record when none was expected")
+            }
+            Self::MissingContinuationRecord { expected_remaining } => write!(
+                f,
+                "string variable expected {expected_remaining} more continuation record(s)",
+            ),
         }
     }
 }
@@ -303,10 +338,7 @@ mod tests {
     #[test]
     fn section_display() {
         assert_eq!(Section::Header.to_string(), "header");
-        assert_eq!(Section::Schema.to_string(), "schema");
-        assert_eq!(Section::ValueLabels.to_string(), "value labels");
-        assert_eq!(Section::Documents.to_string(), "documents");
-        assert_eq!(Section::Extensions.to_string(), "extensions");
+        assert_eq!(Section::Dictionary.to_string(), "dictionary");
         assert_eq!(Section::Records.to_string(), "records");
     }
 
@@ -349,8 +381,8 @@ mod tests {
 
     #[test]
     fn format_error_carries_section_position_kind() {
-        let err = FormatError::new(Section::Schema, 42, FormatErrorKind::InvalidMagic);
-        assert_eq!(err.section(), Section::Schema);
+        let err = FormatError::new(Section::Dictionary, 42, FormatErrorKind::InvalidMagic);
+        assert_eq!(err.section(), Section::Dictionary);
         assert_eq!(err.position(), 42);
         assert_eq!(err.kind(), FormatErrorKind::InvalidMagic);
     }
