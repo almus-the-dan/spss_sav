@@ -14,18 +14,20 @@ use encoding_rs::Encoding;
 
 use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::dictionary_format::{
-    DICTIONARY_TERMINATOR_FILLER_LEN, DOCUMENT_LINE_LEN, EXTENSION_SUBTYPE_NUMBER_OF_CASES,
-    MISSING_VALUE_ENTRY_LEN, RECORD_TYPE_DICTIONARY_TERMINATOR, RECORD_TYPE_DOCUMENT,
-    RECORD_TYPE_EXTENSION, RECORD_TYPE_VALUE_LABEL, RECORD_TYPE_VALUE_LABEL_VARIABLES,
-    RECORD_TYPE_VARIABLE, VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN,
-    VARIABLE_HAS_LABEL_OFFSET, VARIABLE_LABEL_PADDING, VARIABLE_MISSING_VALUE_COUNT_OFFSET,
-    VARIABLE_PRINT_FORMAT_OFFSET, VARIABLE_RECORD_BODY_LEN, VARIABLE_SHORT_NAME_LEN,
-    VARIABLE_SHORT_NAME_OFFSET, VARIABLE_TYPE_OFFSET, VARIABLE_WRITE_FORMAT_OFFSET,
+    DICTIONARY_TERMINATOR_FILLER_LEN, DOCUMENT_LINE_LEN, EXTENSION_SUBTYPE_FLOAT_INFO,
+    EXTENSION_SUBTYPE_NUMBER_OF_CASES, MISSING_VALUE_ENTRY_LEN, RECORD_TYPE_DICTIONARY_TERMINATOR,
+    RECORD_TYPE_DOCUMENT, RECORD_TYPE_EXTENSION, RECORD_TYPE_VALUE_LABEL,
+    RECORD_TYPE_VALUE_LABEL_VARIABLES, RECORD_TYPE_VARIABLE, VALUE_LABEL_LABEL_LEN_FIELD_LEN,
+    VALUE_LABEL_VALUE_LEN, VARIABLE_HAS_LABEL_OFFSET, VARIABLE_LABEL_PADDING,
+    VARIABLE_MISSING_VALUE_COUNT_OFFSET, VARIABLE_PRINT_FORMAT_OFFSET, VARIABLE_RECORD_BODY_LEN,
+    VARIABLE_SHORT_NAME_LEN, VARIABLE_SHORT_NAME_OFFSET, VARIABLE_TYPE_OFFSET,
+    VARIABLE_WRITE_FORMAT_OFFSET,
 };
 use crate::spss::sav::dictionary_parse::{
     VariableTypeCode, compose_raw_missing_values, normalize_value_label_variable_indices,
-    parse_has_label, parse_missing_value_count, parse_number_of_cases, parse_sav_format,
-    parse_short_name, parse_value_label_entry, parse_variable_type, value_label_entry_size,
+    parse_float_sentinels, parse_has_label, parse_missing_value_count, parse_number_of_cases,
+    parse_sav_format, parse_short_name, parse_value_label_entry, parse_variable_type,
+    value_label_entry_size,
 };
 use crate::spss::sav::dictionary_record::DictionaryRecord;
 use crate::spss::sav::document_record::DocumentRecord;
@@ -427,9 +429,7 @@ impl<R: Read> DictionaryReader<R> {
         let payload = self.read_extension_payload(element_size_usize, element_count_usize)?;
 
         // The match is intentional — each subsequent per-subtype PR
-        // adds another arm. Suppress clippy's single_match_else
-        // suggestion while the table is still small.
-        #[allow(clippy::single_match_else)]
+        // adds another arm.
         match subtype {
             EXTENSION_SUBTYPE_NUMBER_OF_CASES => {
                 let case_count = parse_number_of_cases(
@@ -440,6 +440,17 @@ impl<R: Read> DictionaryReader<R> {
                     element_size_position,
                 )?;
                 let record = ExtensionRecord::NumberOfCases(case_count);
+                let record = DictionaryRecord::Extension(record);
+                Ok(record)
+            }
+            EXTENSION_SUBTYPE_FLOAT_INFO => {
+                let sentinels = parse_float_sentinels(
+                    element_size,
+                    element_count,
+                    &payload,
+                    element_size_position,
+                )?;
+                let record = ExtensionRecord::FloatInfo(sentinels);
                 let record = DictionaryRecord::Extension(record);
                 Ok(record)
             }
@@ -467,7 +478,7 @@ impl<R: Read> DictionaryReader<R> {
     fn read_extension_payload(
         &mut self,
         element_size_usize: usize,
-        element_count_usize: usize
+        element_count_usize: usize,
     ) -> Result<Vec<u8>> {
         let payload_position = self.state.position();
         let payload_len = element_size_usize
@@ -2114,5 +2125,122 @@ mod tests {
             dict.warnings(),
             &[SavWarning::UnknownExtensionSubtype { subtype: 999 }]
         ));
+    }
+
+    #[test]
+    fn extension_subtype_4_float_sentinels() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        // Three known IEEE 754 bit patterns: a NaN (system missing
+        // in IEEE files), -Inf (LOWEST), +Inf (HIGHEST).
+        let sys = f64::from_bits(0xFFF8_0000_0000_0000);
+        let high = f64::INFINITY;
+        let low = f64::NEG_INFINITY;
+        let mut payload = Vec::with_capacity(24);
+        payload.extend_from_slice(&sys.to_le_bytes());
+        payload.extend_from_slice(&high.to_le_bytes());
+        payload.extend_from_slice(&low.to_le_bytes());
+        write_extension_record(&mut bytes, byte_order, 4, 8, 3, &payload);
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let record = dict.read_record().unwrap().unwrap();
+        let DictionaryRecord::Extension(ExtensionRecord::FloatInfo(sentinels)) = record else {
+            panic!("expected FloatInfo, got {record:?}");
+        };
+        assert_eq!(sentinels.system_missing(), sys.to_le_bytes());
+        assert_eq!(sentinels.highest(), high.to_le_bytes());
+        assert_eq!(sentinels.lowest(), low.to_le_bytes());
+        assert!(dict.warnings().is_empty());
+    }
+
+    #[test]
+    fn extension_subtype_4_preserves_arbitrary_bit_patterns() {
+        // Use a non-canonical NaN to confirm the bytes are not
+        // normalized through any IEEE decode path.
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        let sys = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x7F];
+        let high = [0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF];
+        let low = [0xFE, 0xED, 0xFA, 0xCE, 0xFE, 0xED, 0xFA, 0xCE];
+        let mut payload = Vec::with_capacity(24);
+        payload.extend_from_slice(&sys);
+        payload.extend_from_slice(&high);
+        payload.extend_from_slice(&low);
+        write_extension_record(&mut bytes, byte_order, 4, 8, 3, &payload);
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let DictionaryRecord::Extension(ExtensionRecord::FloatInfo(sentinels)) =
+            dict.read_record().unwrap().unwrap()
+        else {
+            panic!("expected FloatInfo");
+        };
+        assert_eq!(sentinels.system_missing(), sys);
+        assert_eq!(sentinels.highest(), high);
+        assert_eq!(sentinels.lowest(), low);
+    }
+
+    #[test]
+    fn extension_subtype_4_carries_bytes_verbatim_regardless_of_byte_order() {
+        // Even with big-endian header byte order, the sentinel
+        // bytes are stored verbatim — no byte-swapping is applied
+        // here because the float-format decode is the consumer's
+        // concern.
+        let byte_order = ByteOrder::BigEndian;
+        let mut bytes = build_header(byte_order);
+        let payload: [u8; 24] = std::array::from_fn(|i| i as u8);
+        write_extension_record(&mut bytes, byte_order, 4, 8, 3, &payload);
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let DictionaryRecord::Extension(ExtensionRecord::FloatInfo(sentinels)) =
+            dict.read_record().unwrap().unwrap()
+        else {
+            panic!("expected FloatInfo");
+        };
+        assert_eq!(sentinels.system_missing(), [0, 1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(sentinels.highest(), [8, 9, 10, 11, 12, 13, 14, 15]);
+        assert_eq!(sentinels.lowest(), [16, 17, 18, 19, 20, 21, 22, 23]);
+    }
+
+    #[test]
+    fn extension_subtype_4_wrong_element_size_errors() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        // Spec says element_size must be 8; pass 4 instead.
+        write_extension_record(&mut bytes, byte_order, 4, 4, 3, &[0; 12]);
+
+        let mut dict = open(bytes);
+        let err = dict.read_record().unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(
+                e.kind(),
+                FormatErrorKind::UnexpectedValue {
+                    field: crate::spss::sav::sav_error::Field::ExtensionElementSize,
+                }
+            ),
+            _ => panic!("expected Format error, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn extension_subtype_4_wrong_element_count_errors() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        // Spec says element_count must be 3; pass 2 instead.
+        write_extension_record(&mut bytes, byte_order, 4, 8, 2, &[0; 16]);
+
+        let mut dict = open(bytes);
+        let err = dict.read_record().unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(
+                e.kind(),
+                FormatErrorKind::UnexpectedValue {
+                    field: crate::spss::sav::sav_error::Field::ExtensionElementCount,
+                }
+            ),
+            _ => panic!("expected Format error, got {err:?}"),
+        }
     }
 }

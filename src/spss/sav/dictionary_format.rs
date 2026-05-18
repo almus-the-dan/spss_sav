@@ -216,6 +216,36 @@ pub(super) const NUMBER_OF_CASES_ELEMENT_SIZE: u32 = 8;
 #[allow(dead_code)] // exercised once the subtype-3 parser lands.
 pub(super) const NUMBER_OF_CASES_ELEMENT_COUNT: u32 = 1;
 
+/// Extension subtype 4 — float sentinel values (system missing,
+/// highest, lowest), each carried as 8 raw bytes in the file's
+/// declared float format.
+#[allow(dead_code)] // exercised once the subtype-4 parser lands.
+pub(super) const EXTENSION_SUBTYPE_FLOAT_INFO: i32 = 4;
+
+/// `element_size` an extension subtype-4 record must declare. Each
+/// sentinel is 8 bytes.
+#[allow(dead_code)] // exercised once the subtype-4 parser lands.
+pub(super) const FLOAT_SENTINELS_ELEMENT_SIZE: u32 = 8;
+
+/// `element_count` an extension subtype-4 record must declare. The
+/// payload is three sentinels: system missing, highest, lowest.
+#[allow(dead_code)] // exercised once the subtype-4 parser lands.
+pub(super) const FLOAT_SENTINELS_ELEMENT_COUNT: u32 = 3;
+
+/// Byte offset of the system-missing sentinel within a subtype-4
+/// payload.
+#[allow(dead_code)] // exercised once the subtype-4 parser lands.
+pub(super) const FLOAT_SENTINELS_SYSTEM_MISSING_OFFSET: usize = 0;
+
+/// Byte offset of the `HIGHEST` sentinel within a subtype-4
+/// payload.
+#[allow(dead_code)] // exercised once the subtype-4 parser lands.
+pub(super) const FLOAT_SENTINELS_HIGHEST_OFFSET: usize = 8;
+
+/// Byte offset of the `LOWEST` sentinel within a subtype-4 payload.
+#[allow(dead_code)] // exercised once the subtype-4 parser lands.
+pub(super) const FLOAT_SENTINELS_LOWEST_OFFSET: usize = 16;
+
 /// Byte position of the decimals byte within a 4-byte format code
 /// (after reduction to native byte order).
 #[allow(dead_code)] // exercised once the dictionary reader implementation lands.

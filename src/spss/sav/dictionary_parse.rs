@@ -16,11 +16,14 @@ use encoding_rs::Encoding;
 
 use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::dictionary_format::{
+    FLOAT_SENTINELS_ELEMENT_COUNT, FLOAT_SENTINELS_ELEMENT_SIZE, FLOAT_SENTINELS_HIGHEST_OFFSET,
+    FLOAT_SENTINELS_LOWEST_OFFSET, FLOAT_SENTINELS_SYSTEM_MISSING_OFFSET,
     FORMAT_CODE_DECIMALS_BYTE, FORMAT_CODE_KIND_BYTE, FORMAT_CODE_WIDTH_BYTE,
     NUMBER_OF_CASES_ELEMENT_COUNT, NUMBER_OF_CASES_ELEMENT_SIZE, VALUE_LABEL_ENTRY_ALIGNMENT,
     VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN, VARIABLE_TYPE_CONTINUATION,
     VARIABLE_TYPE_NUMERIC, VARIABLE_TYPE_STRING_MAX,
 };
+use crate::spss::sav::extensions::float_sentinels::FloatSentinels;
 use crate::spss::sav::raw_missing_values::RawMissingValues;
 use crate::spss::sav::raw_value_label_entry::RawValueLabelEntry;
 use crate::spss::sav::sav_error::{Field, FormatErrorKind, Result, SavError, Section};
@@ -375,6 +378,54 @@ pub(super) fn parse_number_of_cases(
         .expect("envelope validation guarantees an 8-byte payload");
     let number_of_cases = byte_order.read_i64(bytes);
     Ok(number_of_cases)
+}
+
+/// Parses an extension subtype-4 payload (float sentinel values:
+/// system missing, highest, lowest).
+///
+/// Validates the envelope against the subtype's spec shape
+/// (`element_size == 8`, `element_count == 3`) and slices the
+/// 24-byte payload into three 8-byte slabs. Bytes are carried
+/// verbatim — no float-format decode is applied here, so the
+/// returned [`FloatSentinels`] round-trips bit-exactly regardless
+/// of whether the file uses IEEE 754, IBM HFP, or VAX.
+///
+/// # Errors
+///
+/// Returns [`FormatErrorKind::UnexpectedValue`] when the envelope
+/// shape disagrees with the spec.
+///
+/// # Panics
+///
+/// Panics in debug builds if `payload.len()` does not equal
+/// `actual_size * actual_count`. The caller (the dictionary reader)
+/// reads the payload from those dimensions, so this is a logic
+/// invariant.
+pub(super) fn parse_float_sentinels(
+    actual_size: u32,
+    actual_count: u32,
+    payload: &[u8],
+    position: u64,
+) -> Result<FloatSentinels> {
+    validate_extension_shape(
+        actual_size,
+        actual_count,
+        FLOAT_SENTINELS_ELEMENT_SIZE,
+        FLOAT_SENTINELS_ELEMENT_COUNT,
+        position,
+    )?;
+    debug_assert_eq!(payload.len(), 24);
+    let slab = |offset: usize| -> [u8; 8] {
+        payload[offset..offset + 8]
+            .try_into()
+            .expect("envelope validation guarantees a 24-byte payload")
+    };
+    let sentinels = FloatSentinels::builder()
+        .system_missing(slab(FLOAT_SENTINELS_SYSTEM_MISSING_OFFSET))
+        .highest(slab(FLOAT_SENTINELS_HIGHEST_OFFSET))
+        .lowest(slab(FLOAT_SENTINELS_LOWEST_OFFSET))
+        .build();
+    Ok(sentinels)
 }
 
 #[cfg(test)]
