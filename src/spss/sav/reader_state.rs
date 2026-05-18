@@ -156,9 +156,7 @@ impl<R: Read> ReaderState<R> {
     ) -> Result<usize> {
         let position = self.position();
         let value = self.read_u32(byte_order, section)?;
-        usize::try_from(value).map_err(|_| {
-            SavError::format(section, position, FormatErrorKind::FieldTooLarge { field })
-        })
+        u32_as_usize(value, position, section, field)
     }
 
     /// Reads a 4-byte signed integer in the file's byte order.
@@ -175,4 +173,22 @@ impl<R: Read> ReaderState<R> {
         let value = byte_order.read_f64(bytes);
         Ok(value)
     }
+}
+
+/// Casts a `u32` to a `usize`, mapping any failure to a
+/// position-tagged [`FormatErrorKind::FieldTooLarge`] error.
+///
+/// On platforms where `usize` is at least 32 bits (every supported
+/// target — 32-bit and 64-bit), the cast is always lossless and
+/// this never errors. It exists for symmetry with the reading-side
+/// helper and to centralize the error-shaping pattern so call sites
+/// stay one line.
+pub(crate) fn u32_as_usize(
+    value: u32,
+    position: u64,
+    section: Section,
+    field: Field,
+) -> Result<usize> {
+    usize::try_from(value)
+        .map_err(|_| SavError::format(section, position, FormatErrorKind::FieldTooLarge { field }))
 }

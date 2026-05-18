@@ -29,9 +29,11 @@ use crate::spss::sav::dictionary_parse::{
 };
 use crate::spss::sav::dictionary_record::DictionaryRecord;
 use crate::spss::sav::document_record::DocumentRecord;
+use crate::spss::sav::extensions::extension_record::ExtensionRecord;
+use crate::spss::sav::extensions::unknown_extension::UnknownExtension;
 use crate::spss::sav::raw_value_label_entry::RawValueLabelEntry;
 use crate::spss::sav::raw_value_label_set::RawValueLabelSet;
-use crate::spss::sav::reader_state::ReaderState;
+use crate::spss::sav::reader_state::{ReaderState, u32_as_usize};
 use crate::spss::sav::record_reader::RecordReader;
 use crate::spss::sav::sav_error::{Field, FormatErrorKind, Result, SavError, Section};
 use crate::spss::sav::sav_header::SavHeader;
@@ -203,7 +205,8 @@ impl<R: Read> DictionaryReader<R> {
                     return Ok(Some(record));
                 }
                 RECORD_TYPE_EXTENSION => {
-                    todo!("extension record handling lands in Phase 5(d)")
+                    let record = self.read_extension_record(byte_order)?;
+                    return Ok(Some(record));
                 }
                 value => {
                     let error = SavError::format(
@@ -392,6 +395,70 @@ impl<R: Read> DictionaryReader<R> {
         Ok(record)
     }
 
+    /// Reads a type-7 extension record envelope (`subtype`,
+    /// `element_size`, `element_count`) followed by its
+    /// `element_size * element_count`-byte payload.
+    ///
+    /// This PR (the foundation for Phase 5(d)) wraps every subtype
+    /// in [`UnknownExtension`] and surfaces a
+    /// [`SavWarning::UnknownExtensionSubtype`]. Per-subtype payload
+    /// parsers land in later PRs and will short-circuit before
+    /// the warning emission.
+    fn read_extension_record(&mut self, byte_order: ByteOrder) -> Result<DictionaryRecord> {
+        let subtype = self.state.read_i32(byte_order, Section::Dictionary)?;
+
+        let element_size_position = self.state.position();
+        let element_size = self.state.read_u32(byte_order, Section::Dictionary)?;
+        let element_count_position = self.state.position();
+        let element_count = self.state.read_u32(byte_order, Section::Dictionary)?;
+
+        let element_size_usize = u32_as_usize(
+            element_size,
+            element_size_position,
+            Section::Dictionary,
+            Field::ExtensionElementSize,
+        )?;
+        let element_count_usize = u32_as_usize(
+            element_count,
+            element_count_position,
+            Section::Dictionary,
+            Field::ExtensionElementCount,
+        )?;
+        let payload_position = self.state.position();
+        let payload_len = element_size_usize
+            .checked_mul(element_count_usize)
+            .ok_or_else(|| {
+                SavError::format(
+                    Section::Dictionary,
+                    payload_position,
+                    FormatErrorKind::FieldTooLarge {
+                        field: Field::ExtensionElementCount,
+                    },
+                )
+            })?;
+        let payload = self
+            .state
+            .read_exact(payload_len, Section::Dictionary)?
+            .to_vec();
+
+        let subtype_u32 = subtype.cast_unsigned();
+        self.state
+            .warnings_mut()
+            .push(SavWarning::UnknownExtensionSubtype {
+                subtype: subtype_u32,
+            });
+
+        let unknown = UnknownExtension::builder()
+            .subtype(subtype_u32)
+            .element_size(element_size_usize)
+            .element_count(element_count_usize)
+            .payload(payload)
+            .build();
+        Ok(DictionaryRecord::Extension(ExtensionRecord::Unknown(
+            unknown,
+        )))
+    }
+
     /// Reads a type-3 value-label record body, the immediately
     /// following type-4 record, and combines them into a single
     /// [`DictionaryRecord::ValueLabelSet`].
@@ -514,6 +581,7 @@ mod tests {
 
     use crate::spss::sav::byte_order::ByteOrder;
     use crate::spss::sav::dictionary_record::DictionaryRecord;
+    use crate::spss::sav::extensions::extension_record::ExtensionRecord;
     use crate::spss::sav::raw_missing_values::RawMissingValues;
     use crate::spss::sav::sav_error::{FormatErrorKind, SavError};
     use crate::spss::sav::sav_format_kind::SavFormatKind;
@@ -1797,5 +1865,129 @@ mod tests {
         assert!(matches!(records[0], DictionaryRecord::Variable(_)));
         assert!(matches!(records[1], DictionaryRecord::Document(_)));
         assert!(matches!(records[2], DictionaryRecord::ValueLabelSet(_)));
+    }
+
+    /// Appends one type-7 extension record envelope plus payload.
+    fn write_extension_record(
+        buf: &mut Vec<u8>,
+        byte_order: ByteOrder,
+        subtype: i32,
+        element_size: u32,
+        element_count: u32,
+        payload: &[u8],
+    ) {
+        write_rec_type(buf, byte_order, 7);
+        match byte_order {
+            ByteOrder::LittleEndian => buf.extend_from_slice(&subtype.to_le_bytes()),
+            ByteOrder::BigEndian => buf.extend_from_slice(&subtype.to_be_bytes()),
+        }
+        write_u32(buf, byte_order, element_size);
+        write_u32(buf, byte_order, element_count);
+        buf.extend_from_slice(payload);
+    }
+
+    #[test]
+    fn extension_record_unknown_subtype_round_trip() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        let payload = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x12, 0x34];
+        write_extension_record(&mut bytes, byte_order, 9999, 2, 3, &payload);
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let record = dict.read_record().unwrap().unwrap();
+        let extension = match record {
+            DictionaryRecord::Extension(ext) => ext,
+            other => panic!("expected Extension, got {other:?}"),
+        };
+        let unknown = match extension {
+            ExtensionRecord::Unknown(u) => u,
+            other => panic!("expected Unknown, got {other:?}"),
+        };
+        assert_eq!(unknown.subtype(), 9999);
+        assert_eq!(unknown.element_size(), 2);
+        assert_eq!(unknown.element_count(), 3);
+        assert_eq!(unknown.payload(), payload.as_slice());
+    }
+
+    #[test]
+    fn extension_record_emits_unknown_subtype_warning() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_extension_record(&mut bytes, byte_order, 4321, 1, 1, &[0]);
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        dict.read_record().unwrap();
+        assert!(matches!(
+            dict.warnings(),
+            &[SavWarning::UnknownExtensionSubtype { subtype: 4321 }]
+        ));
+    }
+
+    #[test]
+    fn extension_record_empty_payload() {
+        // element_count == 0 means zero-byte payload, which is valid.
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_extension_record(&mut bytes, byte_order, 11, 4, 0, &[]);
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let record = dict.read_record().unwrap().unwrap();
+        let DictionaryRecord::Extension(ExtensionRecord::Unknown(unknown)) = record else {
+            panic!("expected Unknown extension");
+        };
+        assert_eq!(unknown.element_count(), 0);
+        assert!(unknown.payload().is_empty());
+    }
+
+    #[test]
+    fn extension_record_interleaved_with_other_dictionary_records() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_rec_type(&mut bytes, byte_order, 2);
+        bytes.extend(build_variable_body(
+            byte_order,
+            0,
+            0,
+            0,
+            pack_format(5, 8, 2),
+            pack_format(5, 8, 2),
+            *b"V1      ",
+        ));
+        write_extension_record(&mut bytes, byte_order, 20, 1, 5, b"UTF-8");
+        write_rec_type(&mut bytes, byte_order, 6);
+        write_u32(&mut bytes, byte_order, 1);
+        write_document_line(&mut bytes, b"note");
+        write_terminator(&mut bytes, byte_order);
+
+        let (records, _) = read_all(bytes);
+        assert_eq!(records.len(), 3);
+        assert!(matches!(records[0], DictionaryRecord::Variable(_)));
+        assert!(matches!(
+            records[1],
+            DictionaryRecord::Extension(ExtensionRecord::Unknown(_))
+        ));
+        assert!(matches!(records[2], DictionaryRecord::Document(_)));
+    }
+
+    #[test]
+    fn extension_record_big_endian() {
+        let byte_order = ByteOrder::BigEndian;
+        let mut bytes = build_header(byte_order);
+        write_extension_record(&mut bytes, byte_order, 5, 1, 4, b"abcd");
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let DictionaryRecord::Extension(ExtensionRecord::Unknown(unknown)) =
+            dict.read_record().unwrap().unwrap()
+        else {
+            panic!("expected Unknown extension");
+        };
+        assert_eq!(unknown.subtype(), 5);
+        assert_eq!(unknown.element_size(), 1);
+        assert_eq!(unknown.element_count(), 4);
+        assert_eq!(unknown.payload(), b"abcd");
     }
 }

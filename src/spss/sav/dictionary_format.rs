@@ -180,6 +180,26 @@ pub(super) const DOCUMENT_LINE_COUNT_FIELD_LEN: usize = 4;
 #[allow(dead_code)] // exercised once the document reader implementation lands.
 pub(super) const DOCUMENT_LINE_LEN: usize = 80;
 
+/// Length of the `subtype` field that opens a type-7 record body,
+/// identifying which extension-record kind follows. Read as `i32`
+/// in the file's byte order (the on-disk encoding is signed even
+/// though all defined subtypes are positive).
+#[allow(dead_code)] // exercised once the extension reader implementation lands.
+pub(super) const EXTENSION_SUBTYPE_FIELD_LEN: usize = 4;
+
+/// Length of the `element_size` field in a type-7 record body — the
+/// size in bytes of one element of the payload. Read as `u32` in
+/// the file's byte order.
+#[allow(dead_code)] // exercised once the extension reader implementation lands.
+pub(super) const EXTENSION_ELEMENT_SIZE_FIELD_LEN: usize = 4;
+
+/// Length of the `element_count` field in a type-7 record body —
+/// the number of elements making up the payload. Total payload
+/// length is `element_size * element_count`. Read as `u32` in the
+/// file's byte order.
+#[allow(dead_code)] // exercised once the extension reader implementation lands.
+pub(super) const EXTENSION_ELEMENT_COUNT_FIELD_LEN: usize = 4;
+
 /// Byte position of the decimals byte within a 4-byte format code
 /// (after reduction to native byte order).
 #[allow(dead_code)] // exercised once the dictionary reader implementation lands.
