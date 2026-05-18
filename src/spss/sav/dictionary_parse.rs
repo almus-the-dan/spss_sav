@@ -16,18 +16,17 @@ use encoding_rs::Encoding;
 
 use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::dictionary_format::{
+    EXTENDED_NUMBER_OF_CASES_COUNT_OFFSET, EXTENDED_NUMBER_OF_CASES_ELEMENT_COUNT,
+    EXTENDED_NUMBER_OF_CASES_ELEMENT_SIZE, EXTENDED_NUMBER_OF_CASES_VERSION_OFFSET,
     FLOAT_SENTINELS_ELEMENT_COUNT, FLOAT_SENTINELS_ELEMENT_SIZE, FLOAT_SENTINELS_HIGHEST_OFFSET,
     FLOAT_SENTINELS_LOWEST_OFFSET, FLOAT_SENTINELS_SYSTEM_MISSING_OFFSET,
     FORMAT_CODE_DECIMALS_BYTE, FORMAT_CODE_KIND_BYTE, FORMAT_CODE_WIDTH_BYTE,
-    MACHINE_FLOAT_INFO_ELEMENT_COUNT, MACHINE_FLOAT_INFO_ELEMENT_SIZE,
-    MACHINE_FLOAT_INFO_HIGHEST_OFFSET, MACHINE_FLOAT_INFO_LOWEST_OFFSET,
-    MACHINE_FLOAT_INFO_SYSTEM_MISSING_OFFSET, MACHINE_INTEGER_INFO_ELEMENT_COUNT,
-    MACHINE_INTEGER_INFO_ELEMENT_SIZE, NUMBER_OF_CASES_ELEMENT_COUNT, NUMBER_OF_CASES_ELEMENT_SIZE,
+    MACHINE_INTEGER_INFO_ELEMENT_COUNT, MACHINE_INTEGER_INFO_ELEMENT_SIZE,
     VALUE_LABEL_ENTRY_ALIGNMENT, VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN,
     VARIABLE_TYPE_CONTINUATION, VARIABLE_TYPE_NUMERIC, VARIABLE_TYPE_STRING_MAX,
 };
+use crate::spss::sav::extensions::extended_number_of_cases::ExtendedNumberOfCases;
 use crate::spss::sav::extensions::float_sentinels::FloatSentinels;
-use crate::spss::sav::extensions::machine_float_info::MachineFloatInfo;
 use crate::spss::sav::extensions::machine_integer_info::MachineIntegerInfo;
 use crate::spss::sav::raw_missing_values::RawMissingValues;
 use crate::spss::sav::raw_value_label_entry::RawValueLabelEntry;
@@ -345,12 +344,13 @@ pub(super) fn validate_extension_shape(
     Ok(())
 }
 
-/// Parses an extension subtype-3 payload (total number of cases as
-/// a single `i64`).
+/// Parses an extension subtype-16 payload (extended number of
+/// cases: two `i64` fields — a version flag plus the authoritative
+/// case count).
 ///
 /// Validates the envelope against the subtype's spec shape
-/// (`element_size == 8`, `element_count == 1`) and decodes the
-/// 8-byte payload in the file's byte order.
+/// (`element_size == 8`, `element_count == 2`) and decodes both
+/// `i64`s in the file's byte order.
 ///
 /// # Errors
 ///
@@ -363,26 +363,32 @@ pub(super) fn validate_extension_shape(
 /// `actual_size * actual_count`. The caller (the dictionary reader)
 /// reads the payload from those dimensions, so this is a logic
 /// invariant.
-pub(super) fn parse_number_of_cases(
+pub(super) fn parse_extended_number_of_cases(
     actual_size: u32,
     actual_count: u32,
     payload: &[u8],
     byte_order: ByteOrder,
     position: u64,
-) -> Result<i64> {
+) -> Result<ExtendedNumberOfCases> {
     validate_extension_shape(
         actual_size,
         actual_count,
-        NUMBER_OF_CASES_ELEMENT_SIZE,
-        NUMBER_OF_CASES_ELEMENT_COUNT,
+        EXTENDED_NUMBER_OF_CASES_ELEMENT_SIZE,
+        EXTENDED_NUMBER_OF_CASES_ELEMENT_COUNT,
         position,
     )?;
-    debug_assert_eq!(payload.len(), 8);
-    let bytes: [u8; 8] = payload
-        .try_into()
-        .expect("envelope validation guarantees an 8-byte payload");
-    let number_of_cases = byte_order.read_i64(bytes);
-    Ok(number_of_cases)
+    debug_assert_eq!(payload.len(), 16);
+    let i64_at = |offset: usize| -> i64 {
+        let bytes: [u8; 8] = payload[offset..offset + 8]
+            .try_into()
+            .expect("envelope validation guarantees a 16-byte payload");
+        byte_order.read_i64(bytes)
+    };
+    let record = ExtendedNumberOfCases::builder()
+        .version(i64_at(EXTENDED_NUMBER_OF_CASES_VERSION_OFFSET))
+        .count(i64_at(EXTENDED_NUMBER_OF_CASES_COUNT_OFFSET))
+        .build();
+    Ok(record)
 }
 
 /// Parses an extension subtype-4 payload (float sentinel values:
@@ -489,53 +495,6 @@ pub(super) fn parse_machine_integer_info(
         .compression_code(i32_at(20))
         .endianness(i32_at(24))
         .character_code(i32_at(28))
-        .build();
-    Ok(info)
-}
-
-/// Parses an extension subtype-6 payload (machine floating-point
-/// info: three 8-byte sentinels — system missing, highest, lowest).
-///
-/// Validates the envelope against the subtype's spec shape
-/// (`element_size == 8`, `element_count == 3`) and slices the
-/// 24-byte payload into three 8-byte slabs. Bytes are carried
-/// verbatim — exactly as for [`parse_float_sentinels`], since
-/// subtype 6 is a redundant copy of the same sentinels.
-///
-/// # Errors
-///
-/// Returns [`FormatErrorKind::UnexpectedValue`] when the envelope
-/// shape disagrees with the spec.
-///
-/// # Panics
-///
-/// Panics in debug builds if `payload.len()` does not equal
-/// `actual_size * actual_count`. The caller (the dictionary reader)
-/// reads the payload from those dimensions, so this is a logic
-/// invariant.
-pub(super) fn parse_machine_float_info(
-    actual_size: u32,
-    actual_count: u32,
-    payload: &[u8],
-    position: u64,
-) -> Result<MachineFloatInfo> {
-    validate_extension_shape(
-        actual_size,
-        actual_count,
-        MACHINE_FLOAT_INFO_ELEMENT_SIZE,
-        MACHINE_FLOAT_INFO_ELEMENT_COUNT,
-        position,
-    )?;
-    debug_assert_eq!(payload.len(), 24);
-    let slab = |offset: usize| -> [u8; 8] {
-        payload[offset..offset + 8]
-            .try_into()
-            .expect("envelope validation guarantees a 24-byte payload")
-    };
-    let info = MachineFloatInfo::builder()
-        .system_missing(slab(MACHINE_FLOAT_INFO_SYSTEM_MISSING_OFFSET))
-        .highest(slab(MACHINE_FLOAT_INFO_HIGHEST_OFFSET))
-        .lowest(slab(MACHINE_FLOAT_INFO_LOWEST_OFFSET))
         .build();
     Ok(info)
 }

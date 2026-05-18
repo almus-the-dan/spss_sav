@@ -14,20 +14,20 @@ use encoding_rs::Encoding;
 
 use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::dictionary_format::{
-    DICTIONARY_TERMINATOR_FILLER_LEN, DOCUMENT_LINE_LEN, EXTENSION_SUBTYPE_FLOAT_INFO,
-    EXTENSION_SUBTYPE_MACHINE_FLOAT_INFO, EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO,
-    EXTENSION_SUBTYPE_NUMBER_OF_CASES, MISSING_VALUE_ENTRY_LEN, RECORD_TYPE_DICTIONARY_TERMINATOR,
-    RECORD_TYPE_DOCUMENT, RECORD_TYPE_EXTENSION, RECORD_TYPE_VALUE_LABEL,
-    RECORD_TYPE_VALUE_LABEL_VARIABLES, RECORD_TYPE_VARIABLE, VALUE_LABEL_LABEL_LEN_FIELD_LEN,
-    VALUE_LABEL_VALUE_LEN, VARIABLE_HAS_LABEL_OFFSET, VARIABLE_LABEL_PADDING,
-    VARIABLE_MISSING_VALUE_COUNT_OFFSET, VARIABLE_PRINT_FORMAT_OFFSET, VARIABLE_RECORD_BODY_LEN,
-    VARIABLE_SHORT_NAME_LEN, VARIABLE_SHORT_NAME_OFFSET, VARIABLE_TYPE_OFFSET,
-    VARIABLE_WRITE_FORMAT_OFFSET,
+    DICTIONARY_TERMINATOR_FILLER_LEN, DOCUMENT_LINE_LEN,
+    EXTENSION_SUBTYPE_EXTENDED_NUMBER_OF_CASES, EXTENSION_SUBTYPE_FLOAT_INFO,
+    EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO, MISSING_VALUE_ENTRY_LEN,
+    RECORD_TYPE_DICTIONARY_TERMINATOR, RECORD_TYPE_DOCUMENT, RECORD_TYPE_EXTENSION,
+    RECORD_TYPE_VALUE_LABEL, RECORD_TYPE_VALUE_LABEL_VARIABLES, RECORD_TYPE_VARIABLE,
+    VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN, VARIABLE_HAS_LABEL_OFFSET,
+    VARIABLE_LABEL_PADDING, VARIABLE_MISSING_VALUE_COUNT_OFFSET, VARIABLE_PRINT_FORMAT_OFFSET,
+    VARIABLE_RECORD_BODY_LEN, VARIABLE_SHORT_NAME_LEN, VARIABLE_SHORT_NAME_OFFSET,
+    VARIABLE_TYPE_OFFSET, VARIABLE_WRITE_FORMAT_OFFSET,
 };
 use crate::spss::sav::dictionary_parse::{
     VariableTypeCode, compose_raw_missing_values, normalize_value_label_variable_indices,
-    parse_float_sentinels, parse_has_label, parse_machine_float_info, parse_machine_integer_info,
-    parse_missing_value_count, parse_number_of_cases, parse_sav_format, parse_short_name,
+    parse_extended_number_of_cases, parse_float_sentinels, parse_has_label,
+    parse_machine_integer_info, parse_missing_value_count, parse_sav_format, parse_short_name,
     parse_value_label_entry, parse_variable_type, value_label_entry_size,
 };
 use crate::spss::sav::dictionary_record::DictionaryRecord;
@@ -75,13 +75,6 @@ pub struct DictionaryReader<R> {
     /// continuations alike. The next primary's 0-based physical
     /// position before this counter is incremented.
     physical_variable_count: u32,
-    /// Float sentinels from the first sentinels-bearing extension
-    /// record seen (subtype 4 or subtype 6), captured as
-    /// `[system_missing, highest, lowest]` slabs. Used to
-    /// cross-check the second occurrence — a subsequent record
-    /// with different values emits
-    /// [`SavWarning::FloatSentinelsCrossCheckMismatch`].
-    seen_float_sentinels: Option<[[u8; 8]; 3]>,
 }
 
 impl<R> DictionaryReader<R> {
@@ -98,7 +91,6 @@ impl<R> DictionaryReader<R> {
             pending_continuations: 0,
             primaries: Vec::new(),
             physical_variable_count: 0,
-            seen_float_sentinels: None,
         }
     }
 
@@ -441,37 +433,6 @@ impl<R: Read> DictionaryReader<R> {
         // The match is intentional — each subsequent per-subtype PR
         // adds another arm.
         match subtype {
-            EXTENSION_SUBTYPE_NUMBER_OF_CASES => {
-                let case_count = parse_number_of_cases(
-                    element_size,
-                    element_count,
-                    &payload,
-                    byte_order,
-                    element_size_position,
-                )?;
-                let record = ExtensionRecord::NumberOfCases(case_count);
-                let record = DictionaryRecord::Extension(record);
-                Ok(record)
-            }
-            EXTENSION_SUBTYPE_FLOAT_INFO => {
-                let sentinels = parse_float_sentinels(
-                    element_size,
-                    element_count,
-                    &payload,
-                    element_size_position,
-                )?;
-                self.record_or_cross_check_float_sentinels(
-                    [
-                        sentinels.system_missing(),
-                        sentinels.highest(),
-                        sentinels.lowest(),
-                    ],
-                    EXTENSION_SUBTYPE_FLOAT_INFO,
-                );
-                let record = ExtensionRecord::FloatInfo(sentinels);
-                let record = DictionaryRecord::Extension(record);
-                Ok(record)
-            }
             EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO => {
                 let info = parse_machine_integer_info(
                     element_size,
@@ -485,18 +446,26 @@ impl<R: Read> DictionaryReader<R> {
                 let record = DictionaryRecord::Extension(record);
                 Ok(record)
             }
-            EXTENSION_SUBTYPE_MACHINE_FLOAT_INFO => {
-                let info = parse_machine_float_info(
+            EXTENSION_SUBTYPE_FLOAT_INFO => {
+                let sentinels = parse_float_sentinels(
                     element_size,
                     element_count,
                     &payload,
                     element_size_position,
                 )?;
-                self.record_or_cross_check_float_sentinels(
-                    [info.system_missing(), info.highest(), info.lowest()],
-                    EXTENSION_SUBTYPE_MACHINE_FLOAT_INFO,
-                );
-                let record = ExtensionRecord::MachineFloatInfo(info);
+                let record = ExtensionRecord::FloatInfo(sentinels);
+                let record = DictionaryRecord::Extension(record);
+                Ok(record)
+            }
+            EXTENSION_SUBTYPE_EXTENDED_NUMBER_OF_CASES => {
+                let extended = parse_extended_number_of_cases(
+                    element_size,
+                    element_count,
+                    &payload,
+                    byte_order,
+                    element_size_position,
+                )?;
+                let record = ExtensionRecord::ExtendedNumberOfCases(extended);
                 let record = DictionaryRecord::Extension(record);
                 Ok(record)
             }
@@ -521,32 +490,8 @@ impl<R: Read> DictionaryReader<R> {
         }
     }
 
-    /// Anchors the first-seen float sentinels (from either subtype
-    /// 4 or subtype 6) and cross-checks every subsequent
-    /// occurrence against them.
-    ///
-    /// On the first call the slabs are captured on the reader's
-    /// internal state and no warning fires. On later calls the
-    /// new slabs are compared slab-for-slab against the anchor, and
-    /// a [`SavWarning::FloatSentinelsCrossCheckMismatch`] is emitted
-    /// on disagreement. The anchor is never overwritten — repeated
-    /// mismatches keep firing against the same first-seen values.
-    fn record_or_cross_check_float_sentinels(&mut self, sentinels: [[u8; 8]; 3], subtype: i32) {
-        if let Some(seen) = self.seen_float_sentinels {
-            if seen != sentinels {
-                self.state
-                    .warnings_mut()
-                    .push(SavWarning::FloatSentinelsCrossCheckMismatch {
-                        subtype: subtype.cast_unsigned(),
-                    });
-            }
-        } else {
-            self.seen_float_sentinels = Some(sentinels);
-        }
-    }
-
     /// Compares the byte-order and floating-point codes carried by
-    /// an extension subtype-5 record against the values the header
+    /// an extension subtype-3 record against the values the header
     /// reader already determined. Emits a
     /// [`SavWarning::HeaderByteOrderMismatch`] or
     /// [`SavWarning::HeaderFloatFormatMismatch`] for each
@@ -1503,7 +1448,11 @@ mod tests {
             write_value_label_entry(&mut bytes, value_bytes, label);
         }
         write_rec_type(&mut bytes, byte_order, 4);
-        write_u32(&mut bytes, byte_order, u32::try_from(target_variable_indices.len()).unwrap());
+        write_u32(
+            &mut bytes,
+            byte_order,
+            u32::try_from(target_variable_indices.len()).unwrap(),
+        );
         for &idx in target_variable_indices {
             write_u32(&mut bytes, byte_order, idx);
         }
@@ -2138,82 +2087,7 @@ mod tests {
     }
 
     #[test]
-    fn extension_subtype_3_number_of_cases() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        let n: i64 = 1_234_567_890;
-        write_extension_record(&mut bytes, byte_order, 3, 8, 1, &n.to_le_bytes());
-        write_terminator(&mut bytes, byte_order);
-
-        let mut dict = open(bytes);
-        let record = dict.read_record().unwrap().unwrap();
-        let DictionaryRecord::Extension(ExtensionRecord::NumberOfCases(count)) = record else {
-            panic!("expected NumberOfCases, got {record:?}");
-        };
-        assert_eq!(count, n);
-        // The subtype-3 happy path must not surface UnknownExtensionSubtype.
-        assert!(dict.warnings().is_empty());
-    }
-
-    #[test]
-    fn extension_subtype_3_big_endian() {
-        let byte_order = ByteOrder::BigEndian;
-        let mut bytes = build_header(byte_order);
-        let n: i64 = -42;
-        write_extension_record(&mut bytes, byte_order, 3, 8, 1, &n.to_be_bytes());
-        write_terminator(&mut bytes, byte_order);
-
-        let mut dict = open(bytes);
-        let DictionaryRecord::Extension(ExtensionRecord::NumberOfCases(count)) =
-            dict.read_record().unwrap().unwrap()
-        else {
-            panic!("expected NumberOfCases");
-        };
-        assert_eq!(count, n);
-    }
-
-    #[test]
-    fn extension_subtype_3_wrong_element_size_errors() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        // Spec says element_size must be 8; pass 4 instead.
-        write_extension_record(&mut bytes, byte_order, 3, 4, 1, &[0; 4]);
-
-        let mut dict = open(bytes);
-        let err = dict.read_record().unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: crate::spss::sav::sav_error::Field::ExtensionElementSize,
-                }
-            ),
-            _ => panic!("expected Format error, got {err:?}"),
-        }
-    }
-
-    #[test]
-    fn extension_subtype_3_wrong_element_count_errors() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        // Spec says element_count must be 1; pass 2 instead.
-        write_extension_record(&mut bytes, byte_order, 3, 8, 2, &[0; 16]);
-
-        let mut dict = open(bytes);
-        let err = dict.read_record().unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: crate::spss::sav::sav_error::Field::ExtensionElementCount,
-                }
-            ),
-            _ => panic!("expected Format error, got {err:?}"),
-        }
-    }
-
-    #[test]
-    fn extension_subtype_3_does_not_intercept_other_subtypes() {
+    fn extension_dispatch_does_not_intercept_unknown_subtypes() {
         // Subtype 999 is still unknown; the subtype-3 dispatch
         // arm must not catch it.
         let byte_order = ByteOrder::LittleEndian;
@@ -2350,7 +2224,7 @@ mod tests {
         }
     }
 
-    /// Builds a 32-byte subtype-5 payload from 8 i32 fields in the
+    /// Builds a 32-byte subtype-3 payload from 8 i32 fields in the
     /// given byte order.
     fn build_machine_integer_info_payload(byte_order: ByteOrder, fields: [i32; 8]) -> Vec<u8> {
         let to_bytes = |v: i32| match byte_order {
@@ -2365,14 +2239,14 @@ mod tests {
     }
 
     #[test]
-    fn extension_subtype_5_machine_integer_info() {
+    fn extension_subtype_3_machine_integer_info() {
         let byte_order = ByteOrder::LittleEndian;
         let mut bytes = build_header(byte_order);
         // version 25.0.0, machine code 720, IEEE/standard compression,
         // little-endian, character code 1252 (Windows-1252).
         let fields = [25, 0, 0, 720, 1, 1, 2, 1252];
         let payload = build_machine_integer_info_payload(byte_order, fields);
-        write_extension_record(&mut bytes, byte_order, 5, 4, 8, &payload);
+        write_extension_record(&mut bytes, byte_order, 3, 4, 8, &payload);
         write_terminator(&mut bytes, byte_order);
 
         let mut dict = open(bytes);
@@ -2400,12 +2274,12 @@ mod tests {
     }
 
     #[test]
-    fn extension_subtype_5_big_endian_payload() {
+    fn extension_subtype_3_big_endian_payload() {
         let byte_order = ByteOrder::BigEndian;
         let mut bytes = build_header(byte_order);
         let fields = [25, 0, 0, 720, 1, 1, 1, 1252];
         let payload = build_machine_integer_info_payload(byte_order, fields);
-        write_extension_record(&mut bytes, byte_order, 5, 4, 8, &payload);
+        write_extension_record(&mut bytes, byte_order, 3, 4, 8, &payload);
         write_terminator(&mut bytes, byte_order);
 
         let mut dict = open(bytes);
@@ -2419,14 +2293,14 @@ mod tests {
     }
 
     #[test]
-    fn extension_subtype_5_unknown_codes_return_none_from_typed_accessors() {
+    fn extension_subtype_3_unknown_codes_return_none_from_typed_accessors() {
         let byte_order = ByteOrder::LittleEndian;
         let mut bytes = build_header(byte_order);
         // 99 for both floating-point representation and endianness —
         // neither maps onto a recognized enum variant.
         let fields = [25, 0, 0, 720, 99, 1, 99, 1252];
         let payload = build_machine_integer_info_payload(byte_order, fields);
-        write_extension_record(&mut bytes, byte_order, 5, 4, 8, &payload);
+        write_extension_record(&mut bytes, byte_order, 3, 4, 8, &payload);
         write_terminator(&mut bytes, byte_order);
 
         let mut dict = open(bytes);
@@ -2445,14 +2319,14 @@ mod tests {
     }
 
     #[test]
-    fn extension_subtype_5_byte_order_mismatch_warns() {
+    fn extension_subtype_3_byte_order_mismatch_warns() {
         // Header is little-endian, but the record claims big-endian
         // (code 1).
         let byte_order = ByteOrder::LittleEndian;
         let mut bytes = build_header(byte_order);
         let fields = [25, 0, 0, 720, 1, 1, 1, 1252];
         let payload = build_machine_integer_info_payload(byte_order, fields);
-        write_extension_record(&mut bytes, byte_order, 5, 4, 8, &payload);
+        write_extension_record(&mut bytes, byte_order, 3, 4, 8, &payload);
         write_terminator(&mut bytes, byte_order);
 
         let mut dict = open(bytes);
@@ -2464,14 +2338,14 @@ mod tests {
     }
 
     #[test]
-    fn extension_subtype_5_float_format_mismatch_warns() {
+    fn extension_subtype_3_float_format_mismatch_warns() {
         // Header is IEEE 754 (the default test fixture uses IEEE
         // bias 100.0); the record claims IBM HFP (code 2).
         let byte_order = ByteOrder::LittleEndian;
         let mut bytes = build_header(byte_order);
         let fields = [25, 0, 0, 720, 2, 1, 2, 1252];
         let payload = build_machine_integer_info_payload(byte_order, fields);
-        write_extension_record(&mut bytes, byte_order, 5, 4, 8, &payload);
+        write_extension_record(&mut bytes, byte_order, 3, 4, 8, &payload);
         write_terminator(&mut bytes, byte_order);
 
         let mut dict = open(bytes);
@@ -2483,11 +2357,11 @@ mod tests {
     }
 
     #[test]
-    fn extension_subtype_5_wrong_element_size_errors() {
+    fn extension_subtype_3_wrong_element_size_errors() {
         let byte_order = ByteOrder::LittleEndian;
         let mut bytes = build_header(byte_order);
         // Spec says element_size must be 4; pass 8 instead.
-        write_extension_record(&mut bytes, byte_order, 5, 8, 8, &[0; 64]);
+        write_extension_record(&mut bytes, byte_order, 3, 8, 8, &[0; 64]);
 
         let mut dict = open(bytes);
         let err = dict.read_record().unwrap_err();
@@ -2503,11 +2377,11 @@ mod tests {
     }
 
     #[test]
-    fn extension_subtype_5_wrong_element_count_errors() {
+    fn extension_subtype_3_wrong_element_count_errors() {
         let byte_order = ByteOrder::LittleEndian;
         let mut bytes = build_header(byte_order);
         // Spec says element_count must be 8; pass 4 instead.
-        write_extension_record(&mut bytes, byte_order, 5, 4, 4, &[0; 16]);
+        write_extension_record(&mut bytes, byte_order, 3, 4, 4, &[0; 16]);
 
         let mut dict = open(bytes);
         let err = dict.read_record().unwrap_err();
@@ -2522,72 +2396,66 @@ mod tests {
         }
     }
 
-    /// Builds a subtype-4 or subtype-6 sentinels payload from three
-    /// 8-byte slabs.
-    fn build_sentinels_payload(system: [u8; 8], high: [u8; 8], low: [u8; 8]) -> Vec<u8> {
-        let mut buffer = Vec::with_capacity(system.len() + high.len() + low.len());
-        buffer.extend_from_slice(&system);
-        buffer.extend_from_slice(&high);
-        buffer.extend_from_slice(&low);
-        buffer
+    /// Builds a 16-byte subtype-16 payload (version flag + case count).
+    fn build_extended_number_of_cases_payload(
+        byte_order: ByteOrder,
+        version: i64,
+        count: i64,
+    ) -> Vec<u8> {
+        let to_bytes = |v: i64| match byte_order {
+            ByteOrder::LittleEndian => v.to_le_bytes(),
+            ByteOrder::BigEndian => v.to_be_bytes(),
+        };
+        let version_bytes = to_bytes(version);
+        let count_bytes = to_bytes(count);
+        let mut buf = Vec::with_capacity(version_bytes.len() + count_bytes.len());
+        buf.extend_from_slice(&version_bytes);
+        buf.extend_from_slice(&count_bytes);
+        buf
     }
 
     #[test]
-    fn extension_subtype_6_machine_float_info() {
+    fn extension_subtype_16_extended_number_of_cases() {
         let byte_order = ByteOrder::LittleEndian;
         let mut bytes = build_header(byte_order);
-        let sys = [1, 2, 3, 4, 5, 6, 7, 8];
-        let high = [9, 10, 11, 12, 13, 14, 15, 16];
-        let low = [17, 18, 19, 20, 21, 22, 23, 24];
-        let payload = build_sentinels_payload(sys, high, low);
-        write_extension_record(&mut bytes, byte_order, 6, 8, 3, &payload);
+        let payload = build_extended_number_of_cases_payload(byte_order, 1, 1_234_567_890);
+        write_extension_record(&mut bytes, byte_order, 16, 8, 2, &payload);
         write_terminator(&mut bytes, byte_order);
 
         let mut dict = open(bytes);
-        let DictionaryRecord::Extension(ExtensionRecord::MachineFloatInfo(info)) =
-            dict.read_record().unwrap().unwrap()
+        let record = dict.read_record().unwrap().unwrap();
+        let DictionaryRecord::Extension(ExtensionRecord::ExtendedNumberOfCases(extended)) = record
         else {
-            panic!("expected MachineFloatInfo");
+            panic!("expected ExtendedNumberOfCases, got {record:?}");
         };
-        assert_eq!(info.system_missing(), sys);
-        assert_eq!(info.highest(), high);
-        assert_eq!(info.lowest(), low);
-        // No prior sentinels-bearing record was seen, so no
-        // cross-check warning.
+        assert_eq!(extended.version(), 1);
+        assert_eq!(extended.count(), 1_234_567_890);
         assert!(dict.warnings().is_empty());
     }
 
     #[test]
-    fn extension_subtype_6_big_endian_preserves_bytes_verbatim() {
-        // Even with big-endian header byte order, the sentinel
-        // bytes are not byte-swapped here — the decoded float-format
-        // is a consumer concern.
+    fn extension_subtype_16_big_endian() {
         let byte_order = ByteOrder::BigEndian;
         let mut bytes = build_header(byte_order);
-        let payload: [u8; 24] = std::array::from_fn(|i| u8::try_from(i).unwrap() ^ 0x80);
-        write_extension_record(&mut bytes, byte_order, 6, 8, 3, &payload);
+        let payload = build_extended_number_of_cases_payload(byte_order, 1, -42);
+        write_extension_record(&mut bytes, byte_order, 16, 8, 2, &payload);
         write_terminator(&mut bytes, byte_order);
 
         let mut dict = open(bytes);
-        let DictionaryRecord::Extension(ExtensionRecord::MachineFloatInfo(info)) =
+        let DictionaryRecord::Extension(ExtensionRecord::ExtendedNumberOfCases(extended)) =
             dict.read_record().unwrap().unwrap()
         else {
-            panic!("expected MachineFloatInfo");
+            panic!("expected ExtendedNumberOfCases");
         };
-        let expected_sys: [u8; 8] = payload[0..8].try_into().unwrap();
-        let expected_high: [u8; 8] = payload[8..16].try_into().unwrap();
-        let expected_low: [u8; 8] = payload[16..24].try_into().unwrap();
-        assert_eq!(info.system_missing(), expected_sys);
-        assert_eq!(info.highest(), expected_high);
-        assert_eq!(info.lowest(), expected_low);
+        assert_eq!(extended.count(), -42);
     }
 
     #[test]
-    fn extension_subtype_6_wrong_element_size_errors() {
+    fn extension_subtype_16_wrong_element_size_errors() {
         let byte_order = ByteOrder::LittleEndian;
         let mut bytes = build_header(byte_order);
         // Spec says element_size must be 8; pass 4 instead.
-        write_extension_record(&mut bytes, byte_order, 6, 4, 3, &[0; 12]);
+        write_extension_record(&mut bytes, byte_order, 16, 4, 2, &[0; 8]);
 
         let mut dict = open(bytes);
         let err = dict.read_record().unwrap_err();
@@ -2603,11 +2471,11 @@ mod tests {
     }
 
     #[test]
-    fn extension_subtype_6_wrong_element_count_errors() {
+    fn extension_subtype_16_wrong_element_count_errors() {
         let byte_order = ByteOrder::LittleEndian;
         let mut bytes = build_header(byte_order);
-        // Spec says element_count must be 3; pass 2 instead.
-        write_extension_record(&mut bytes, byte_order, 6, 8, 2, &[0; 16]);
+        // Spec says element_count must be 2; pass 1 instead.
+        write_extension_record(&mut bytes, byte_order, 16, 8, 1, &[0; 8]);
 
         let mut dict = open(bytes);
         let err = dict.read_record().unwrap_err();
@@ -2620,121 +2488,5 @@ mod tests {
             ),
             _ => panic!("expected Format error, got {err:?}"),
         }
-    }
-
-    #[test]
-    fn float_sentinels_cross_check_agrees_emits_no_warning() {
-        // Subtype 4 and subtype 6 carrying identical sentinels.
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        let sys = [1; 8];
-        let high = [2; 8];
-        let low = [3; 8];
-        let payload = build_sentinels_payload(sys, high, low);
-        write_extension_record(&mut bytes, byte_order, 4, 8, 3, &payload);
-        write_extension_record(&mut bytes, byte_order, 6, 8, 3, &payload);
-        write_terminator(&mut bytes, byte_order);
-
-        let (records, _) = read_all(bytes);
-        assert_eq!(records.len(), 2);
-        assert!(matches!(
-            records[0],
-            DictionaryRecord::Extension(ExtensionRecord::FloatInfo(_))
-        ));
-        assert!(matches!(
-            records[1],
-            DictionaryRecord::Extension(ExtensionRecord::MachineFloatInfo(_))
-        ));
-        // No mismatch warning fired.
-        let mut dict = open(build_sentinels_test_bytes(byte_order, sys, high, low, true));
-        dict.read_record().unwrap();
-        dict.read_record().unwrap();
-        assert!(
-            !dict
-                .warnings()
-                .iter()
-                .any(|w| matches!(w, SavWarning::FloatSentinelsCrossCheckMismatch { .. }))
-        );
-    }
-
-    /// Builds a header + (subtype-4 record) + optionally a
-    /// (subtype-6 record) using the given sentinels.
-    fn build_sentinels_test_bytes(
-        byte_order: ByteOrder,
-        sys: [u8; 8],
-        high: [u8; 8],
-        low: [u8; 8],
-        include_subtype_6: bool,
-    ) -> Vec<u8> {
-        let mut bytes = build_header(byte_order);
-        let payload = build_sentinels_payload(sys, high, low);
-        write_extension_record(&mut bytes, byte_order, 4, 8, 3, &payload);
-        if include_subtype_6 {
-            write_extension_record(&mut bytes, byte_order, 6, 8, 3, &payload);
-        }
-        write_terminator(&mut bytes, byte_order);
-        bytes
-    }
-
-    #[test]
-    fn float_sentinels_cross_check_subtype_4_then_subtype_6_disagrees() {
-        // Subtype 4 carries one set of sentinels; subtype 6 carries
-        // a different system-missing slab.
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        let sys4 = [0xFF; 8];
-        let high = [2; 8];
-        let low = [3; 8];
-        let payload4 = build_sentinels_payload(sys4, high, low);
-        write_extension_record(&mut bytes, byte_order, 4, 8, 3, &payload4);
-
-        let sys6 = [0x00; 8]; // different
-        let payload6 = build_sentinels_payload(sys6, high, low);
-        write_extension_record(&mut bytes, byte_order, 6, 8, 3, &payload6);
-        write_terminator(&mut bytes, byte_order);
-
-        let mut dict = open(bytes);
-        dict.read_record().unwrap(); // subtype 4
-        dict.read_record().unwrap(); // subtype 6 — mismatch warning fires
-        assert!(matches!(
-            dict.warnings(),
-            &[SavWarning::FloatSentinelsCrossCheckMismatch { subtype: 6 }]
-        ));
-    }
-
-    #[test]
-    fn float_sentinels_cross_check_subtype_6_then_subtype_4_disagrees() {
-        // Reverse order — subtype 6 first, then subtype 4 disagrees.
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        let sys6 = [0xAA; 8];
-        let high = [2; 8];
-        let low = [3; 8];
-        let payload6 = build_sentinels_payload(sys6, high, low);
-        write_extension_record(&mut bytes, byte_order, 6, 8, 3, &payload6);
-
-        let sys4 = [0xBB; 8]; // different
-        let payload4 = build_sentinels_payload(sys4, high, low);
-        write_extension_record(&mut bytes, byte_order, 4, 8, 3, &payload4);
-        write_terminator(&mut bytes, byte_order);
-
-        let mut dict = open(bytes);
-        dict.read_record().unwrap(); // subtype 6
-        dict.read_record().unwrap(); // subtype 4 — mismatch warning fires
-        assert!(matches!(
-            dict.warnings(),
-            &[SavWarning::FloatSentinelsCrossCheckMismatch { subtype: 4 }]
-        ));
-    }
-
-    #[test]
-    fn float_sentinels_cross_check_single_record_no_warning() {
-        // Only subtype 4 present, no subtype 6 — nothing to cross-check against.
-        let byte_order = ByteOrder::LittleEndian;
-        let bytes = build_sentinels_test_bytes(byte_order, [1; 8], [2; 8], [3; 8], false);
-
-        let mut dict = open(bytes);
-        dict.read_record().unwrap();
-        assert!(dict.warnings().is_empty());
     }
 }

@@ -200,26 +200,56 @@ pub(super) const EXTENSION_ELEMENT_SIZE_FIELD_LEN: usize = 4;
 #[allow(dead_code)] // exercised once the extension reader implementation lands.
 pub(super) const EXTENSION_ELEMENT_COUNT_FIELD_LEN: usize = 4;
 
-/// Extension subtype 3 — total number of cases in the file, carried
-/// as a single `i64`. Authoritative when the header's `case_count`
-/// field is `-1` (used for very large files).
-#[allow(dead_code)] // exercised once the subtype-3 parser lands.
-pub(super) const EXTENSION_SUBTYPE_NUMBER_OF_CASES: i32 = 3;
+/// Extension subtype 3 — integer-typed environment metadata
+/// (version numbers, machine code, floating-point representation,
+/// compression code, endianness, character-set code). Per PSPP's
+/// system file format documentation and `ReadStat`'s
+/// `SAV_RECORD_SUBTYPE_INTEGER_INFO`.
+#[allow(dead_code)] // exercised by the subtype-3 parser.
+pub(super) const EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO: i32 = 3;
 
-/// `element_size` an extension subtype-3 record must declare. The
-/// payload is one `i64` = 8 bytes.
-#[allow(dead_code)] // exercised once the subtype-3 parser lands.
-pub(super) const NUMBER_OF_CASES_ELEMENT_SIZE: u32 = 8;
+/// `element_size` an extension subtype-3 record must declare. Each
+/// field is one `i32`.
+#[allow(dead_code)] // exercised by the subtype-3 parser.
+pub(super) const MACHINE_INTEGER_INFO_ELEMENT_SIZE: u32 = 4;
 
 /// `element_count` an extension subtype-3 record must declare. The
-/// payload is exactly one `i64`.
-#[allow(dead_code)] // exercised once the subtype-3 parser lands.
-pub(super) const NUMBER_OF_CASES_ELEMENT_COUNT: u32 = 1;
+/// payload is exactly eight `i32` fields, in this fixed order:
+/// `version_major`, `version_minor`, `version_revision`,
+/// `machine_code`, `floating_point_representation`,
+/// `compression_code`, `endianness`, `character_code`.
+#[allow(dead_code)] // exercised by the subtype-3 parser.
+pub(super) const MACHINE_INTEGER_INFO_ELEMENT_COUNT: u32 = 8;
+
+/// Tagged code for IEEE 754 in subtype-3's
+/// `floating_point_representation` field.
+#[allow(dead_code)] // exercised by the subtype-3 parser.
+pub(super) const FLOATING_POINT_REPRESENTATION_IEEE: i32 = 1;
+
+/// Tagged code for IBM hexadecimal floating-point in subtype-3's
+/// `floating_point_representation` field.
+#[allow(dead_code)] // exercised by the subtype-3 parser.
+pub(super) const FLOATING_POINT_REPRESENTATION_IBM_HFP: i32 = 2;
+
+/// Tagged code for VAX floating-point in subtype-3's
+/// `floating_point_representation` field.
+#[allow(dead_code)] // exercised by the subtype-3 parser.
+pub(super) const FLOATING_POINT_REPRESENTATION_VAX: i32 = 3;
+
+/// Tagged code for big-endian byte order in subtype-3's
+/// `endianness` field.
+#[allow(dead_code)] // exercised by the subtype-3 parser.
+pub(super) const ENDIANNESS_BIG_ENDIAN: i32 = 1;
+
+/// Tagged code for little-endian byte order in subtype-3's
+/// `endianness` field.
+#[allow(dead_code)] // exercised by the subtype-3 parser.
+pub(super) const ENDIANNESS_LITTLE_ENDIAN: i32 = 2;
 
 /// Extension subtype 4 — float sentinel values (system missing,
 /// highest, lowest), each carried as 8 raw bytes in the file's
 /// declared float format.
-#[allow(dead_code)] // exercised once the subtype-4 parser lands.
+#[allow(dead_code)] // exercised by the subtype-4 parser.
 pub(super) const EXTENSION_SUBTYPE_FLOAT_INFO: i32 = 4;
 
 /// `element_size` an extension subtype-4 record must declare. Each
@@ -243,83 +273,36 @@ pub(super) const FLOAT_SENTINELS_SYSTEM_MISSING_OFFSET: usize = 0;
 pub(super) const FLOAT_SENTINELS_HIGHEST_OFFSET: usize = 8;
 
 /// Byte offset of the `LOWEST` sentinel within a subtype-4 payload.
-#[allow(dead_code)] // exercised once the subtype-4 parser lands.
+#[allow(dead_code)] // exercised by the subtype-4 parser.
 pub(super) const FLOAT_SENTINELS_LOWEST_OFFSET: usize = 16;
 
-/// Extension subtype 5 — integer-typed environment metadata
-/// (version numbers, machine code, floating-point representation,
-/// compression code, endianness, character-set code).
-#[allow(dead_code)] // exercised once the subtype-5 parser lands.
-pub(super) const EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO: i32 = 5;
+/// Extension subtype 16 — extended number of cases. Authoritative
+/// when the header's `case_count` field is `-1` (used for files
+/// with more than `i32::MAX` cases). The payload is two `i64`
+/// fields: a version flag (always `1` in `ReadStat`'s writer) and
+/// the case count itself.
+#[allow(dead_code)] // exercised by the subtype-16 parser.
+pub(super) const EXTENSION_SUBTYPE_EXTENDED_NUMBER_OF_CASES: i32 = 16;
 
-/// `element_size` an extension subtype-5 record must declare. Each
-/// field is one `i32`.
-#[allow(dead_code)] // exercised once the subtype-5 parser lands.
-pub(super) const MACHINE_INTEGER_INFO_ELEMENT_SIZE: u32 = 4;
+/// `element_size` an extension subtype-16 record must declare.
+/// Each field is one `i64` = 8 bytes.
+#[allow(dead_code)] // exercised by the subtype-16 parser.
+pub(super) const EXTENDED_NUMBER_OF_CASES_ELEMENT_SIZE: u32 = 8;
 
-/// `element_count` an extension subtype-5 record must declare. The
-/// payload is exactly eight `i32` fields, in this fixed order:
-/// `version_major`, `version_minor`, `version_revision`,
-/// `machine_code`, `floating_point_representation`,
-/// `compression_code`, `endianness`, `character_code`.
-#[allow(dead_code)] // exercised once the subtype-5 parser lands.
-pub(super) const MACHINE_INTEGER_INFO_ELEMENT_COUNT: u32 = 8;
+/// `element_count` an extension subtype-16 record must declare.
+/// The payload is exactly two `i64`s (version flag + count).
+#[allow(dead_code)] // exercised by the subtype-16 parser.
+pub(super) const EXTENDED_NUMBER_OF_CASES_ELEMENT_COUNT: u32 = 2;
 
-/// Tagged code for IEEE 754 in subtype-5's
-/// `floating_point_representation` field.
-#[allow(dead_code)] // exercised once the subtype-5 parser lands.
-pub(super) const FLOATING_POINT_REPRESENTATION_IEEE: i32 = 1;
-
-/// Tagged code for IBM hexadecimal floating-point in subtype-5's
-/// `floating_point_representation` field.
-#[allow(dead_code)] // exercised once the subtype-5 parser lands.
-pub(super) const FLOATING_POINT_REPRESENTATION_IBM_HFP: i32 = 2;
-
-/// Tagged code for VAX floating-point in subtype-5's
-/// `floating_point_representation` field.
-#[allow(dead_code)] // exercised once the subtype-5 parser lands.
-pub(super) const FLOATING_POINT_REPRESENTATION_VAX: i32 = 3;
-
-/// Tagged code for big-endian byte order in subtype-5's
-/// `endianness` field.
-#[allow(dead_code)] // exercised once the subtype-5 parser lands.
-pub(super) const ENDIANNESS_BIG_ENDIAN: i32 = 1;
-
-/// Tagged code for little-endian byte order in subtype-5's
-/// `endianness` field.
-#[allow(dead_code)] // exercised once the subtype-5 parser lands.
-pub(super) const ENDIANNESS_LITTLE_ENDIAN: i32 = 2;
-
-/// Extension subtype 6 — machine floating-point information, a
-/// redundant declaration of the three sentinel values from subtype
-/// 4 used for cross-check.
-#[allow(dead_code)] // exercised once the subtype-6 parser lands.
-pub(super) const EXTENSION_SUBTYPE_MACHINE_FLOAT_INFO: i32 = 6;
-
-/// `element_size` an extension subtype-6 record must declare. Same
-/// shape as subtype 4 — each sentinel is 8 bytes.
-#[allow(dead_code)] // exercised once the subtype-6 parser lands.
-pub(super) const MACHINE_FLOAT_INFO_ELEMENT_SIZE: u32 = 8;
-
-/// `element_count` an extension subtype-6 record must declare.
-/// Same shape as subtype 4 — three sentinels: system missing,
-/// highest, lowest.
-#[allow(dead_code)] // exercised once the subtype-6 parser lands.
-pub(super) const MACHINE_FLOAT_INFO_ELEMENT_COUNT: u32 = 3;
-
-/// Byte offset of the system-missing sentinel within a subtype-6
+/// Byte offset of the version-flag `i64` within a subtype-16
 /// payload.
-#[allow(dead_code)] // exercised once the subtype-6 parser lands.
-pub(super) const MACHINE_FLOAT_INFO_SYSTEM_MISSING_OFFSET: usize = 0;
+#[allow(dead_code)] // exercised by the subtype-16 parser.
+pub(super) const EXTENDED_NUMBER_OF_CASES_VERSION_OFFSET: usize = 0;
 
-/// Byte offset of the `HIGHEST` sentinel within a subtype-6
+/// Byte offset of the case-count `i64` within a subtype-16
 /// payload.
-#[allow(dead_code)] // exercised once the subtype-6 parser lands.
-pub(super) const MACHINE_FLOAT_INFO_HIGHEST_OFFSET: usize = 8;
-
-/// Byte offset of the `LOWEST` sentinel within a subtype-6 payload.
-#[allow(dead_code)] // exercised once the subtype-6 parser lands.
-pub(super) const MACHINE_FLOAT_INFO_LOWEST_OFFSET: usize = 16;
+#[allow(dead_code)] // exercised by the subtype-16 parser.
+pub(super) const EXTENDED_NUMBER_OF_CASES_COUNT_OFFSET: usize = 8;
 
 /// Byte position of the decimals byte within a 4-byte format code
 /// (after reduction to native byte order).
