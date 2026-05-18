@@ -14,10 +14,12 @@
 
 use encoding_rs::Encoding;
 
+use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::dictionary_format::{
     FORMAT_CODE_DECIMALS_BYTE, FORMAT_CODE_KIND_BYTE, FORMAT_CODE_WIDTH_BYTE,
-    VALUE_LABEL_ENTRY_ALIGNMENT, VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN,
-    VARIABLE_TYPE_CONTINUATION, VARIABLE_TYPE_NUMERIC, VARIABLE_TYPE_STRING_MAX,
+    NUMBER_OF_CASES_ELEMENT_COUNT, NUMBER_OF_CASES_ELEMENT_SIZE, VALUE_LABEL_ENTRY_ALIGNMENT,
+    VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN, VARIABLE_TYPE_CONTINUATION,
+    VARIABLE_TYPE_NUMERIC, VARIABLE_TYPE_STRING_MAX,
 };
 use crate::spss::sav::raw_missing_values::RawMissingValues;
 use crate::spss::sav::raw_value_label_entry::RawValueLabelEntry;
@@ -292,6 +294,87 @@ pub(super) fn normalize_value_label_variable_indices(
         out.push(logical);
     }
     Ok(out)
+}
+
+/// Validates that a type-7 record's envelope (`element_size`,
+/// `element_count`) matches the shape a specific subtype is
+/// supposed to declare.
+///
+/// # Errors
+///
+/// Returns [`FormatErrorKind::UnexpectedValue`] tagged with
+/// [`Field::ExtensionElementSize`] or
+/// [`Field::ExtensionElementCount`] on the first mismatch. The
+/// `position` is the byte offset at which the envelope began (the
+/// `element_size` field).
+pub(super) fn validate_extension_shape(
+    actual_size: u32,
+    actual_count: u32,
+    expected_size: u32,
+    expected_count: u32,
+    position: u64,
+) -> Result<()> {
+    if actual_size != expected_size {
+        let error = SavError::format(
+            Section::Dictionary,
+            position,
+            FormatErrorKind::UnexpectedValue {
+                field: Field::ExtensionElementSize,
+            },
+        );
+        return Err(error);
+    }
+    if actual_count != expected_count {
+        let error = SavError::format(
+            Section::Dictionary,
+            position,
+            FormatErrorKind::UnexpectedValue {
+                field: Field::ExtensionElementCount,
+            },
+        );
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// Parses an extension subtype-3 payload (total number of cases as
+/// a single `i64`).
+///
+/// Validates the envelope against the subtype's spec shape
+/// (`element_size == 8`, `element_count == 1`) and decodes the
+/// 8-byte payload in the file's byte order.
+///
+/// # Errors
+///
+/// Returns [`FormatErrorKind::UnexpectedValue`] when the envelope
+/// shape disagrees with the spec.
+///
+/// # Panics
+///
+/// Panics in debug builds if `payload.len()` does not equal
+/// `actual_size * actual_count`. The caller (the dictionary reader)
+/// reads the payload from those dimensions, so this is a logic
+/// invariant.
+pub(super) fn parse_number_of_cases(
+    actual_size: u32,
+    actual_count: u32,
+    payload: &[u8],
+    byte_order: ByteOrder,
+    position: u64,
+) -> Result<i64> {
+    validate_extension_shape(
+        actual_size,
+        actual_count,
+        NUMBER_OF_CASES_ELEMENT_SIZE,
+        NUMBER_OF_CASES_ELEMENT_COUNT,
+        position,
+    )?;
+    debug_assert_eq!(payload.len(), 8);
+    let bytes: [u8; 8] = payload
+        .try_into()
+        .expect("envelope validation guarantees an 8-byte payload");
+    let number_of_cases = byte_order.read_i64(bytes);
+    Ok(number_of_cases)
 }
 
 #[cfg(test)]

@@ -200,6 +200,22 @@ pub(super) const EXTENSION_ELEMENT_SIZE_FIELD_LEN: usize = 4;
 #[allow(dead_code)] // exercised once the extension reader implementation lands.
 pub(super) const EXTENSION_ELEMENT_COUNT_FIELD_LEN: usize = 4;
 
+/// Extension subtype 3 — total number of cases in the file, carried
+/// as a single `i64`. Authoritative when the header's `case_count`
+/// field is `-1` (used for very large files).
+#[allow(dead_code)] // exercised once the subtype-3 parser lands.
+pub(super) const EXTENSION_SUBTYPE_NUMBER_OF_CASES: i32 = 3;
+
+/// `element_size` an extension subtype-3 record must declare. The
+/// payload is one `i64` = 8 bytes.
+#[allow(dead_code)] // exercised once the subtype-3 parser lands.
+pub(super) const NUMBER_OF_CASES_ELEMENT_SIZE: u32 = 8;
+
+/// `element_count` an extension subtype-3 record must declare. The
+/// payload is exactly one `i64`.
+#[allow(dead_code)] // exercised once the subtype-3 parser lands.
+pub(super) const NUMBER_OF_CASES_ELEMENT_COUNT: u32 = 1;
+
 /// Byte position of the decimals byte within a 4-byte format code
 /// (after reduction to native byte order).
 #[allow(dead_code)] // exercised once the dictionary reader implementation lands.

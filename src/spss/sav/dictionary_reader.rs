@@ -14,18 +14,18 @@ use encoding_rs::Encoding;
 
 use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::dictionary_format::{
-    DICTIONARY_TERMINATOR_FILLER_LEN, DOCUMENT_LINE_LEN, MISSING_VALUE_ENTRY_LEN,
-    RECORD_TYPE_DICTIONARY_TERMINATOR, RECORD_TYPE_DOCUMENT, RECORD_TYPE_EXTENSION,
-    RECORD_TYPE_VALUE_LABEL, RECORD_TYPE_VALUE_LABEL_VARIABLES, RECORD_TYPE_VARIABLE,
-    VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN, VARIABLE_HAS_LABEL_OFFSET,
-    VARIABLE_LABEL_PADDING, VARIABLE_MISSING_VALUE_COUNT_OFFSET, VARIABLE_PRINT_FORMAT_OFFSET,
-    VARIABLE_RECORD_BODY_LEN, VARIABLE_SHORT_NAME_LEN, VARIABLE_SHORT_NAME_OFFSET,
-    VARIABLE_TYPE_OFFSET, VARIABLE_WRITE_FORMAT_OFFSET,
+    DICTIONARY_TERMINATOR_FILLER_LEN, DOCUMENT_LINE_LEN, EXTENSION_SUBTYPE_NUMBER_OF_CASES,
+    MISSING_VALUE_ENTRY_LEN, RECORD_TYPE_DICTIONARY_TERMINATOR, RECORD_TYPE_DOCUMENT,
+    RECORD_TYPE_EXTENSION, RECORD_TYPE_VALUE_LABEL, RECORD_TYPE_VALUE_LABEL_VARIABLES,
+    RECORD_TYPE_VARIABLE, VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN,
+    VARIABLE_HAS_LABEL_OFFSET, VARIABLE_LABEL_PADDING, VARIABLE_MISSING_VALUE_COUNT_OFFSET,
+    VARIABLE_PRINT_FORMAT_OFFSET, VARIABLE_RECORD_BODY_LEN, VARIABLE_SHORT_NAME_LEN,
+    VARIABLE_SHORT_NAME_OFFSET, VARIABLE_TYPE_OFFSET, VARIABLE_WRITE_FORMAT_OFFSET,
 };
 use crate::spss::sav::dictionary_parse::{
     VariableTypeCode, compose_raw_missing_values, normalize_value_label_variable_indices,
-    parse_has_label, parse_missing_value_count, parse_sav_format, parse_short_name,
-    parse_value_label_entry, parse_variable_type, value_label_entry_size,
+    parse_has_label, parse_missing_value_count, parse_number_of_cases, parse_sav_format,
+    parse_short_name, parse_value_label_entry, parse_variable_type, value_label_entry_size,
 };
 use crate::spss::sav::dictionary_record::DictionaryRecord;
 use crate::spss::sav::document_record::DocumentRecord;
@@ -424,6 +424,51 @@ impl<R: Read> DictionaryReader<R> {
             Section::Dictionary,
             Field::ExtensionElementCount,
         )?;
+        let payload = self.read_extension_payload(element_size_usize, element_count_usize)?;
+
+        // The match is intentional — each subsequent per-subtype PR
+        // adds another arm. Suppress clippy's single_match_else
+        // suggestion while the table is still small.
+        #[allow(clippy::single_match_else)]
+        match subtype {
+            EXTENSION_SUBTYPE_NUMBER_OF_CASES => {
+                let case_count = parse_number_of_cases(
+                    element_size,
+                    element_count,
+                    &payload,
+                    byte_order,
+                    element_size_position,
+                )?;
+                let record = ExtensionRecord::NumberOfCases(case_count);
+                let record = DictionaryRecord::Extension(record);
+                Ok(record)
+            }
+            _ => {
+                let subtype_u32 = subtype.cast_unsigned();
+                self.state
+                    .warnings_mut()
+                    .push(SavWarning::UnknownExtensionSubtype {
+                        subtype: subtype_u32,
+                    });
+
+                let unknown = UnknownExtension::builder()
+                    .subtype(subtype_u32)
+                    .element_size(element_size_usize)
+                    .element_count(element_count_usize)
+                    .payload(payload)
+                    .build();
+                let record = ExtensionRecord::Unknown(unknown);
+                let record = DictionaryRecord::Extension(record);
+                Ok(record)
+            }
+        }
+    }
+
+    fn read_extension_payload(
+        &mut self,
+        element_size_usize: usize,
+        element_count_usize: usize
+    ) -> Result<Vec<u8>> {
         let payload_position = self.state.position();
         let payload_len = element_size_usize
             .checked_mul(element_count_usize)
@@ -440,23 +485,7 @@ impl<R: Read> DictionaryReader<R> {
             .state
             .read_exact(payload_len, Section::Dictionary)?
             .to_vec();
-
-        let subtype_u32 = subtype.cast_unsigned();
-        self.state
-            .warnings_mut()
-            .push(SavWarning::UnknownExtensionSubtype {
-                subtype: subtype_u32,
-            });
-
-        let unknown = UnknownExtension::builder()
-            .subtype(subtype_u32)
-            .element_size(element_size_usize)
-            .element_count(element_count_usize)
-            .payload(payload)
-            .build();
-        Ok(DictionaryRecord::Extension(ExtensionRecord::Unknown(
-            unknown,
-        )))
+        Ok(payload)
     }
 
     /// Reads a type-3 value-label record body, the immediately
@@ -1989,5 +2018,101 @@ mod tests {
         assert_eq!(unknown.element_size(), 1);
         assert_eq!(unknown.element_count(), 4);
         assert_eq!(unknown.payload(), b"abcd");
+    }
+
+    #[test]
+    fn extension_subtype_3_number_of_cases() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        let n: i64 = 1_234_567_890;
+        write_extension_record(&mut bytes, byte_order, 3, 8, 1, &n.to_le_bytes());
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let record = dict.read_record().unwrap().unwrap();
+        let DictionaryRecord::Extension(ExtensionRecord::NumberOfCases(count)) = record else {
+            panic!("expected NumberOfCases, got {record:?}");
+        };
+        assert_eq!(count, n);
+        // The subtype-3 happy path must not surface UnknownExtensionSubtype.
+        assert!(dict.warnings().is_empty());
+    }
+
+    #[test]
+    fn extension_subtype_3_big_endian() {
+        let byte_order = ByteOrder::BigEndian;
+        let mut bytes = build_header(byte_order);
+        let n: i64 = -42;
+        write_extension_record(&mut bytes, byte_order, 3, 8, 1, &n.to_be_bytes());
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let DictionaryRecord::Extension(ExtensionRecord::NumberOfCases(count)) =
+            dict.read_record().unwrap().unwrap()
+        else {
+            panic!("expected NumberOfCases");
+        };
+        assert_eq!(count, n);
+    }
+
+    #[test]
+    fn extension_subtype_3_wrong_element_size_errors() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        // Spec says element_size must be 8; pass 4 instead.
+        write_extension_record(&mut bytes, byte_order, 3, 4, 1, &[0; 4]);
+
+        let mut dict = open(bytes);
+        let err = dict.read_record().unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(
+                e.kind(),
+                FormatErrorKind::UnexpectedValue {
+                    field: crate::spss::sav::sav_error::Field::ExtensionElementSize,
+                }
+            ),
+            _ => panic!("expected Format error, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn extension_subtype_3_wrong_element_count_errors() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        // Spec says element_count must be 1; pass 2 instead.
+        write_extension_record(&mut bytes, byte_order, 3, 8, 2, &[0; 16]);
+
+        let mut dict = open(bytes);
+        let err = dict.read_record().unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(
+                e.kind(),
+                FormatErrorKind::UnexpectedValue {
+                    field: crate::spss::sav::sav_error::Field::ExtensionElementCount,
+                }
+            ),
+            _ => panic!("expected Format error, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn extension_subtype_3_does_not_intercept_other_subtypes() {
+        // Subtype 999 is still unknown; the subtype-3 dispatch
+        // arm must not catch it.
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_extension_record(&mut bytes, byte_order, 999, 4, 2, &[1, 2, 3, 4, 5, 6, 7, 8]);
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let record = dict.read_record().unwrap().unwrap();
+        assert!(matches!(
+            record,
+            DictionaryRecord::Extension(ExtensionRecord::Unknown(_))
+        ));
+        assert!(matches!(
+            dict.warnings(),
+            &[SavWarning::UnknownExtensionSubtype { subtype: 999 }]
+        ));
     }
 }
