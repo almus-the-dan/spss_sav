@@ -167,6 +167,19 @@ pub(super) const VALUE_LABEL_VARIABLE_COUNT_FIELD_LEN: usize = 4;
 #[allow(dead_code)] // exercised once the value-label reader implementation lands.
 pub(super) const VALUE_LABEL_VARIABLE_INDEX_LEN: usize = 4;
 
+/// Length of the `line_count` field that prefixes the document
+/// lines in a type-6 record. Read as `u32` in the file's byte order.
+#[allow(dead_code)] // exercised once the document reader implementation lands.
+pub(super) const DOCUMENT_LINE_COUNT_FIELD_LEN: usize = 4;
+
+/// On-disk width of one document line in a type-6 record. Each
+/// line occupies exactly this many bytes, decoded through the
+/// file's active encoding; trailing space padding is preserved
+/// verbatim on the resulting [`String`] (matching `ReadStat` and
+/// the spec convention).
+#[allow(dead_code)] // exercised once the document reader implementation lands.
+pub(super) const DOCUMENT_LINE_LEN: usize = 80;
+
 /// Byte position of the decimals byte within a 4-byte format code
 /// (after reduction to native byte order).
 #[allow(dead_code)] // exercised once the dictionary reader implementation lands.

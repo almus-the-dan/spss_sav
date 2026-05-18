@@ -14,13 +14,13 @@ use encoding_rs::Encoding;
 
 use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::dictionary_format::{
-    DICTIONARY_TERMINATOR_FILLER_LEN, MISSING_VALUE_ENTRY_LEN, RECORD_TYPE_DICTIONARY_TERMINATOR,
-    RECORD_TYPE_DOCUMENT, RECORD_TYPE_EXTENSION, RECORD_TYPE_VALUE_LABEL,
-    RECORD_TYPE_VALUE_LABEL_VARIABLES, RECORD_TYPE_VARIABLE, VALUE_LABEL_LABEL_LEN_FIELD_LEN,
-    VALUE_LABEL_VALUE_LEN, VARIABLE_HAS_LABEL_OFFSET, VARIABLE_LABEL_PADDING,
-    VARIABLE_MISSING_VALUE_COUNT_OFFSET, VARIABLE_PRINT_FORMAT_OFFSET, VARIABLE_RECORD_BODY_LEN,
-    VARIABLE_SHORT_NAME_LEN, VARIABLE_SHORT_NAME_OFFSET, VARIABLE_TYPE_OFFSET,
-    VARIABLE_WRITE_FORMAT_OFFSET,
+    DICTIONARY_TERMINATOR_FILLER_LEN, DOCUMENT_LINE_LEN, MISSING_VALUE_ENTRY_LEN,
+    RECORD_TYPE_DICTIONARY_TERMINATOR, RECORD_TYPE_DOCUMENT, RECORD_TYPE_EXTENSION,
+    RECORD_TYPE_VALUE_LABEL, RECORD_TYPE_VALUE_LABEL_VARIABLES, RECORD_TYPE_VARIABLE,
+    VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN, VARIABLE_HAS_LABEL_OFFSET,
+    VARIABLE_LABEL_PADDING, VARIABLE_MISSING_VALUE_COUNT_OFFSET, VARIABLE_PRINT_FORMAT_OFFSET,
+    VARIABLE_RECORD_BODY_LEN, VARIABLE_SHORT_NAME_LEN, VARIABLE_SHORT_NAME_OFFSET,
+    VARIABLE_TYPE_OFFSET, VARIABLE_WRITE_FORMAT_OFFSET,
 };
 use crate::spss::sav::dictionary_parse::{
     VariableTypeCode, compose_raw_missing_values, normalize_value_label_variable_indices,
@@ -28,6 +28,7 @@ use crate::spss::sav::dictionary_parse::{
     parse_value_label_entry, parse_variable_type, value_label_entry_size,
 };
 use crate::spss::sav::dictionary_record::DictionaryRecord;
+use crate::spss::sav::document_record::DocumentRecord;
 use crate::spss::sav::raw_value_label_entry::RawValueLabelEntry;
 use crate::spss::sav::raw_value_label_set::RawValueLabelSet;
 use crate::spss::sav::reader_state::ReaderState;
@@ -198,7 +199,8 @@ impl<R: Read> DictionaryReader<R> {
                     return Err(error);
                 }
                 RECORD_TYPE_DOCUMENT => {
-                    todo!("document record handling lands in Phase 5(c)")
+                    let record = self.read_document_record(byte_order, encoding)?;
+                    return Ok(Some(record));
                 }
                 RECORD_TYPE_EXTENSION => {
                     todo!("extension record handling lands in Phase 5(d)")
@@ -362,6 +364,32 @@ impl<R: Read> DictionaryReader<R> {
         let bytes = self.state.read_exact(padded_len, Section::Dictionary)?;
         let (cow, _, _) = encoding.decode(&bytes[..label_len]);
         Ok(cow.into_owned())
+    }
+
+    /// Reads a type-6 document record body — a `u32` line count
+    /// followed by that many fixed-width [`DOCUMENT_LINE_LEN`]-byte
+    /// lines, decoded through the file's active encoding.
+    fn read_document_record(
+        &mut self,
+        byte_order: ByteOrder,
+        encoding: &'static Encoding,
+    ) -> Result<DictionaryRecord> {
+        let line_count =
+            self.state
+                .read_u32_as_usize(byte_order, Section::Dictionary, Field::DocumentLine)?;
+
+        let mut lines: Vec<String> = Vec::with_capacity(line_count);
+        for _ in 0..line_count {
+            let bytes = self
+                .state
+                .read_exact(DOCUMENT_LINE_LEN, Section::Dictionary)?;
+            let (decoded, _, _) = encoding.decode(bytes);
+            lines.push(decoded.into_owned());
+        }
+
+        let record = DocumentRecord::builder().lines(lines).build();
+        let record = DictionaryRecord::Document(record);
+        Ok(record)
     }
 
     /// Reads a type-3 value-label record body, the immediately
@@ -1620,5 +1648,154 @@ mod tests {
             .count();
         // Two duplicates of the first occurrence.
         assert_eq!(dups, 2);
+    }
+
+    /// Appends one 80-byte document line, space-padding `text` up
+    /// to the on-disk width.
+    fn write_document_line(buf: &mut Vec<u8>, text: &[u8]) {
+        assert!(text.len() <= 80, "test line exceeds 80 bytes");
+        buf.extend_from_slice(text);
+        buf.extend_from_slice(&vec![b' '; 80 - text.len()]);
+    }
+
+    #[test]
+    fn document_record_single_line() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_rec_type(&mut bytes, byte_order, 6);
+        write_u32(&mut bytes, byte_order, 1);
+        write_document_line(&mut bytes, b"Hello, world!");
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let record = dict.read_record().unwrap().unwrap();
+        let DictionaryRecord::Document(doc) = record else {
+            panic!("expected Document, got {record:?}");
+        };
+        assert_eq!(doc.lines().len(), 1);
+        // Trailing spaces are preserved verbatim.
+        assert_eq!(
+            doc.lines()[0],
+            "Hello, world!                                                                   ",
+        );
+        assert_eq!(doc.lines()[0].len(), 80);
+        assert!(dict.read_record().unwrap().is_none());
+    }
+
+    #[test]
+    fn document_record_multiple_lines_in_order() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_rec_type(&mut bytes, byte_order, 6);
+        write_u32(&mut bytes, byte_order, 3);
+        write_document_line(&mut bytes, b"line one");
+        write_document_line(&mut bytes, b"line two");
+        write_document_line(&mut bytes, b"line three");
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let DictionaryRecord::Document(doc) = dict.read_record().unwrap().unwrap() else {
+            panic!("expected Document");
+        };
+        assert_eq!(doc.lines().len(), 3);
+        assert!(doc.lines()[0].starts_with("line one"));
+        assert!(doc.lines()[1].starts_with("line two"));
+        assert!(doc.lines()[2].starts_with("line three"));
+    }
+
+    #[test]
+    fn document_record_empty_is_accepted_without_warning() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_rec_type(&mut bytes, byte_order, 6);
+        write_u32(&mut bytes, byte_order, 0);
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let DictionaryRecord::Document(doc) = dict.read_record().unwrap().unwrap() else {
+            panic!("expected Document");
+        };
+        assert!(doc.lines().is_empty());
+        assert!(dict.warnings().is_empty());
+        assert!(dict.read_record().unwrap().is_none());
+    }
+
+    #[test]
+    fn document_record_decoded_through_active_encoding() {
+        // 0xE9 is `é` in Windows-1252 (the default header-fallback
+        // encoding used by the test scaffolding) but invalid as
+        // standalone UTF-8.
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_rec_type(&mut bytes, byte_order, 6);
+        write_u32(&mut bytes, byte_order, 1);
+        let mut line = vec![0xE9];
+        line.extend_from_slice(b"clair");
+        write_document_line(&mut bytes, &line);
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let DictionaryRecord::Document(doc) = dict.read_record().unwrap().unwrap() else {
+            panic!("expected Document");
+        };
+        assert!(doc.lines()[0].starts_with("éclair"));
+    }
+
+    #[test]
+    fn document_record_yields_one_per_occurrence() {
+        // Two type-6 records back-to-back. Each surfaces as its own
+        // DictionaryRecord::Document; reconciling into a single
+        // schema-level document is the finalizer's concern.
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_rec_type(&mut bytes, byte_order, 6);
+        write_u32(&mut bytes, byte_order, 1);
+        write_document_line(&mut bytes, b"first record");
+        write_rec_type(&mut bytes, byte_order, 6);
+        write_u32(&mut bytes, byte_order, 1);
+        write_document_line(&mut bytes, b"second record");
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let first = dict.read_record().unwrap().unwrap();
+        let second = dict.read_record().unwrap().unwrap();
+        assert!(matches!(first, DictionaryRecord::Document(_)));
+        assert!(matches!(second, DictionaryRecord::Document(_)));
+        assert!(dict.read_record().unwrap().is_none());
+    }
+
+    #[test]
+    fn document_record_interleaved_with_other_dictionary_records() {
+        // Variable → document → value-label set, all under one
+        // dictionary section. Confirms the dispatch handles a
+        // type-6 record positioned between unrelated record kinds.
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_rec_type(&mut bytes, byte_order, 2);
+        bytes.extend(build_variable_body(
+            byte_order,
+            0,
+            0,
+            0,
+            pack_format(5, 8, 2),
+            pack_format(5, 8, 2),
+            *b"V1      ",
+        ));
+        write_rec_type(&mut bytes, byte_order, 6);
+        write_u32(&mut bytes, byte_order, 1);
+        write_document_line(&mut bytes, b"a note");
+        write_rec_type(&mut bytes, byte_order, 3);
+        write_u32(&mut bytes, byte_order, 1);
+        write_value_label_entry(&mut bytes, 1.0_f64.to_le_bytes(), b"one");
+        write_rec_type(&mut bytes, byte_order, 4);
+        write_u32(&mut bytes, byte_order, 1);
+        write_u32(&mut bytes, byte_order, 1);
+        write_terminator(&mut bytes, byte_order);
+
+        let (records, _) = read_all(bytes);
+        assert_eq!(records.len(), 3);
+        assert!(matches!(records[0], DictionaryRecord::Variable(_)));
+        assert!(matches!(records[1], DictionaryRecord::Document(_)));
+        assert!(matches!(records[2], DictionaryRecord::ValueLabelSet(_)));
     }
 }
