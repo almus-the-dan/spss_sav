@@ -216,30 +216,39 @@ pub(super) fn value_label_entry_size(unpadded_len: u8) -> usize {
 /// `value` is the 8 bytes preceding the length byte, carried verbatim
 /// (numeric vs. string interpretation is deferred until the paired
 /// type-4 record ties this set to a typed variable). `label_bytes`
-/// is the padded label portion that follows the length byte; the
-/// caller passes the first `unpadded_len` bytes of it through
-/// `encoding` and trims trailing padding.
+/// is the padded label portion that follows the length byte; only
+/// the first `unpadded_len` bytes are decoded through `encoding`,
+/// and any trailing padding is discarded.
 ///
 /// # Panics
 ///
 /// Panics in debug builds if `label_bytes.len() < unpadded_len as
 /// usize`. The caller (the dictionary reader) sizes the slice from
 /// [`value_label_entry_size`] which guarantees this.
-#[allow(dead_code, unused_variables)] // exercised once the value-label reader implementation lands.
 pub(super) fn parse_value_label_entry(
     value: [u8; VALUE_LABEL_VALUE_LEN],
     unpadded_len: u8,
     label_bytes: &[u8],
     encoding: &'static Encoding,
 ) -> RawValueLabelEntry {
-    todo!("body lands with the value-label reader implementation")
+    let unpadded_len = usize::from(unpadded_len);
+    debug_assert!(label_bytes.len() >= unpadded_len);
+    let (decoded, _, _) = encoding.decode(&label_bytes[..unpadded_len]);
+    RawValueLabelEntry::builder()
+        .value(value)
+        .label(decoded.into_owned())
+        .build()
 }
 
 /// Translates a type-4 record's 1-based physical variable indices
 /// into 0-based logical indices, using `primaries` — the list of
-/// physical positions of each primary (non-continuation) variable
-/// record the dictionary reader has seen so far, in declaration
-/// order.
+/// 0-based physical record positions of each primary
+/// (non-continuation) variable record the dictionary reader has
+/// seen so far, in declaration order.
+///
+/// Duplicates in `raw` are preserved verbatim in the output (per
+/// the locked Q&A — the reader carries the on-disk bytes through to
+/// `RawValueLabelSet::variable_indices` for round-trip fidelity).
 ///
 /// # Errors
 ///
@@ -247,13 +256,42 @@ pub(super) fn parse_value_label_entry(
 /// that is zero, exceeds the highest physical position recorded, or
 /// lands on a string-variable continuation record (i.e., is not
 /// present in `primaries`).
-#[allow(dead_code, unused_variables)] // exercised once the value-label reader implementation lands.
 pub(super) fn normalize_value_label_variable_indices(
     raw: &[u32],
     primaries: &[u32],
     position: u64,
 ) -> Result<Vec<u32>> {
-    todo!("body lands with the value-label reader implementation")
+    let mut out = Vec::with_capacity(raw.len());
+    for &one_based in raw {
+        let dangling = || {
+            SavError::format(
+                Section::Dictionary,
+                position,
+                FormatErrorKind::DanglingValueLabel,
+            )
+        };
+        if one_based == 0 {
+            return Err(dangling());
+        }
+        let zero_based = one_based - 1;
+        // `primaries` is monotonically increasing, so binary search
+        // is correct; the linear fallback would also be fine for the
+        // small variable counts SAV files carry in practice.
+        let logical = primaries
+            .binary_search(&zero_based)
+            .map_err(|_| dangling())?;
+        let logical = u32::try_from(logical).map_err(|_| {
+            SavError::format(
+                Section::Dictionary,
+                position,
+                FormatErrorKind::FieldTooLarge {
+                    field: Field::VariableCount,
+                },
+            )
+        })?;
+        out.push(logical);
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -475,6 +513,87 @@ mod tests {
         // Maximum unpadded label length is 255 (it's a u8). 255 + 1
         // = 256, which is already a multiple of 8.
         assert_eq!(value_label_entry_size(255), 8 + 256);
+    }
+
+    #[test]
+    fn parse_value_label_entry_decodes_label_and_carries_value_verbatim() {
+        let value = [1, 2, 3, 4, 5, 6, 7, 8];
+        let label = b"hello\0\0\0";
+        let entry = parse_value_label_entry(value, 5, label, encoding_rs::WINDOWS_1252);
+        assert_eq!(entry.value(), value);
+        assert_eq!(entry.label(), "hello");
+    }
+
+    #[test]
+    fn parse_value_label_entry_ignores_padding_past_unpadded_len() {
+        // Trailing bytes after the unpadded length must not appear
+        // in the decoded label, even if they are non-NUL.
+        let value = [0; 8];
+        let label = b"ABCDEFGH";
+        let entry = parse_value_label_entry(value, 3, label, encoding_rs::WINDOWS_1252);
+        assert_eq!(entry.label(), "ABC");
+    }
+
+    #[test]
+    fn parse_value_label_entry_empty_label() {
+        let entry = parse_value_label_entry([0; 8], 0, &[0u8; 7], encoding_rs::WINDOWS_1252);
+        assert!(entry.label().is_empty());
+    }
+
+    #[test]
+    fn parse_value_label_entry_uses_supplied_encoding() {
+        // `0xE9` is `é` in Windows-1252 but invalid in UTF-8.
+        let entry = parse_value_label_entry([0; 8], 1, &[0xE9], encoding_rs::WINDOWS_1252);
+        assert_eq!(entry.label(), "é");
+    }
+
+    #[test]
+    fn normalize_value_label_variable_indices_translates_to_logical_positions() {
+        // Two variables: a width-32 string (1 primary + 3 continuations)
+        // followed by a numeric. The numeric's 0-based physical
+        // position is 4, so its 1-based physical position is 5.
+        let primaries = vec![0, 4];
+        let raw = vec![1, 5];
+        let out = normalize_value_label_variable_indices(&raw, &primaries, 0).unwrap();
+        assert_eq!(out, vec![0, 1]);
+    }
+
+    #[test]
+    fn normalize_value_label_variable_indices_preserves_duplicates() {
+        let primaries = vec![0, 1, 2];
+        let raw = vec![1, 3, 1];
+        let out = normalize_value_label_variable_indices(&raw, &primaries, 0).unwrap();
+        assert_eq!(out, vec![0, 2, 0]);
+    }
+
+    #[test]
+    fn normalize_value_label_variable_indices_rejects_zero() {
+        let err = normalize_value_label_variable_indices(&[0], &[0], 0).unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(e.kind(), FormatErrorKind::DanglingValueLabel),
+            _ => panic!("expected Format error"),
+        }
+    }
+
+    #[test]
+    fn normalize_value_label_variable_indices_rejects_out_of_range() {
+        let err = normalize_value_label_variable_indices(&[3], &[0, 1], 0).unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(e.kind(), FormatErrorKind::DanglingValueLabel),
+            _ => panic!("expected Format error"),
+        }
+    }
+
+    #[test]
+    fn normalize_value_label_variable_indices_rejects_continuation_position() {
+        // Primaries at physical positions 0 and 4 (with continuations
+        // filling 1..=3). A type-4 index of 2 (1-based) → 1 (0-based)
+        // lands on a continuation and must error.
+        let err = normalize_value_label_variable_indices(&[2], &[0, 4], 0).unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(e.kind(), FormatErrorKind::DanglingValueLabel),
+            _ => panic!("expected Format error"),
+        }
     }
 
     #[test]

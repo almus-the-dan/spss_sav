@@ -75,4 +75,21 @@ pub enum SavWarning {
         /// Raw `n_missing_values` field value.
         value: i32,
     },
+    /// A type-4 value-label-variables record declared zero
+    /// variables. The reader accepts the empty list (matching
+    /// `ReadStat`'s data outcome — the resulting set attaches to no
+    /// variable at finalization and is effectively discarded).
+    EmptyValueLabelVariables,
+    /// A type-3 value-label record carried two or more entries
+    /// keyed to the same 8-byte value. The reader preserves all
+    /// entries on
+    /// [`RawValueLabelSet`](crate::spss::sav::raw_value_label_set::RawValueLabelSet);
+    /// resolution at lookup time follows the existing first-wins
+    /// rule on
+    /// [`ValueLabelSet::label_for`](crate::spss::sav::value_label_set::ValueLabelSet::label_for).
+    /// One warning is emitted per duplicate occurrence.
+    DuplicateValueLabelKey {
+        /// Raw 8-byte key that was repeated.
+        key: [u8; 8],
+    },
 }

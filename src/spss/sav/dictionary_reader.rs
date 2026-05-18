@@ -7,6 +7,7 @@
 //! extension records freely interleaved between the header and the
 //! `999` end-of-dictionary marker.
 
+use std::collections::HashSet;
 use std::io::Read;
 
 use encoding_rs::Encoding;
@@ -14,16 +15,21 @@ use encoding_rs::Encoding;
 use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::dictionary_format::{
     DICTIONARY_TERMINATOR_FILLER_LEN, MISSING_VALUE_ENTRY_LEN, RECORD_TYPE_DICTIONARY_TERMINATOR,
-    RECORD_TYPE_DOCUMENT, RECORD_TYPE_EXTENSION, RECORD_TYPE_VALUE_LABEL, RECORD_TYPE_VARIABLE,
-    VARIABLE_HAS_LABEL_OFFSET, VARIABLE_LABEL_PADDING, VARIABLE_MISSING_VALUE_COUNT_OFFSET,
-    VARIABLE_PRINT_FORMAT_OFFSET, VARIABLE_RECORD_BODY_LEN, VARIABLE_SHORT_NAME_LEN,
-    VARIABLE_SHORT_NAME_OFFSET, VARIABLE_TYPE_OFFSET, VARIABLE_WRITE_FORMAT_OFFSET,
+    RECORD_TYPE_DOCUMENT, RECORD_TYPE_EXTENSION, RECORD_TYPE_VALUE_LABEL,
+    RECORD_TYPE_VALUE_LABEL_VARIABLES, RECORD_TYPE_VARIABLE, VALUE_LABEL_LABEL_LEN_FIELD_LEN,
+    VALUE_LABEL_VALUE_LEN, VARIABLE_HAS_LABEL_OFFSET, VARIABLE_LABEL_PADDING,
+    VARIABLE_MISSING_VALUE_COUNT_OFFSET, VARIABLE_PRINT_FORMAT_OFFSET, VARIABLE_RECORD_BODY_LEN,
+    VARIABLE_SHORT_NAME_LEN, VARIABLE_SHORT_NAME_OFFSET, VARIABLE_TYPE_OFFSET,
+    VARIABLE_WRITE_FORMAT_OFFSET,
 };
 use crate::spss::sav::dictionary_parse::{
-    VariableTypeCode, compose_raw_missing_values, parse_has_label, parse_missing_value_count,
-    parse_sav_format, parse_short_name, parse_variable_type,
+    VariableTypeCode, compose_raw_missing_values, normalize_value_label_variable_indices,
+    parse_has_label, parse_missing_value_count, parse_sav_format, parse_short_name,
+    parse_value_label_entry, parse_variable_type, value_label_entry_size,
 };
 use crate::spss::sav::dictionary_record::DictionaryRecord;
+use crate::spss::sav::raw_value_label_entry::RawValueLabelEntry;
+use crate::spss::sav::raw_value_label_set::RawValueLabelSet;
 use crate::spss::sav::reader_state::ReaderState;
 use crate::spss::sav::record_reader::RecordReader;
 use crate::spss::sav::sav_error::{Field, FormatErrorKind, Result, SavError, Section};
@@ -53,6 +59,15 @@ pub struct DictionaryReader<R> {
     /// continuation arrives; must reach `0` before any other record
     /// kind (including the dictionary terminator) is accepted.
     pending_continuations: u32,
+    /// 0-based physical record positions of each primary (non-
+    /// continuation) variable record observed so far, in declaration
+    /// order. Used to translate a type-4 record's 1-based physical
+    /// variable indices into 0-based logical positions.
+    primaries: Vec<u32>,
+    /// Count of all type-2 records observed so far, primaries and
+    /// continuations alike. The next primary's 0-based physical
+    /// position before this counter is incremented.
+    physical_variable_count: u32,
 }
 
 impl<R> DictionaryReader<R> {
@@ -67,6 +82,8 @@ impl<R> DictionaryReader<R> {
             weight_variable_index,
             variable_count: 0,
             pending_continuations: 0,
+            primaries: Vec::new(),
+            physical_variable_count: 0,
         }
     }
 
@@ -133,7 +150,7 @@ impl<R: Read> DictionaryReader<R> {
 
         loop {
             let position = self.state.position();
-            let rec_type = self.state.read_i32(byte_order, Section::Dictionary)?;
+            let record_type = self.state.read_i32(byte_order, Section::Dictionary)?;
 
             // Non-variable record kinds are not allowed while the
             // previous string variable's continuation run is still
@@ -141,17 +158,18 @@ impl<R: Read> DictionaryReader<R> {
             // body before we can tell if they're a continuation or a
             // primary, so they validate themselves in
             // `read_variable_record`.
-            if rec_type != RECORD_TYPE_VARIABLE && self.pending_continuations > 0 {
-                return Err(SavError::format(
+            if record_type != RECORD_TYPE_VARIABLE && self.pending_continuations > 0 {
+                let error = SavError::format(
                     Section::Dictionary,
                     position,
                     FormatErrorKind::MissingContinuationRecord {
                         expected_remaining: self.pending_continuations,
                     },
-                ));
+                );
+                return Err(error);
             }
 
-            match rec_type {
+            match record_type {
                 RECORD_TYPE_VARIABLE => {
                     if let Some(record) =
                         self.read_variable_record(position, byte_order, encoding)?
@@ -166,7 +184,18 @@ impl<R: Read> DictionaryReader<R> {
                     return Ok(None);
                 }
                 RECORD_TYPE_VALUE_LABEL => {
-                    todo!("value-label record handling lands in Phase 5(b)")
+                    let record = self.read_value_label_record(byte_order, encoding)?;
+                    return Ok(Some(record));
+                }
+                RECORD_TYPE_VALUE_LABEL_VARIABLES => {
+                    let error = SavError::format(
+                        Section::Dictionary,
+                        position,
+                        FormatErrorKind::UnpairedValueLabelRecord {
+                            saw: RECORD_TYPE_VALUE_LABEL_VARIABLES,
+                        },
+                    );
+                    return Err(error);
                 }
                 RECORD_TYPE_DOCUMENT => {
                     todo!("document record handling lands in Phase 5(c)")
@@ -175,11 +204,12 @@ impl<R: Read> DictionaryReader<R> {
                     todo!("extension record handling lands in Phase 5(d)")
                 }
                 value => {
-                    return Err(SavError::format(
+                    let error = SavError::format(
                         Section::Dictionary,
                         position,
                         FormatErrorKind::UnknownRecordType { value },
-                    ));
+                    );
+                    return Err(error);
                 }
             }
         }
@@ -222,6 +252,7 @@ impl<R: Read> DictionaryReader<R> {
                 return Err(error);
             }
             self.pending_continuations -= 1;
+            self.physical_variable_count += 1;
             return Ok(None);
         }
 
@@ -310,6 +341,8 @@ impl<R: Read> DictionaryReader<R> {
         }
         let header = builder.build();
 
+        self.primaries.push(self.physical_variable_count);
+        self.physical_variable_count += 1;
         self.variable_count += 1;
         let record = DictionaryRecord::Variable(header);
         Ok(Some(record))
@@ -337,6 +370,129 @@ impl<R: Read> DictionaryReader<R> {
         let bytes = self.state.read_exact(padded_len, Section::Dictionary)?;
         let (cow, _, _) = encoding.decode(&bytes[..label_len]);
         Ok(cow.into_owned())
+    }
+
+    /// Reads a type-3 value-label record body, the immediately
+    /// following type-4 record, and combines them into a single
+    /// [`DictionaryRecord::ValueLabelSet`].
+    ///
+    /// The type-3 record carries an unsigned `label_count` followed by
+    /// that many entries, each an 8-byte value, a `u8` `unpadded_len`,
+    /// and the padded label bytes. The type-4 record carries an
+    /// unsigned `variable_count` followed by that many 1-based
+    /// physical variable indices; the indices are normalized here
+    /// into 0-based logical positions via
+    /// [`normalize_value_label_variable_indices`].
+    fn read_value_label_record(
+        &mut self,
+        byte_order: ByteOrder,
+        encoding: &'static Encoding,
+    ) -> Result<DictionaryRecord> {
+        let label_count_position = self.state.position();
+        let label_count = self.state.read_u32(byte_order, Section::Dictionary)?;
+        let label_count = usize::try_from(label_count).map_err(|_| {
+            SavError::format(
+                Section::Dictionary,
+                label_count_position,
+                FormatErrorKind::FieldTooLarge {
+                    field: Field::ValueLabelEntry,
+                },
+            )
+        })?;
+
+        let entries = self.read_raw_value_label_entries(encoding, label_count)?;
+
+        // The very next record-type tag must be a type-4. Anything
+        // else — including EOF, the dictionary terminator, or any
+        // other dictionary record kind — is an unpaired-type-3
+        // violation.
+        let pair_position = self.state.position();
+        let next_record_type = self.state.read_i32(byte_order, Section::Dictionary)?;
+        if next_record_type != RECORD_TYPE_VALUE_LABEL_VARIABLES {
+            let error = SavError::format(
+                Section::Dictionary,
+                pair_position,
+                FormatErrorKind::UnpairedValueLabelRecord {
+                    saw: next_record_type,
+                },
+            );
+            return Err(error);
+        }
+
+        let variable_count_position = self.state.position();
+        let variable_count = self.state.read_u32(byte_order, Section::Dictionary)?;
+        let variable_count = usize::try_from(variable_count).map_err(|_| {
+            SavError::format(
+                Section::Dictionary,
+                variable_count_position,
+                FormatErrorKind::FieldTooLarge {
+                    field: Field::VariableCount,
+                },
+            )
+        })?;
+        let indices_position = self.state.position();
+        let raw_indices = self.read_raw_variable_indexes(byte_order, variable_count)?;
+
+        if variable_count == 0 {
+            self.state
+                .warnings_mut()
+                .push(SavWarning::EmptyValueLabelVariables);
+        }
+
+        let variable_indices = normalize_value_label_variable_indices(
+            &raw_indices,
+            &self.primaries,
+            indices_position,
+        )?;
+
+        let set = RawValueLabelSet::builder()
+            .entries(entries)
+            .variable_indices(variable_indices)
+            .build();
+        let set = DictionaryRecord::ValueLabelSet(set);
+        Ok(set)
+    }
+
+    fn read_raw_value_label_entries(
+        &mut self,
+        encoding: &'static Encoding,
+        label_count: usize,
+    ) -> Result<Vec<RawValueLabelEntry>> {
+        let mut entries: Vec<RawValueLabelEntry> = Vec::with_capacity(label_count);
+        let mut seen_keys: HashSet<[u8; VALUE_LABEL_VALUE_LEN]> =
+            HashSet::with_capacity(label_count);
+        for _ in 0..label_count {
+            let value: [u8; VALUE_LABEL_VALUE_LEN] = self.state.read_array(Section::Dictionary)?;
+            let unpadded_len = self.state.read_u8(Section::Dictionary)?;
+            let label_bytes_len = value_label_entry_size(unpadded_len)
+                - VALUE_LABEL_VALUE_LEN
+                - VALUE_LABEL_LABEL_LEN_FIELD_LEN;
+            let label_bytes = self
+                .state
+                .read_exact(label_bytes_len, Section::Dictionary)?;
+            let entry = parse_value_label_entry(value, unpadded_len, label_bytes, encoding);
+
+            if !seen_keys.insert(value) {
+                self.state
+                    .warnings_mut()
+                    .push(SavWarning::DuplicateValueLabelKey { key: value });
+            }
+            entries.push(entry);
+        }
+        Ok(entries)
+    }
+
+    fn read_raw_variable_indexes(
+        &mut self,
+        byte_order: ByteOrder,
+        variable_count: usize,
+    ) -> Result<Vec<u32>> {
+        let mut raw_indices: Vec<u32> = Vec::with_capacity(variable_count);
+        for _ in 0..variable_count {
+            let index = self.state.read_u32(byte_order, Section::Dictionary)?;
+            raw_indices.push(index);
+        }
+        Ok(raw_indices)
     }
 }
 
@@ -441,6 +597,25 @@ mod tests {
             ByteOrder::LittleEndian => buf.extend_from_slice(&value.to_le_bytes()),
             ByteOrder::BigEndian => buf.extend_from_slice(&value.to_be_bytes()),
         }
+    }
+
+    fn write_u32(buf: &mut Vec<u8>, byte_order: ByteOrder, value: u32) {
+        match byte_order {
+            ByteOrder::LittleEndian => buf.extend_from_slice(&value.to_le_bytes()),
+            ByteOrder::BigEndian => buf.extend_from_slice(&value.to_be_bytes()),
+        }
+    }
+
+    /// Appends one on-disk value-label entry — 8-byte value, 1-byte
+    /// unpadded length, padded label bytes — using zero padding.
+    fn write_value_label_entry(buf: &mut Vec<u8>, value: [u8; 8], label: &[u8]) {
+        buf.extend_from_slice(&value);
+        let unpadded_len = u8::try_from(label.len()).expect("test label fits in u8");
+        buf.push(unpadded_len);
+        buf.extend_from_slice(label);
+        let used = 1 + label.len();
+        let pad = (8 - (used % 8)) % 8;
+        buf.extend_from_slice(&vec![0u8; pad]);
     }
 
     fn write_padded_label(buf: &mut Vec<u8>, byte_order: ByteOrder, label: &[u8]) {
@@ -1081,5 +1256,391 @@ mod tests {
         let _ = dict.read_record().unwrap().unwrap();
         // No continuations expected — terminator should succeed.
         assert!(dict.read_record().unwrap().is_none());
+    }
+
+    /// Writes one numeric variable followed by a type-3 + type-4
+    /// pair binding the value-label set to that variable.
+    fn build_numeric_var_with_value_labels(
+        byte_order: ByteOrder,
+        labels: &[(f64, &[u8])],
+        target_variable_indices: &[u32],
+    ) -> Vec<u8> {
+        let mut bytes = build_header(byte_order);
+        write_rec_type(&mut bytes, byte_order, 2);
+        bytes.extend(build_variable_body(
+            byte_order,
+            0,
+            0,
+            0,
+            pack_format(5, 8, 2),
+            pack_format(5, 8, 2),
+            *b"V1      ",
+        ));
+        write_rec_type(&mut bytes, byte_order, 3);
+        write_u32(&mut bytes, byte_order, labels.len() as u32);
+        for (value, label) in labels {
+            let value_bytes = match byte_order {
+                ByteOrder::LittleEndian => value.to_le_bytes(),
+                ByteOrder::BigEndian => value.to_be_bytes(),
+            };
+            write_value_label_entry(&mut bytes, value_bytes, label);
+        }
+        write_rec_type(&mut bytes, byte_order, 4);
+        write_u32(&mut bytes, byte_order, target_variable_indices.len() as u32);
+        for &idx in target_variable_indices {
+            write_u32(&mut bytes, byte_order, idx);
+        }
+        write_terminator(&mut bytes, byte_order);
+        bytes
+    }
+
+    fn read_all(bytes: Vec<u8>) -> (Vec<DictionaryRecord>, Vec<SavWarning>) {
+        let mut dict = open(bytes);
+        let mut records = Vec::new();
+        let mut warnings: Vec<SavWarning> = Vec::new();
+        while let Some(record) = dict.read_record().unwrap() {
+            records.push(record);
+            warnings.extend(dict.warnings().iter().cloned());
+        }
+        warnings.extend(dict.warnings().iter().cloned());
+        (records, warnings)
+    }
+
+    #[test]
+    fn numeric_value_label_set_single_variable() {
+        let byte_order = ByteOrder::LittleEndian;
+        let bytes =
+            build_numeric_var_with_value_labels(byte_order, &[(1.0, b"one"), (2.0, b"two")], &[1]);
+        let (records, _) = read_all(bytes);
+        assert_eq!(records.len(), 2);
+        let DictionaryRecord::ValueLabelSet(set) = &records[1] else {
+            panic!("expected ValueLabelSet, got {:?}", records[1]);
+        };
+        assert_eq!(set.entries().len(), 2);
+        assert_eq!(set.entries()[0].value(), 1.0_f64.to_le_bytes());
+        assert_eq!(set.entries()[0].label(), "one");
+        assert_eq!(set.entries()[1].value(), 2.0_f64.to_le_bytes());
+        assert_eq!(set.entries()[1].label(), "two");
+        assert_eq!(set.variable_indices(), &[0]);
+    }
+
+    #[test]
+    fn string_value_label_set_single_variable() {
+        // String variable, width 4. Value keys are 8-byte padded
+        // strings.
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_rec_type(&mut bytes, byte_order, 2);
+        bytes.extend(build_variable_body(
+            byte_order,
+            4,
+            0,
+            0,
+            pack_format(1, 4, 0),
+            pack_format(1, 4, 0),
+            *b"SEX     ",
+        ));
+        write_rec_type(&mut bytes, byte_order, 3);
+        write_u32(&mut bytes, byte_order, 2);
+        write_value_label_entry(&mut bytes, *b"M\0\0\0\0\0\0\0", b"Male");
+        write_value_label_entry(&mut bytes, *b"F\0\0\0\0\0\0\0", b"Female");
+        write_rec_type(&mut bytes, byte_order, 4);
+        write_u32(&mut bytes, byte_order, 1);
+        write_u32(&mut bytes, byte_order, 1);
+        write_terminator(&mut bytes, byte_order);
+
+        let (records, _) = read_all(bytes);
+        let DictionaryRecord::ValueLabelSet(set) = &records[1] else {
+            panic!("expected ValueLabelSet");
+        };
+        assert_eq!(set.entries()[0].value(), *b"M\0\0\0\0\0\0\0");
+        assert_eq!(set.entries()[0].label(), "Male");
+        assert_eq!(set.entries()[1].label(), "Female");
+        assert_eq!(set.variable_indices(), &[0]);
+    }
+
+    #[test]
+    fn value_label_set_multi_variable_type_4() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        // Two numeric variables.
+        for name in [*b"V1      ", *b"V2      "] {
+            write_rec_type(&mut bytes, byte_order, 2);
+            bytes.extend(build_variable_body(
+                byte_order,
+                0,
+                0,
+                0,
+                pack_format(5, 8, 2),
+                pack_format(5, 8, 2),
+                name,
+            ));
+        }
+        write_rec_type(&mut bytes, byte_order, 3);
+        write_u32(&mut bytes, byte_order, 1);
+        write_value_label_entry(&mut bytes, 1.0_f64.to_le_bytes(), b"one");
+        write_rec_type(&mut bytes, byte_order, 4);
+        write_u32(&mut bytes, byte_order, 2);
+        write_u32(&mut bytes, byte_order, 1);
+        write_u32(&mut bytes, byte_order, 2);
+        write_terminator(&mut bytes, byte_order);
+
+        let (records, _) = read_all(bytes);
+        let DictionaryRecord::ValueLabelSet(set) = records.last().unwrap() else {
+            panic!("expected ValueLabelSet last");
+        };
+        assert_eq!(set.variable_indices(), &[0, 1]);
+    }
+
+    #[test]
+    fn type_4_after_long_string_indexes_logical_position() {
+        // A width-32 string (4 physical records) followed by a
+        // numeric variable. The numeric's 1-based physical position
+        // is 5; it should normalize to 0-based logical 1.
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_rec_type(&mut bytes, byte_order, 2);
+        bytes.extend(build_variable_body(
+            byte_order,
+            32,
+            0,
+            0,
+            pack_format(1, 32, 0),
+            pack_format(1, 32, 0),
+            *b"DESC    ",
+        ));
+        for _ in 0..3 {
+            write_rec_type(&mut bytes, byte_order, 2);
+            bytes.extend(build_variable_body(byte_order, -1, 0, 0, 0, 0, [0; 8]));
+        }
+        write_rec_type(&mut bytes, byte_order, 2);
+        bytes.extend(build_variable_body(
+            byte_order,
+            0,
+            0,
+            0,
+            pack_format(5, 8, 2),
+            pack_format(5, 8, 2),
+            *b"AGE     ",
+        ));
+        write_rec_type(&mut bytes, byte_order, 3);
+        write_u32(&mut bytes, byte_order, 1);
+        write_value_label_entry(&mut bytes, 1.0_f64.to_le_bytes(), b"one");
+        write_rec_type(&mut bytes, byte_order, 4);
+        write_u32(&mut bytes, byte_order, 1);
+        write_u32(&mut bytes, byte_order, 5);
+        write_terminator(&mut bytes, byte_order);
+
+        let (records, _) = read_all(bytes);
+        let DictionaryRecord::ValueLabelSet(set) = records.last().unwrap() else {
+            panic!("expected ValueLabelSet");
+        };
+        assert_eq!(set.variable_indices(), &[1]);
+    }
+
+    #[test]
+    fn stray_type_4_errors() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_rec_type(&mut bytes, byte_order, 4);
+        write_u32(&mut bytes, byte_order, 1);
+        write_u32(&mut bytes, byte_order, 1);
+
+        let mut dict = open(bytes);
+        let err = dict.read_record().unwrap_err();
+        match err {
+            SavError::Format(e) => {
+                assert_eq!(
+                    e.kind(),
+                    FormatErrorKind::UnpairedValueLabelRecord { saw: 4 }
+                );
+            }
+            _ => panic!("expected Format error, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn type_3_without_type_4_errors() {
+        // A type-3 record followed by the terminator (999) instead
+        // of a type-4. The reader must error.
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        // A variable so the type-3 isn't structurally orphaned.
+        write_rec_type(&mut bytes, byte_order, 2);
+        bytes.extend(build_variable_body(
+            byte_order,
+            0,
+            0,
+            0,
+            pack_format(5, 8, 2),
+            pack_format(5, 8, 2),
+            *b"V1      ",
+        ));
+        write_rec_type(&mut bytes, byte_order, 3);
+        write_u32(&mut bytes, byte_order, 1);
+        write_value_label_entry(&mut bytes, 1.0_f64.to_le_bytes(), b"one");
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        dict.read_record().unwrap();
+        let err = dict.read_record().unwrap_err();
+        match err {
+            SavError::Format(e) => {
+                assert_eq!(
+                    e.kind(),
+                    FormatErrorKind::UnpairedValueLabelRecord { saw: 999 },
+                );
+            }
+            _ => panic!("expected Format error, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn type_4_with_dangling_index_errors() {
+        let byte_order = ByteOrder::LittleEndian;
+        let bytes = build_numeric_var_with_value_labels(
+            byte_order,
+            &[(1.0, b"one")],
+            // 2 is past the only variable.
+            &[2],
+        );
+        let mut dict = open(bytes);
+        dict.read_record().unwrap();
+        let err = dict.read_record().unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(e.kind(), FormatErrorKind::DanglingValueLabel),
+            _ => panic!("expected Format error, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn type_4_with_zero_index_errors() {
+        let byte_order = ByteOrder::LittleEndian;
+        let bytes = build_numeric_var_with_value_labels(
+            byte_order,
+            &[(1.0, b"one")],
+            // 0 is invalid (indices are 1-based).
+            &[0],
+        );
+        let mut dict = open(bytes);
+        dict.read_record().unwrap();
+        let err = dict.read_record().unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(e.kind(), FormatErrorKind::DanglingValueLabel),
+            _ => panic!("expected Format error, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn type_4_referencing_continuation_position_errors() {
+        // Width-32 string => primary at physical 0, continuations at
+        // 1, 2, 3. A type-4 index of 2 (1-based) lands on physical 1,
+        // a continuation — must error.
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_rec_type(&mut bytes, byte_order, 2);
+        bytes.extend(build_variable_body(
+            byte_order,
+            32,
+            0,
+            0,
+            pack_format(1, 32, 0),
+            pack_format(1, 32, 0),
+            *b"DESC    ",
+        ));
+        for _ in 0..3 {
+            write_rec_type(&mut bytes, byte_order, 2);
+            bytes.extend(build_variable_body(byte_order, -1, 0, 0, 0, 0, [0; 8]));
+        }
+        write_rec_type(&mut bytes, byte_order, 3);
+        write_u32(&mut bytes, byte_order, 1);
+        write_value_label_entry(&mut bytes, [0; 8], b"x");
+        write_rec_type(&mut bytes, byte_order, 4);
+        write_u32(&mut bytes, byte_order, 1);
+        write_u32(&mut bytes, byte_order, 2);
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        dict.read_record().unwrap();
+        let err = dict.read_record().unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(e.kind(), FormatErrorKind::DanglingValueLabel),
+            _ => panic!("expected Format error, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_type_4_warns() {
+        let byte_order = ByteOrder::LittleEndian;
+        let bytes = build_numeric_var_with_value_labels(byte_order, &[(1.0, b"one")], &[]);
+        let mut dict = open(bytes);
+        dict.read_record().unwrap();
+        let record = dict.read_record().unwrap().unwrap();
+        let DictionaryRecord::ValueLabelSet(set) = record else {
+            panic!("expected ValueLabelSet");
+        };
+        assert_eq!(set.variable_indices(), &[] as &[u32]);
+        assert!(
+            dict.warnings()
+                .iter()
+                .any(|w| matches!(w, SavWarning::EmptyValueLabelVariables))
+        );
+    }
+
+    #[test]
+    fn duplicate_variable_indices_preserved() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        for name in [*b"V1      ", *b"V2      ", *b"V3      "] {
+            write_rec_type(&mut bytes, byte_order, 2);
+            bytes.extend(build_variable_body(
+                byte_order,
+                0,
+                0,
+                0,
+                pack_format(5, 8, 2),
+                pack_format(5, 8, 2),
+                name,
+            ));
+        }
+        write_rec_type(&mut bytes, byte_order, 3);
+        write_u32(&mut bytes, byte_order, 1);
+        write_value_label_entry(&mut bytes, 1.0_f64.to_le_bytes(), b"one");
+        write_rec_type(&mut bytes, byte_order, 4);
+        write_u32(&mut bytes, byte_order, 3);
+        write_u32(&mut bytes, byte_order, 1);
+        write_u32(&mut bytes, byte_order, 3);
+        write_u32(&mut bytes, byte_order, 1);
+        write_terminator(&mut bytes, byte_order);
+
+        let (records, _) = read_all(bytes);
+        let DictionaryRecord::ValueLabelSet(set) = records.last().unwrap() else {
+            panic!("expected ValueLabelSet");
+        };
+        assert_eq!(set.variable_indices(), &[0, 2, 0]);
+    }
+
+    #[test]
+    fn duplicate_keys_preserved_and_warned() {
+        let byte_order = ByteOrder::LittleEndian;
+        let bytes = build_numeric_var_with_value_labels(
+            byte_order,
+            &[(5.0, b"first"), (5.0, b"second"), (5.0, b"third")],
+            &[1],
+        );
+        let mut dict = open(bytes);
+        dict.read_record().unwrap();
+        let record = dict.read_record().unwrap().unwrap();
+        let DictionaryRecord::ValueLabelSet(set) = record else {
+            panic!("expected ValueLabelSet");
+        };
+        assert_eq!(set.entries().len(), 3);
+        let dups = dict
+            .warnings()
+            .iter()
+            .filter(|w| matches!(w, SavWarning::DuplicateValueLabelKey { .. }))
+            .count();
+        // Two duplicates of the first occurrence.
+        assert_eq!(dups, 2);
     }
 }
