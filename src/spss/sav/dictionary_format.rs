@@ -48,10 +48,6 @@ pub(super) const RECORD_TYPE_DICTIONARY_TERMINATOR: i32 = 999;
 #[allow(dead_code)] // exercised once the dictionary reader implementation lands.
 pub(super) const DICTIONARY_TERMINATOR_FILLER_LEN: usize = 4;
 
-// ---------------------------------------------------------------------------
-// Type-2 variable record body
-// ---------------------------------------------------------------------------
-
 /// Total length of a variable record's body (i.e., the bytes after
 /// the leading 4-byte record-type tag).
 #[allow(dead_code)] // exercised once the dictionary reader implementation lands.
@@ -123,10 +119,6 @@ pub(super) const MISSING_VALUE_COUNT_MAX: i32 = 3;
 #[allow(dead_code)] // exercised once the dictionary reader implementation lands.
 pub(super) const MISSING_VALUE_ENTRY_LEN: usize = 8;
 
-// ---------------------------------------------------------------------------
-// Variable label block (follows the body when `has_label == 1`)
-// ---------------------------------------------------------------------------
-
 /// Length of the i32 `label_len` field that prefixes the variable
 /// label bytes.
 #[allow(dead_code)] // exercised once the dictionary reader implementation lands.
@@ -137,9 +129,43 @@ pub(super) const VARIABLE_LABEL_LENGTH_FIELD_LEN: usize = 4;
 #[allow(dead_code)] // exercised once the dictionary reader implementation lands.
 pub(super) const VARIABLE_LABEL_PADDING: usize = 4;
 
-// ---------------------------------------------------------------------------
-// Format code packing
-// ---------------------------------------------------------------------------
+/// Length of the `label_count` field that prefixes the value-label
+/// entries in a type-3 record. Read as `u32` in the file's byte order.
+#[allow(dead_code)] // exercised once the value-label reader implementation lands.
+pub(super) const VALUE_LABEL_COUNT_FIELD_LEN: usize = 4;
+
+/// Length of the `value` field at the start of each value-label
+/// entry. Holds either an `f64` (numeric variable) or padded byte
+/// string (string variable) — the reader cannot tell which until the
+/// paired type-4 record ties the set to one or more variables.
+#[allow(dead_code)] // exercised once the value-label reader implementation lands.
+pub(super) const VALUE_LABEL_VALUE_LEN: usize = 8;
+
+/// Length of the `label_len` byte that prefixes the label string.
+/// The label content plus this length byte are padded together to a
+/// multiple of [`VALUE_LABEL_ENTRY_ALIGNMENT`].
+#[allow(dead_code)] // exercised once the value-label reader implementation lands.
+pub(super) const VALUE_LABEL_LABEL_LEN_FIELD_LEN: usize = 1;
+
+/// Alignment (in bytes) of the (length-byte + label) portion of a
+/// value-label entry. The declared `label_len`, plus its 1-byte
+/// header, is padded up to the next multiple of this.
+#[allow(dead_code)] // exercised once the value-label reader implementation lands.
+pub(super) const VALUE_LABEL_ENTRY_ALIGNMENT: usize = 8;
+
+/// Length of the `variable_count` field that prefixes the
+/// variable-index list in a type-4 record. Read as `u32` in the
+/// file's byte order.
+#[allow(dead_code)] // exercised once the value-label reader implementation lands.
+pub(super) const VALUE_LABEL_VARIABLE_COUNT_FIELD_LEN: usize = 4;
+
+/// Length of one variable-index entry in a type-4 record. The
+/// index is the 1-based physical position of a variable in the
+/// dictionary section; the reader normalizes it to a 0-based logical
+/// index by mapping through the primary-variable positions it has
+/// recorded so far.
+#[allow(dead_code)] // exercised once the value-label reader implementation lands.
+pub(super) const VALUE_LABEL_VARIABLE_INDEX_LEN: usize = 4;
 
 /// Byte position of the decimals byte within a 4-byte format code
 /// (after reduction to native byte order).

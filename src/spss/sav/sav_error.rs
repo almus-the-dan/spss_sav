@@ -169,6 +169,15 @@ pub enum FormatErrorKind {
         /// Number of continuation records still expected.
         expected_remaining: u32,
     },
+    /// A type-3 / type-4 adjacency rule was violated: either a
+    /// type-4 record appeared without an immediately preceding
+    /// type-3 (`saw == 4`), or a type-3 record was followed by
+    /// something other than a type-4 (`saw` carries the offending
+    /// record-type tag).
+    UnpairedValueLabelRecord {
+        /// Record-type tag observed in violation.
+        saw: i32,
+    },
 }
 
 impl fmt::Display for FormatErrorKind {
@@ -195,6 +204,9 @@ impl fmt::Display for FormatErrorKind {
                 f,
                 "string variable expected {expected_remaining} more continuation record(s)",
             ),
+            Self::UnpairedValueLabelRecord { saw } => {
+                write!(f, "unpaired value-label record (saw record type {saw})")
+            }
         }
     }
 }
@@ -369,6 +381,15 @@ mod tests {
             actual: 5,
         };
         assert_eq!(kind.to_string(), "truncated: expected 10 bytes, got 5");
+    }
+
+    #[test]
+    fn format_error_kind_display_unpaired_value_label() {
+        let kind = FormatErrorKind::UnpairedValueLabelRecord { saw: 7 };
+        assert_eq!(
+            kind.to_string(),
+            "unpaired value-label record (saw record type 7)",
+        );
     }
 
     #[test]

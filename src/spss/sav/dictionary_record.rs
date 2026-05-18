@@ -2,8 +2,8 @@
 
 use crate::spss::sav::document_record::DocumentRecord;
 use crate::spss::sav::extensions::extension_record::ExtensionRecord;
+use crate::spss::sav::raw_value_label_set::RawValueLabelSet;
 use crate::spss::sav::sav_variable_header::SavVariableHeader;
-use crate::spss::sav::value_label_set::ValueLabelSet;
 
 /// One typed record yielded by the streaming dictionary reader.
 ///
@@ -22,15 +22,18 @@ use crate::spss::sav::value_label_set::ValueLabelSet;
 /// into the record reader.
 ///
 /// Type-3 + type-4 records appear paired as a single
-/// [`ValueLabelSet`](Self::ValueLabelSet) entry — the user never sees
-/// the unpaired wire-level records.
+/// [`ValueLabelSet`](Self::ValueLabelSet) entry carrying the
+/// wire-level [`RawValueLabelSet`] — the user never sees the
+/// unpaired wire-level records. The fully reconciled, typed form
+/// ([`ValueLabelSet`](crate::spss::sav::value_label_set::ValueLabelSet))
+/// is materialized when the dictionary phase finalizes.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum DictionaryRecord {
     /// A single variable's wire-level header.
     Variable(SavVariableHeader),
-    /// A type-3 + type-4 paired value-label set.
-    ValueLabelSet(ValueLabelSet),
+    /// A type-3 + type-4 paired value-label set, wire-level form.
+    ValueLabelSet(RawValueLabelSet),
     /// A document record (free-text annotation lines).
     Document(DocumentRecord),
     /// An extension record (any subtype, including unrecognized).

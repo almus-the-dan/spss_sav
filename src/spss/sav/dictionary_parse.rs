@@ -16,9 +16,11 @@ use encoding_rs::Encoding;
 
 use crate::spss::sav::dictionary_format::{
     FORMAT_CODE_DECIMALS_BYTE, FORMAT_CODE_KIND_BYTE, FORMAT_CODE_WIDTH_BYTE,
+    VALUE_LABEL_ENTRY_ALIGNMENT, VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN,
     VARIABLE_TYPE_CONTINUATION, VARIABLE_TYPE_NUMERIC, VARIABLE_TYPE_STRING_MAX,
 };
 use crate::spss::sav::raw_missing_values::RawMissingValues;
+use crate::spss::sav::raw_value_label_entry::RawValueLabelEntry;
 use crate::spss::sav::sav_error::{Field, FormatErrorKind, Result, SavError, Section};
 use crate::spss::sav::sav_format::SavFormat;
 use crate::spss::sav::sav_format_kind::SavFormatKind;
@@ -190,6 +192,68 @@ pub(super) fn compose_raw_missing_values(
             discrete: entries[2],
         },
     }
+}
+
+/// Total on-disk length of one type-3 value-label entry, given the
+/// declared `unpadded_len` byte that follows the 8-byte `value`
+/// field. The (length byte plus the label) portion is padded up to a
+/// multiple of [`VALUE_LABEL_ENTRY_ALIGNMENT`]; the 8-byte value sits
+/// at the front of the entry.
+///
+/// Matches `ReadStat`'s `padded_len = (unpadded_len + 8) / 8 * 8 - 1`,
+/// rewritten here as the full entry size including the leading
+/// 8-byte value.
+#[allow(dead_code)] // exercised once the value-label reader implementation lands.
+pub(super) fn value_label_entry_size(unpadded_len: u8) -> usize {
+    let with_length_byte = usize::from(unpadded_len) + VALUE_LABEL_LABEL_LEN_FIELD_LEN;
+    let aligned = with_length_byte.div_ceil(VALUE_LABEL_ENTRY_ALIGNMENT);
+    let padded = aligned * VALUE_LABEL_ENTRY_ALIGNMENT;
+    VALUE_LABEL_VALUE_LEN + padded
+}
+
+/// Decodes one type-3 value-label entry from its on-disk bytes.
+///
+/// `value` is the 8 bytes preceding the length byte, carried verbatim
+/// (numeric vs. string interpretation is deferred until the paired
+/// type-4 record ties this set to a typed variable). `label_bytes`
+/// is the padded label portion that follows the length byte; the
+/// caller passes the first `unpadded_len` bytes of it through
+/// `encoding` and trims trailing padding.
+///
+/// # Panics
+///
+/// Panics in debug builds if `label_bytes.len() < unpadded_len as
+/// usize`. The caller (the dictionary reader) sizes the slice from
+/// [`value_label_entry_size`] which guarantees this.
+#[allow(dead_code, unused_variables)] // exercised once the value-label reader implementation lands.
+pub(super) fn parse_value_label_entry(
+    value: [u8; VALUE_LABEL_VALUE_LEN],
+    unpadded_len: u8,
+    label_bytes: &[u8],
+    encoding: &'static Encoding,
+) -> RawValueLabelEntry {
+    todo!("body lands with the value-label reader implementation")
+}
+
+/// Translates a type-4 record's 1-based physical variable indices
+/// into 0-based logical indices, using `primaries` — the list of
+/// physical positions of each primary (non-continuation) variable
+/// record the dictionary reader has seen so far, in declaration
+/// order.
+///
+/// # Errors
+///
+/// Returns [`FormatErrorKind::DanglingValueLabel`] for any index
+/// that is zero, exceeds the highest physical position recorded, or
+/// lands on a string-variable continuation record (i.e., is not
+/// present in `primaries`).
+#[allow(dead_code, unused_variables)] // exercised once the value-label reader implementation lands.
+pub(super) fn normalize_value_label_variable_indices(
+    raw: &[u32],
+    primaries: &[u32],
+    position: u64,
+) -> Result<Vec<u32>> {
+    todo!("body lands with the value-label reader implementation")
 }
 
 #[cfg(test)]
@@ -384,6 +448,33 @@ mod tests {
                 high: [2; 8]
             }
         );
+    }
+
+    #[test]
+    fn value_label_entry_size_zero_length_label_fills_one_alignment_block() {
+        // 8 (value) + 1 (length byte alone, padded to 8) = 16.
+        assert_eq!(value_label_entry_size(0), 16);
+    }
+
+    #[test]
+    fn value_label_entry_size_packs_label_into_first_alignment_block() {
+        // length byte + 7 bytes of label fits in exactly one 8-byte
+        // block, so total is 8 (value) + 8 = 16.
+        assert_eq!(value_label_entry_size(7), 16);
+    }
+
+    #[test]
+    fn value_label_entry_size_overflows_to_second_alignment_block() {
+        // length byte + 8 bytes of label needs 9 bytes → padded to
+        // 16, so total is 8 (value) + 16 = 24.
+        assert_eq!(value_label_entry_size(8), 24);
+    }
+
+    #[test]
+    fn value_label_entry_size_maximum_label_length() {
+        // Maximum unpadded label length is 255 (it's a u8). 255 + 1
+        // = 256, which is already a multiple of 8.
+        assert_eq!(value_label_entry_size(255), 8 + 256);
     }
 
     #[test]

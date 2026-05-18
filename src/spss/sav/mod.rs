@@ -38,6 +38,10 @@ pub mod missing_value_spec;
 pub mod range_bound;
 /// Wire-level missing-value bytes from a variable record.
 pub mod raw_missing_values;
+/// Wire-level value-label entry from a type-3 record.
+pub mod raw_value_label_entry;
+/// Wire-level value-label set from a paired type-3 + type-4 record.
+pub mod raw_value_label_set;
 /// Crate-internal per-reader state.
 mod reader_state;
 /// Reader for the data-record section of a SAV file.
