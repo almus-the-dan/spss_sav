@@ -246,6 +246,50 @@ pub(super) const FLOAT_SENTINELS_HIGHEST_OFFSET: usize = 8;
 #[allow(dead_code)] // exercised once the subtype-4 parser lands.
 pub(super) const FLOAT_SENTINELS_LOWEST_OFFSET: usize = 16;
 
+/// Extension subtype 5 — integer-typed environment metadata
+/// (version numbers, machine code, floating-point representation,
+/// compression code, endianness, character-set code).
+#[allow(dead_code)] // exercised once the subtype-5 parser lands.
+pub(super) const EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO: i32 = 5;
+
+/// `element_size` an extension subtype-5 record must declare. Each
+/// field is one `i32`.
+#[allow(dead_code)] // exercised once the subtype-5 parser lands.
+pub(super) const MACHINE_INTEGER_INFO_ELEMENT_SIZE: u32 = 4;
+
+/// `element_count` an extension subtype-5 record must declare. The
+/// payload is exactly eight `i32` fields, in this fixed order:
+/// `version_major`, `version_minor`, `version_revision`,
+/// `machine_code`, `floating_point_representation`,
+/// `compression_code`, `endianness`, `character_code`.
+#[allow(dead_code)] // exercised once the subtype-5 parser lands.
+pub(super) const MACHINE_INTEGER_INFO_ELEMENT_COUNT: u32 = 8;
+
+/// Tagged code for IEEE 754 in subtype-5's
+/// `floating_point_representation` field.
+#[allow(dead_code)] // exercised once the subtype-5 parser lands.
+pub(super) const FLOATING_POINT_REPRESENTATION_IEEE: i32 = 1;
+
+/// Tagged code for IBM hexadecimal floating-point in subtype-5's
+/// `floating_point_representation` field.
+#[allow(dead_code)] // exercised once the subtype-5 parser lands.
+pub(super) const FLOATING_POINT_REPRESENTATION_IBM_HFP: i32 = 2;
+
+/// Tagged code for VAX floating-point in subtype-5's
+/// `floating_point_representation` field.
+#[allow(dead_code)] // exercised once the subtype-5 parser lands.
+pub(super) const FLOATING_POINT_REPRESENTATION_VAX: i32 = 3;
+
+/// Tagged code for big-endian byte order in subtype-5's
+/// `endianness` field.
+#[allow(dead_code)] // exercised once the subtype-5 parser lands.
+pub(super) const ENDIANNESS_BIG_ENDIAN: i32 = 1;
+
+/// Tagged code for little-endian byte order in subtype-5's
+/// `endianness` field.
+#[allow(dead_code)] // exercised once the subtype-5 parser lands.
+pub(super) const ENDIANNESS_LITTLE_ENDIAN: i32 = 2;
+
 /// Byte position of the decimals byte within a 4-byte format code
 /// (after reduction to native byte order).
 #[allow(dead_code)] // exercised once the dictionary reader implementation lands.

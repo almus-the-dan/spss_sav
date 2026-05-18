@@ -19,11 +19,13 @@ use crate::spss::sav::dictionary_format::{
     FLOAT_SENTINELS_ELEMENT_COUNT, FLOAT_SENTINELS_ELEMENT_SIZE, FLOAT_SENTINELS_HIGHEST_OFFSET,
     FLOAT_SENTINELS_LOWEST_OFFSET, FLOAT_SENTINELS_SYSTEM_MISSING_OFFSET,
     FORMAT_CODE_DECIMALS_BYTE, FORMAT_CODE_KIND_BYTE, FORMAT_CODE_WIDTH_BYTE,
+    MACHINE_INTEGER_INFO_ELEMENT_COUNT, MACHINE_INTEGER_INFO_ELEMENT_SIZE,
     NUMBER_OF_CASES_ELEMENT_COUNT, NUMBER_OF_CASES_ELEMENT_SIZE, VALUE_LABEL_ENTRY_ALIGNMENT,
     VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN, VARIABLE_TYPE_CONTINUATION,
     VARIABLE_TYPE_NUMERIC, VARIABLE_TYPE_STRING_MAX,
 };
 use crate::spss::sav::extensions::float_sentinels::FloatSentinels;
+use crate::spss::sav::extensions::machine_integer_info::MachineIntegerInfo;
 use crate::spss::sav::raw_missing_values::RawMissingValues;
 use crate::spss::sav::raw_value_label_entry::RawValueLabelEntry;
 use crate::spss::sav::sav_error::{Field, FormatErrorKind, Result, SavError, Section};
@@ -426,6 +428,66 @@ pub(super) fn parse_float_sentinels(
         .lowest(slab(FLOAT_SENTINELS_LOWEST_OFFSET))
         .build();
     Ok(sentinels)
+}
+
+/// Parses an extension subtype-5 payload (machine integer info: 8
+/// `i32` fields holding version numbers, machine code,
+/// floating-point representation, compression code, endianness, and
+/// character-set code).
+///
+/// Validates the envelope against the subtype's spec shape
+/// (`element_size == 4`, `element_count == 8`) and decodes each
+/// 4-byte slot as an `i32` in the file's byte order. No tagged-code
+/// validation happens here — the typed conveniences on the
+/// resulting [`MachineIntegerInfo`] return `None` for unrecognized
+/// values, and cross-checks against the header live in the
+/// dictionary reader so it can emit warnings against [`SavWarning`].
+///
+/// [`SavWarning`]: crate::spss::sav::sav_warning::SavWarning
+///
+/// # Errors
+///
+/// Returns [`FormatErrorKind::UnexpectedValue`] when the envelope
+/// shape disagrees with the spec.
+///
+/// # Panics
+///
+/// Panics in debug builds if `payload.len()` does not equal
+/// `actual_size * actual_count`. The caller (the dictionary reader)
+/// reads the payload from those dimensions, so this is a logic
+/// invariant.
+pub(super) fn parse_machine_integer_info(
+    actual_size: u32,
+    actual_count: u32,
+    payload: &[u8],
+    byte_order: ByteOrder,
+    position: u64,
+) -> Result<MachineIntegerInfo> {
+    validate_extension_shape(
+        actual_size,
+        actual_count,
+        MACHINE_INTEGER_INFO_ELEMENT_SIZE,
+        MACHINE_INTEGER_INFO_ELEMENT_COUNT,
+        position,
+    )?;
+    debug_assert_eq!(payload.len(), 32);
+    let i32_at = |offset: usize| -> i32 {
+        let bytes: [u8; 4] = payload[offset..offset + 4]
+            .try_into()
+            .expect("envelope validation guarantees a 32-byte payload");
+        byte_order.read_i32(bytes)
+    };
+    let info = MachineIntegerInfo::builder()
+        .version_major(i32_at(0))
+        .version_minor(i32_at(4))
+        .version_revision(i32_at(8))
+        .machine_code(i32_at(12))
+        .floating_point_representation(i32_at(16))
+        .compression_code(i32_at(20))
+        .endianness(i32_at(24))
+        .character_code(i32_at(28))
+        .build();
+    Ok(info)
 }
 
 #[cfg(test)]

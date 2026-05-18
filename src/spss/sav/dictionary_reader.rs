@@ -15,23 +15,24 @@ use encoding_rs::Encoding;
 use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::dictionary_format::{
     DICTIONARY_TERMINATOR_FILLER_LEN, DOCUMENT_LINE_LEN, EXTENSION_SUBTYPE_FLOAT_INFO,
-    EXTENSION_SUBTYPE_NUMBER_OF_CASES, MISSING_VALUE_ENTRY_LEN, RECORD_TYPE_DICTIONARY_TERMINATOR,
-    RECORD_TYPE_DOCUMENT, RECORD_TYPE_EXTENSION, RECORD_TYPE_VALUE_LABEL,
-    RECORD_TYPE_VALUE_LABEL_VARIABLES, RECORD_TYPE_VARIABLE, VALUE_LABEL_LABEL_LEN_FIELD_LEN,
-    VALUE_LABEL_VALUE_LEN, VARIABLE_HAS_LABEL_OFFSET, VARIABLE_LABEL_PADDING,
-    VARIABLE_MISSING_VALUE_COUNT_OFFSET, VARIABLE_PRINT_FORMAT_OFFSET, VARIABLE_RECORD_BODY_LEN,
-    VARIABLE_SHORT_NAME_LEN, VARIABLE_SHORT_NAME_OFFSET, VARIABLE_TYPE_OFFSET,
-    VARIABLE_WRITE_FORMAT_OFFSET,
+    EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO, EXTENSION_SUBTYPE_NUMBER_OF_CASES,
+    MISSING_VALUE_ENTRY_LEN, RECORD_TYPE_DICTIONARY_TERMINATOR, RECORD_TYPE_DOCUMENT,
+    RECORD_TYPE_EXTENSION, RECORD_TYPE_VALUE_LABEL, RECORD_TYPE_VALUE_LABEL_VARIABLES,
+    RECORD_TYPE_VARIABLE, VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN,
+    VARIABLE_HAS_LABEL_OFFSET, VARIABLE_LABEL_PADDING, VARIABLE_MISSING_VALUE_COUNT_OFFSET,
+    VARIABLE_PRINT_FORMAT_OFFSET, VARIABLE_RECORD_BODY_LEN, VARIABLE_SHORT_NAME_LEN,
+    VARIABLE_SHORT_NAME_OFFSET, VARIABLE_TYPE_OFFSET, VARIABLE_WRITE_FORMAT_OFFSET,
 };
 use crate::spss::sav::dictionary_parse::{
     VariableTypeCode, compose_raw_missing_values, normalize_value_label_variable_indices,
-    parse_float_sentinels, parse_has_label, parse_missing_value_count, parse_number_of_cases,
-    parse_sav_format, parse_short_name, parse_value_label_entry, parse_variable_type,
-    value_label_entry_size,
+    parse_float_sentinels, parse_has_label, parse_machine_integer_info, parse_missing_value_count,
+    parse_number_of_cases, parse_sav_format, parse_short_name, parse_value_label_entry,
+    parse_variable_type, value_label_entry_size,
 };
 use crate::spss::sav::dictionary_record::DictionaryRecord;
 use crate::spss::sav::document_record::DocumentRecord;
 use crate::spss::sav::extensions::extension_record::ExtensionRecord;
+use crate::spss::sav::extensions::machine_integer_info::MachineIntegerInfo;
 use crate::spss::sav::extensions::unknown_extension::UnknownExtension;
 use crate::spss::sav::raw_value_label_entry::RawValueLabelEntry;
 use crate::spss::sav::raw_value_label_set::RawValueLabelSet;
@@ -454,6 +455,19 @@ impl<R: Read> DictionaryReader<R> {
                 let record = DictionaryRecord::Extension(record);
                 Ok(record)
             }
+            EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO => {
+                let info = parse_machine_integer_info(
+                    element_size,
+                    element_count,
+                    &payload,
+                    byte_order,
+                    element_size_position,
+                )?;
+                self.cross_check_machine_integer_info(&info, byte_order);
+                let record = ExtensionRecord::MachineIntegerInfo(info);
+                let record = DictionaryRecord::Extension(record);
+                Ok(record)
+            }
             _ => {
                 let subtype_u32 = subtype.cast_unsigned();
                 self.state
@@ -472,6 +486,39 @@ impl<R: Read> DictionaryReader<R> {
                 let record = DictionaryRecord::Extension(record);
                 Ok(record)
             }
+        }
+    }
+
+    /// Compares the byte-order and floating-point codes carried by
+    /// an extension subtype-5 record against the values the header
+    /// reader already determined. Emits a
+    /// [`SavWarning::HeaderByteOrderMismatch`] or
+    /// [`SavWarning::HeaderFloatFormatMismatch`] for each
+    /// disagreement; the header-derived values stay authoritative
+    /// for downstream decoding. Unknown codes (those for which the
+    /// typed accessors return `None`) are tolerated silently — the
+    /// record's raw code remains available on
+    /// [`MachineIntegerInfo`].
+    fn cross_check_machine_integer_info(
+        &mut self,
+        info: &MachineIntegerInfo,
+        header_byte_order: ByteOrder,
+    ) {
+        if let Some(record_byte_order) = info.endianness_kind()
+            && record_byte_order != header_byte_order
+        {
+            let warning = SavWarning::HeaderByteOrderMismatch {
+                record_value: info.endianness(),
+            };
+            self.state.warnings_mut().push(warning);
+        }
+        if let Some(record_format) = info.floating_point_representation_kind()
+            && record_format != self.header.float_format()
+        {
+            let warning = SavWarning::HeaderFloatFormatMismatch {
+                record_value: info.floating_point_representation(),
+            };
+            self.state.warnings_mut().push(warning);
         }
     }
 
@@ -2014,9 +2061,12 @@ mod tests {
 
     #[test]
     fn extension_record_big_endian() {
+        // Use an unrecognized subtype, so the Unknown
+        // fallback applies. (Subtype 5 used to be a safe choice but
+        // now has its own strict-envelope dispatch arm.)
         let byte_order = ByteOrder::BigEndian;
         let mut bytes = build_header(byte_order);
-        write_extension_record(&mut bytes, byte_order, 5, 1, 4, b"abcd");
+        write_extension_record(&mut bytes, byte_order, 12345, 1, 4, b"abcd");
         write_terminator(&mut bytes, byte_order);
 
         let mut dict = open(bytes);
@@ -2025,7 +2075,7 @@ mod tests {
         else {
             panic!("expected Unknown extension");
         };
-        assert_eq!(unknown.subtype(), 5);
+        assert_eq!(unknown.subtype(), 12345);
         assert_eq!(unknown.element_size(), 1);
         assert_eq!(unknown.element_count(), 4);
         assert_eq!(unknown.payload(), b"abcd");
@@ -2230,6 +2280,178 @@ mod tests {
         let mut bytes = build_header(byte_order);
         // Spec says element_count must be 3; pass 2 instead.
         write_extension_record(&mut bytes, byte_order, 4, 8, 2, &[0; 16]);
+
+        let mut dict = open(bytes);
+        let err = dict.read_record().unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(
+                e.kind(),
+                FormatErrorKind::UnexpectedValue {
+                    field: crate::spss::sav::sav_error::Field::ExtensionElementCount,
+                }
+            ),
+            _ => panic!("expected Format error, got {err:?}"),
+        }
+    }
+
+    /// Builds a 32-byte subtype-5 payload from 8 i32 fields in the
+    /// given byte order.
+    fn build_machine_integer_info_payload(byte_order: ByteOrder, fields: [i32; 8]) -> Vec<u8> {
+        let to_bytes = |v: i32| match byte_order {
+            ByteOrder::LittleEndian => v.to_le_bytes(),
+            ByteOrder::BigEndian => v.to_be_bytes(),
+        };
+        let mut buf = Vec::with_capacity(32);
+        for value in fields {
+            buf.extend_from_slice(&to_bytes(value));
+        }
+        buf
+    }
+
+    #[test]
+    fn extension_subtype_5_machine_integer_info() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        // version 25.0.0, machine code 720, IEEE/standard compression,
+        // little-endian, character code 1252 (Windows-1252).
+        let fields = [25, 0, 0, 720, 1, 1, 2, 1252];
+        let payload = build_machine_integer_info_payload(byte_order, fields);
+        write_extension_record(&mut bytes, byte_order, 5, 4, 8, &payload);
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let DictionaryRecord::Extension(ExtensionRecord::MachineIntegerInfo(info)) =
+            dict.read_record().unwrap().unwrap()
+        else {
+            panic!("expected MachineIntegerInfo");
+        };
+        assert_eq!(info.version_major(), 25);
+        assert_eq!(info.version_minor(), 0);
+        assert_eq!(info.version_revision(), 0);
+        assert_eq!(info.machine_code(), 720);
+        assert_eq!(info.floating_point_representation(), 1);
+        assert_eq!(info.compression_code(), 1);
+        assert_eq!(info.endianness(), 2);
+        assert_eq!(info.character_code(), 1252);
+        assert_eq!(
+            info.floating_point_representation_kind(),
+            Some(crate::spss::sav::float_format::FloatFormat::Ieee754),
+        );
+        assert_eq!(info.endianness_kind(), Some(ByteOrder::LittleEndian));
+        // Header byte order (LE) matches record (2 → LE), float format
+        // matches (IEEE), so no cross-check warnings.
+        assert!(dict.warnings().is_empty());
+    }
+
+    #[test]
+    fn extension_subtype_5_big_endian_payload() {
+        let byte_order = ByteOrder::BigEndian;
+        let mut bytes = build_header(byte_order);
+        let fields = [25, 0, 0, 720, 1, 1, 1, 1252];
+        let payload = build_machine_integer_info_payload(byte_order, fields);
+        write_extension_record(&mut bytes, byte_order, 5, 4, 8, &payload);
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let DictionaryRecord::Extension(ExtensionRecord::MachineIntegerInfo(info)) =
+            dict.read_record().unwrap().unwrap()
+        else {
+            panic!("expected MachineIntegerInfo");
+        };
+        assert_eq!(info.machine_code(), 720);
+        assert_eq!(info.endianness_kind(), Some(ByteOrder::BigEndian));
+    }
+
+    #[test]
+    fn extension_subtype_5_unknown_codes_return_none_from_typed_accessors() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        // 99 for both floating-point representation and endianness —
+        // neither maps onto a recognized enum variant.
+        let fields = [25, 0, 0, 720, 99, 1, 99, 1252];
+        let payload = build_machine_integer_info_payload(byte_order, fields);
+        write_extension_record(&mut bytes, byte_order, 5, 4, 8, &payload);
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let DictionaryRecord::Extension(ExtensionRecord::MachineIntegerInfo(info)) =
+            dict.read_record().unwrap().unwrap()
+        else {
+            panic!("expected MachineIntegerInfo");
+        };
+        assert_eq!(info.floating_point_representation(), 99);
+        assert_eq!(info.endianness(), 99);
+        assert!(info.floating_point_representation_kind().is_none());
+        assert!(info.endianness_kind().is_none());
+        // Unknown codes don't trigger the cross-check warnings —
+        // there's nothing to compare against.
+        assert!(dict.warnings().is_empty());
+    }
+
+    #[test]
+    fn extension_subtype_5_byte_order_mismatch_warns() {
+        // Header is little-endian, but the record claims big-endian
+        // (code 1).
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        let fields = [25, 0, 0, 720, 1, 1, 1, 1252];
+        let payload = build_machine_integer_info_payload(byte_order, fields);
+        write_extension_record(&mut bytes, byte_order, 5, 4, 8, &payload);
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        dict.read_record().unwrap().unwrap();
+        assert!(matches!(
+            dict.warnings(),
+            &[SavWarning::HeaderByteOrderMismatch { record_value: 1 }]
+        ));
+    }
+
+    #[test]
+    fn extension_subtype_5_float_format_mismatch_warns() {
+        // Header is IEEE 754 (the default test fixture uses IEEE
+        // bias 100.0); the record claims IBM HFP (code 2).
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        let fields = [25, 0, 0, 720, 2, 1, 2, 1252];
+        let payload = build_machine_integer_info_payload(byte_order, fields);
+        write_extension_record(&mut bytes, byte_order, 5, 4, 8, &payload);
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        dict.read_record().unwrap().unwrap();
+        assert!(matches!(
+            dict.warnings(),
+            &[SavWarning::HeaderFloatFormatMismatch { record_value: 2 }]
+        ));
+    }
+
+    #[test]
+    fn extension_subtype_5_wrong_element_size_errors() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        // Spec says element_size must be 4; pass 8 instead.
+        write_extension_record(&mut bytes, byte_order, 5, 8, 8, &[0; 64]);
+
+        let mut dict = open(bytes);
+        let err = dict.read_record().unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(
+                e.kind(),
+                FormatErrorKind::UnexpectedValue {
+                    field: crate::spss::sav::sav_error::Field::ExtensionElementSize,
+                }
+            ),
+            _ => panic!("expected Format error, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn extension_subtype_5_wrong_element_count_errors() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        // Spec says element_count must be 8; pass 4 instead.
+        write_extension_record(&mut bytes, byte_order, 5, 4, 4, &[0; 16]);
 
         let mut dict = open(bytes);
         let err = dict.read_record().unwrap_err();

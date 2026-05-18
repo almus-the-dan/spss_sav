@@ -92,4 +92,23 @@ pub enum SavWarning {
         /// Raw 8-byte key that was repeated.
         key: [u8; 8],
     },
+    /// The byte-order code in an extension subtype-5
+    /// (`MachineIntegerInfo`) record disagreed with the byte order
+    /// the header reader detected from the layout-code field. The
+    /// header-detected byte order is taken as authoritative; the
+    /// record is still surfaced verbatim.
+    HeaderByteOrderMismatch {
+        /// Raw `endianness` field value from the subtype-5 record.
+        record_value: i32,
+    },
+    /// The floating-point-representation code in an extension
+    /// subtype-5 (`MachineIntegerInfo`) record disagreed with the
+    /// float format the header reader detected from the bias field.
+    /// The header-detected format is taken as authoritative; the
+    /// record is still surfaced verbatim.
+    HeaderFloatFormatMismatch {
+        /// Raw `floating_point_representation` field value from the
+        /// subtype-5 record.
+        record_value: i32,
+    },
 }
