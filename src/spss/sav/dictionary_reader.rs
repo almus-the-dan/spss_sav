@@ -15,19 +15,20 @@ use encoding_rs::Encoding;
 use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::dictionary_format::{
     DICTIONARY_TERMINATOR_FILLER_LEN, DOCUMENT_LINE_LEN, EXTENSION_SUBTYPE_FLOAT_INFO,
-    EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO, EXTENSION_SUBTYPE_NUMBER_OF_CASES,
-    MISSING_VALUE_ENTRY_LEN, RECORD_TYPE_DICTIONARY_TERMINATOR, RECORD_TYPE_DOCUMENT,
-    RECORD_TYPE_EXTENSION, RECORD_TYPE_VALUE_LABEL, RECORD_TYPE_VALUE_LABEL_VARIABLES,
-    RECORD_TYPE_VARIABLE, VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN,
-    VARIABLE_HAS_LABEL_OFFSET, VARIABLE_LABEL_PADDING, VARIABLE_MISSING_VALUE_COUNT_OFFSET,
-    VARIABLE_PRINT_FORMAT_OFFSET, VARIABLE_RECORD_BODY_LEN, VARIABLE_SHORT_NAME_LEN,
-    VARIABLE_SHORT_NAME_OFFSET, VARIABLE_TYPE_OFFSET, VARIABLE_WRITE_FORMAT_OFFSET,
+    EXTENSION_SUBTYPE_MACHINE_FLOAT_INFO, EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO,
+    EXTENSION_SUBTYPE_NUMBER_OF_CASES, MISSING_VALUE_ENTRY_LEN, RECORD_TYPE_DICTIONARY_TERMINATOR,
+    RECORD_TYPE_DOCUMENT, RECORD_TYPE_EXTENSION, RECORD_TYPE_VALUE_LABEL,
+    RECORD_TYPE_VALUE_LABEL_VARIABLES, RECORD_TYPE_VARIABLE, VALUE_LABEL_LABEL_LEN_FIELD_LEN,
+    VALUE_LABEL_VALUE_LEN, VARIABLE_HAS_LABEL_OFFSET, VARIABLE_LABEL_PADDING,
+    VARIABLE_MISSING_VALUE_COUNT_OFFSET, VARIABLE_PRINT_FORMAT_OFFSET, VARIABLE_RECORD_BODY_LEN,
+    VARIABLE_SHORT_NAME_LEN, VARIABLE_SHORT_NAME_OFFSET, VARIABLE_TYPE_OFFSET,
+    VARIABLE_WRITE_FORMAT_OFFSET,
 };
 use crate::spss::sav::dictionary_parse::{
     VariableTypeCode, compose_raw_missing_values, normalize_value_label_variable_indices,
-    parse_float_sentinels, parse_has_label, parse_machine_integer_info, parse_missing_value_count,
-    parse_number_of_cases, parse_sav_format, parse_short_name, parse_value_label_entry,
-    parse_variable_type, value_label_entry_size,
+    parse_float_sentinels, parse_has_label, parse_machine_float_info, parse_machine_integer_info,
+    parse_missing_value_count, parse_number_of_cases, parse_sav_format, parse_short_name,
+    parse_value_label_entry, parse_variable_type, value_label_entry_size,
 };
 use crate::spss::sav::dictionary_record::DictionaryRecord;
 use crate::spss::sav::document_record::DocumentRecord;
@@ -74,6 +75,13 @@ pub struct DictionaryReader<R> {
     /// continuations alike. The next primary's 0-based physical
     /// position before this counter is incremented.
     physical_variable_count: u32,
+    /// Float sentinels from the first sentinels-bearing extension
+    /// record seen (subtype 4 or subtype 6), captured as
+    /// `[system_missing, highest, lowest]` slabs. Used to
+    /// cross-check the second occurrence — a subsequent record
+    /// with different values emits
+    /// [`SavWarning::FloatSentinelsCrossCheckMismatch`].
+    seen_float_sentinels: Option<[[u8; 8]; 3]>,
 }
 
 impl<R> DictionaryReader<R> {
@@ -90,6 +98,7 @@ impl<R> DictionaryReader<R> {
             pending_continuations: 0,
             primaries: Vec::new(),
             physical_variable_count: 0,
+            seen_float_sentinels: None,
         }
     }
 
@@ -451,6 +460,14 @@ impl<R: Read> DictionaryReader<R> {
                     &payload,
                     element_size_position,
                 )?;
+                self.record_or_cross_check_float_sentinels(
+                    [
+                        sentinels.system_missing(),
+                        sentinels.highest(),
+                        sentinels.lowest(),
+                    ],
+                    EXTENSION_SUBTYPE_FLOAT_INFO,
+                );
                 let record = ExtensionRecord::FloatInfo(sentinels);
                 let record = DictionaryRecord::Extension(record);
                 Ok(record)
@@ -465,6 +482,21 @@ impl<R: Read> DictionaryReader<R> {
                 )?;
                 self.cross_check_machine_integer_info(&info, byte_order);
                 let record = ExtensionRecord::MachineIntegerInfo(info);
+                let record = DictionaryRecord::Extension(record);
+                Ok(record)
+            }
+            EXTENSION_SUBTYPE_MACHINE_FLOAT_INFO => {
+                let info = parse_machine_float_info(
+                    element_size,
+                    element_count,
+                    &payload,
+                    element_size_position,
+                )?;
+                self.record_or_cross_check_float_sentinels(
+                    [info.system_missing(), info.highest(), info.lowest()],
+                    EXTENSION_SUBTYPE_MACHINE_FLOAT_INFO,
+                );
+                let record = ExtensionRecord::MachineFloatInfo(info);
                 let record = DictionaryRecord::Extension(record);
                 Ok(record)
             }
@@ -486,6 +518,30 @@ impl<R: Read> DictionaryReader<R> {
                 let record = DictionaryRecord::Extension(record);
                 Ok(record)
             }
+        }
+    }
+
+    /// Anchors the first-seen float sentinels (from either subtype
+    /// 4 or subtype 6) and cross-checks every subsequent
+    /// occurrence against them.
+    ///
+    /// On the first call the slabs are captured on the reader's
+    /// internal state and no warning fires. On later calls the
+    /// new slabs are compared slab-for-slab against the anchor, and
+    /// a [`SavWarning::FloatSentinelsCrossCheckMismatch`] is emitted
+    /// on disagreement. The anchor is never overwritten — repeated
+    /// mismatches keep firing against the same first-seen values.
+    fn record_or_cross_check_float_sentinels(&mut self, sentinels: [[u8; 8]; 3], subtype: i32) {
+        if let Some(seen) = self.seen_float_sentinels {
+            if seen != sentinels {
+                self.state
+                    .warnings_mut()
+                    .push(SavWarning::FloatSentinelsCrossCheckMismatch {
+                        subtype: subtype.cast_unsigned(),
+                    });
+            }
+        } else {
+            self.seen_float_sentinels = Some(sentinels);
         }
     }
 
@@ -1438,7 +1494,7 @@ mod tests {
             *b"V1      ",
         ));
         write_rec_type(&mut bytes, byte_order, 3);
-        write_u32(&mut bytes, byte_order, labels.len() as u32);
+        write_u32(&mut bytes, byte_order, u32::try_from(labels.len()).unwrap());
         for (value, label) in labels {
             let value_bytes = match byte_order {
                 ByteOrder::LittleEndian => value.to_le_bytes(),
@@ -1447,7 +1503,7 @@ mod tests {
             write_value_label_entry(&mut bytes, value_bytes, label);
         }
         write_rec_type(&mut bytes, byte_order, 4);
-        write_u32(&mut bytes, byte_order, target_variable_indices.len() as u32);
+        write_u32(&mut bytes, byte_order, u32::try_from(target_variable_indices.len()).unwrap());
         for &idx in target_variable_indices {
             write_u32(&mut bytes, byte_order, idx);
         }
@@ -2239,7 +2295,7 @@ mod tests {
         // concern.
         let byte_order = ByteOrder::BigEndian;
         let mut bytes = build_header(byte_order);
-        let payload: [u8; 24] = std::array::from_fn(|i| i as u8);
+        let payload: [u8; 24] = std::array::from_fn(|i| u8::try_from(i).unwrap());
         write_extension_record(&mut bytes, byte_order, 4, 8, 3, &payload);
         write_terminator(&mut bytes, byte_order);
 
@@ -2464,5 +2520,221 @@ mod tests {
             ),
             _ => panic!("expected Format error, got {err:?}"),
         }
+    }
+
+    /// Builds a subtype-4 or subtype-6 sentinels payload from three
+    /// 8-byte slabs.
+    fn build_sentinels_payload(system: [u8; 8], high: [u8; 8], low: [u8; 8]) -> Vec<u8> {
+        let mut buffer = Vec::with_capacity(system.len() + high.len() + low.len());
+        buffer.extend_from_slice(&system);
+        buffer.extend_from_slice(&high);
+        buffer.extend_from_slice(&low);
+        buffer
+    }
+
+    #[test]
+    fn extension_subtype_6_machine_float_info() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        let sys = [1, 2, 3, 4, 5, 6, 7, 8];
+        let high = [9, 10, 11, 12, 13, 14, 15, 16];
+        let low = [17, 18, 19, 20, 21, 22, 23, 24];
+        let payload = build_sentinels_payload(sys, high, low);
+        write_extension_record(&mut bytes, byte_order, 6, 8, 3, &payload);
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let DictionaryRecord::Extension(ExtensionRecord::MachineFloatInfo(info)) =
+            dict.read_record().unwrap().unwrap()
+        else {
+            panic!("expected MachineFloatInfo");
+        };
+        assert_eq!(info.system_missing(), sys);
+        assert_eq!(info.highest(), high);
+        assert_eq!(info.lowest(), low);
+        // No prior sentinels-bearing record was seen, so no
+        // cross-check warning.
+        assert!(dict.warnings().is_empty());
+    }
+
+    #[test]
+    fn extension_subtype_6_big_endian_preserves_bytes_verbatim() {
+        // Even with big-endian header byte order, the sentinel
+        // bytes are not byte-swapped here — the decoded float-format
+        // is a consumer concern.
+        let byte_order = ByteOrder::BigEndian;
+        let mut bytes = build_header(byte_order);
+        let payload: [u8; 24] = std::array::from_fn(|i| u8::try_from(i).unwrap() ^ 0x80);
+        write_extension_record(&mut bytes, byte_order, 6, 8, 3, &payload);
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let DictionaryRecord::Extension(ExtensionRecord::MachineFloatInfo(info)) =
+            dict.read_record().unwrap().unwrap()
+        else {
+            panic!("expected MachineFloatInfo");
+        };
+        let expected_sys: [u8; 8] = payload[0..8].try_into().unwrap();
+        let expected_high: [u8; 8] = payload[8..16].try_into().unwrap();
+        let expected_low: [u8; 8] = payload[16..24].try_into().unwrap();
+        assert_eq!(info.system_missing(), expected_sys);
+        assert_eq!(info.highest(), expected_high);
+        assert_eq!(info.lowest(), expected_low);
+    }
+
+    #[test]
+    fn extension_subtype_6_wrong_element_size_errors() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        // Spec says element_size must be 8; pass 4 instead.
+        write_extension_record(&mut bytes, byte_order, 6, 4, 3, &[0; 12]);
+
+        let mut dict = open(bytes);
+        let err = dict.read_record().unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(
+                e.kind(),
+                FormatErrorKind::UnexpectedValue {
+                    field: crate::spss::sav::sav_error::Field::ExtensionElementSize,
+                }
+            ),
+            _ => panic!("expected Format error, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn extension_subtype_6_wrong_element_count_errors() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        // Spec says element_count must be 3; pass 2 instead.
+        write_extension_record(&mut bytes, byte_order, 6, 8, 2, &[0; 16]);
+
+        let mut dict = open(bytes);
+        let err = dict.read_record().unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(
+                e.kind(),
+                FormatErrorKind::UnexpectedValue {
+                    field: crate::spss::sav::sav_error::Field::ExtensionElementCount,
+                }
+            ),
+            _ => panic!("expected Format error, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn float_sentinels_cross_check_agrees_emits_no_warning() {
+        // Subtype 4 and subtype 6 carrying identical sentinels.
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        let sys = [1; 8];
+        let high = [2; 8];
+        let low = [3; 8];
+        let payload = build_sentinels_payload(sys, high, low);
+        write_extension_record(&mut bytes, byte_order, 4, 8, 3, &payload);
+        write_extension_record(&mut bytes, byte_order, 6, 8, 3, &payload);
+        write_terminator(&mut bytes, byte_order);
+
+        let (records, _) = read_all(bytes);
+        assert_eq!(records.len(), 2);
+        assert!(matches!(
+            records[0],
+            DictionaryRecord::Extension(ExtensionRecord::FloatInfo(_))
+        ));
+        assert!(matches!(
+            records[1],
+            DictionaryRecord::Extension(ExtensionRecord::MachineFloatInfo(_))
+        ));
+        // No mismatch warning fired.
+        let mut dict = open(build_sentinels_test_bytes(byte_order, sys, high, low, true));
+        dict.read_record().unwrap();
+        dict.read_record().unwrap();
+        assert!(
+            !dict
+                .warnings()
+                .iter()
+                .any(|w| matches!(w, SavWarning::FloatSentinelsCrossCheckMismatch { .. }))
+        );
+    }
+
+    /// Builds a header + (subtype-4 record) + optionally a
+    /// (subtype-6 record) using the given sentinels.
+    fn build_sentinels_test_bytes(
+        byte_order: ByteOrder,
+        sys: [u8; 8],
+        high: [u8; 8],
+        low: [u8; 8],
+        include_subtype_6: bool,
+    ) -> Vec<u8> {
+        let mut bytes = build_header(byte_order);
+        let payload = build_sentinels_payload(sys, high, low);
+        write_extension_record(&mut bytes, byte_order, 4, 8, 3, &payload);
+        if include_subtype_6 {
+            write_extension_record(&mut bytes, byte_order, 6, 8, 3, &payload);
+        }
+        write_terminator(&mut bytes, byte_order);
+        bytes
+    }
+
+    #[test]
+    fn float_sentinels_cross_check_subtype_4_then_subtype_6_disagrees() {
+        // Subtype 4 carries one set of sentinels; subtype 6 carries
+        // a different system-missing slab.
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        let sys4 = [0xFF; 8];
+        let high = [2; 8];
+        let low = [3; 8];
+        let payload4 = build_sentinels_payload(sys4, high, low);
+        write_extension_record(&mut bytes, byte_order, 4, 8, 3, &payload4);
+
+        let sys6 = [0x00; 8]; // different
+        let payload6 = build_sentinels_payload(sys6, high, low);
+        write_extension_record(&mut bytes, byte_order, 6, 8, 3, &payload6);
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        dict.read_record().unwrap(); // subtype 4
+        dict.read_record().unwrap(); // subtype 6 — mismatch warning fires
+        assert!(matches!(
+            dict.warnings(),
+            &[SavWarning::FloatSentinelsCrossCheckMismatch { subtype: 6 }]
+        ));
+    }
+
+    #[test]
+    fn float_sentinels_cross_check_subtype_6_then_subtype_4_disagrees() {
+        // Reverse order — subtype 6 first, then subtype 4 disagrees.
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        let sys6 = [0xAA; 8];
+        let high = [2; 8];
+        let low = [3; 8];
+        let payload6 = build_sentinels_payload(sys6, high, low);
+        write_extension_record(&mut bytes, byte_order, 6, 8, 3, &payload6);
+
+        let sys4 = [0xBB; 8]; // different
+        let payload4 = build_sentinels_payload(sys4, high, low);
+        write_extension_record(&mut bytes, byte_order, 4, 8, 3, &payload4);
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        dict.read_record().unwrap(); // subtype 6
+        dict.read_record().unwrap(); // subtype 4 — mismatch warning fires
+        assert!(matches!(
+            dict.warnings(),
+            &[SavWarning::FloatSentinelsCrossCheckMismatch { subtype: 4 }]
+        ));
+    }
+
+    #[test]
+    fn float_sentinels_cross_check_single_record_no_warning() {
+        // Only subtype 4 present, no subtype 6 — nothing to cross-check against.
+        let byte_order = ByteOrder::LittleEndian;
+        let bytes = build_sentinels_test_bytes(byte_order, [1; 8], [2; 8], [3; 8], false);
+
+        let mut dict = open(bytes);
+        dict.read_record().unwrap();
+        assert!(dict.warnings().is_empty());
     }
 }

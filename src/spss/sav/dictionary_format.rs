@@ -290,6 +290,37 @@ pub(super) const ENDIANNESS_BIG_ENDIAN: i32 = 1;
 #[allow(dead_code)] // exercised once the subtype-5 parser lands.
 pub(super) const ENDIANNESS_LITTLE_ENDIAN: i32 = 2;
 
+/// Extension subtype 6 — machine floating-point information, a
+/// redundant declaration of the three sentinel values from subtype
+/// 4 used for cross-check.
+#[allow(dead_code)] // exercised once the subtype-6 parser lands.
+pub(super) const EXTENSION_SUBTYPE_MACHINE_FLOAT_INFO: i32 = 6;
+
+/// `element_size` an extension subtype-6 record must declare. Same
+/// shape as subtype 4 — each sentinel is 8 bytes.
+#[allow(dead_code)] // exercised once the subtype-6 parser lands.
+pub(super) const MACHINE_FLOAT_INFO_ELEMENT_SIZE: u32 = 8;
+
+/// `element_count` an extension subtype-6 record must declare.
+/// Same shape as subtype 4 — three sentinels: system missing,
+/// highest, lowest.
+#[allow(dead_code)] // exercised once the subtype-6 parser lands.
+pub(super) const MACHINE_FLOAT_INFO_ELEMENT_COUNT: u32 = 3;
+
+/// Byte offset of the system-missing sentinel within a subtype-6
+/// payload.
+#[allow(dead_code)] // exercised once the subtype-6 parser lands.
+pub(super) const MACHINE_FLOAT_INFO_SYSTEM_MISSING_OFFSET: usize = 0;
+
+/// Byte offset of the `HIGHEST` sentinel within a subtype-6
+/// payload.
+#[allow(dead_code)] // exercised once the subtype-6 parser lands.
+pub(super) const MACHINE_FLOAT_INFO_HIGHEST_OFFSET: usize = 8;
+
+/// Byte offset of the `LOWEST` sentinel within a subtype-6 payload.
+#[allow(dead_code)] // exercised once the subtype-6 parser lands.
+pub(super) const MACHINE_FLOAT_INFO_LOWEST_OFFSET: usize = 16;
+
 /// Byte position of the decimals byte within a 4-byte format code
 /// (after reduction to native byte order).
 #[allow(dead_code)] // exercised once the dictionary reader implementation lands.

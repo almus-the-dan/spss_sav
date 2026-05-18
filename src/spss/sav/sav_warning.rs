@@ -75,7 +75,7 @@ pub enum SavWarning {
         /// Raw `n_missing_values` field value.
         value: i32,
     },
-    /// A type-4 value-label-variables record declared zero
+    /// A type-4 value-label-variable record declared zero
     /// variables. The reader accepts the empty list (matching
     /// `ReadStat`'s data outcome — the resulting set attaches to no
     /// variable at finalization and is effectively discarded).
@@ -110,5 +110,18 @@ pub enum SavWarning {
         /// Raw `floating_point_representation` field value from the
         /// subtype-5 record.
         record_value: i32,
+    },
+    /// A subsequent extension record carrying float sentinels
+    /// (subtype 4 [`FloatSentinels`](crate::spss::sav::extensions::float_sentinels::FloatSentinels)
+    /// or subtype 6 [`MachineFloatInfo`](crate::spss::sav::extensions::machine_float_info::MachineFloatInfo))
+    /// disagreed with an earlier sentinels-bearing record from
+    /// either subtype. SPSS emits both subtypes for cross-check
+    /// redundancy, and they're expected to agree; both records still
+    /// surface verbatim.
+    FloatSentinelsCrossCheckMismatch {
+        /// On-disk subtype number of the record that triggered the
+        /// mismatch (i.e., the second of the two sentinels-bearing
+        /// records observed).
+        subtype: u32,
     },
 }
