@@ -17,7 +17,7 @@ use std::io::Read;
 use encoding_rs::Encoding;
 
 use crate::spss::sav::byte_order::ByteOrder;
-use crate::spss::sav::sav_error::{Result, SavError, Section};
+use crate::spss::sav::sav_error::{Field, FormatErrorKind, Result, SavError, Section};
 use crate::spss::sav::sav_warning::SavWarning;
 
 /// Crate-internal state threaded through the reader typestate
@@ -140,6 +140,25 @@ impl<R: Read> ReaderState<R> {
         let bytes = self.read_array::<4>(section)?;
         let value = byte_order.read_u32(bytes);
         Ok(value)
+    }
+
+    /// Reads a 4-byte unsigned integer in the file's byte order and
+    /// returns it as a [`usize`]. The only failure mode beyond
+    /// [`read_u32`](Self::read_u32)'s own is the cast itself, on
+    /// platforms where `usize` is narrower than `u32`; that surfaces
+    /// as [`FormatErrorKind::FieldTooLarge`] tagged with `field` and
+    /// the value's byte offset.
+    pub fn read_u32_as_usize(
+        &mut self,
+        byte_order: ByteOrder,
+        section: Section,
+        field: Field,
+    ) -> Result<usize> {
+        let position = self.position();
+        let value = self.read_u32(byte_order, section)?;
+        usize::try_from(value).map_err(|_| {
+            SavError::format(section, position, FormatErrorKind::FieldTooLarge { field })
+        })
     }
 
     /// Reads a 4-byte signed integer in the file's byte order.

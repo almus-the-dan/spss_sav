@@ -355,17 +355,9 @@ impl<R: Read> DictionaryReader<R> {
         byte_order: ByteOrder,
         encoding: &'static Encoding,
     ) -> Result<String> {
-        let position = self.state.position();
-        let label_len = self.state.read_u32(byte_order, Section::Dictionary)?;
-        let label_len = usize::try_from(label_len).map_err(|_| {
-            SavError::format(
-                Section::Dictionary,
-                position,
-                FormatErrorKind::FieldTooLarge {
-                    field: Field::VariableLabel,
-                },
-            )
-        })?;
+        let label_len =
+            self.state
+                .read_u32_as_usize(byte_order, Section::Dictionary, Field::VariableLabel)?;
         let padded_len = label_len.div_ceil(VARIABLE_LABEL_PADDING) * VARIABLE_LABEL_PADDING;
         let bytes = self.state.read_exact(padded_len, Section::Dictionary)?;
         let (cow, _, _) = encoding.decode(&bytes[..label_len]);
@@ -388,17 +380,11 @@ impl<R: Read> DictionaryReader<R> {
         byte_order: ByteOrder,
         encoding: &'static Encoding,
     ) -> Result<DictionaryRecord> {
-        let label_count_position = self.state.position();
-        let label_count = self.state.read_u32(byte_order, Section::Dictionary)?;
-        let label_count = usize::try_from(label_count).map_err(|_| {
-            SavError::format(
-                Section::Dictionary,
-                label_count_position,
-                FormatErrorKind::FieldTooLarge {
-                    field: Field::ValueLabelEntry,
-                },
-            )
-        })?;
+        let label_count = self.state.read_u32_as_usize(
+            byte_order,
+            Section::Dictionary,
+            Field::ValueLabelEntry,
+        )?;
 
         let entries = self.read_raw_value_label_entries(encoding, label_count)?;
 
@@ -419,17 +405,9 @@ impl<R: Read> DictionaryReader<R> {
             return Err(error);
         }
 
-        let variable_count_position = self.state.position();
-        let variable_count = self.state.read_u32(byte_order, Section::Dictionary)?;
-        let variable_count = usize::try_from(variable_count).map_err(|_| {
-            SavError::format(
-                Section::Dictionary,
-                variable_count_position,
-                FormatErrorKind::FieldTooLarge {
-                    field: Field::VariableCount,
-                },
-            )
-        })?;
+        let variable_count =
+            self.state
+                .read_u32_as_usize(byte_order, Section::Dictionary, Field::VariableCount)?;
         let indices_position = self.state.position();
         let raw_indices = self.read_raw_variable_indexes(byte_order, variable_count)?;
 
