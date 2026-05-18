@@ -33,7 +33,7 @@ pub mod lazy_sav_record;
 /// Measurement level of a SAV variable.
 pub mod measurement_level;
 /// A variable's missing-value specification.
-pub mod missing_value_spec;
+pub mod missing_value_specification;
 /// Endpoint of a missing-value range.
 pub mod range_bound;
 /// Wire-level missing-value bytes from a variable record.

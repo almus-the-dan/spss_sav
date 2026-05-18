@@ -1,7 +1,7 @@
 //! A reconciled SAV variable.
 
 use crate::spss::sav::extensions::variable_display::VariableDisplay;
-use crate::spss::sav::missing_value_spec::MissingValueSpec;
+use crate::spss::sav::missing_value_specification::MissingValueSpecification;
 use crate::spss::sav::sav_format::SavFormat;
 use crate::spss::sav::variable_attribute::VariableAttribute;
 use crate::spss::sav::variable_type::VariableType;
@@ -27,7 +27,7 @@ pub struct SavVariable {
     print_format: SavFormat,
     write_format: SavFormat,
     label: Option<String>,
-    missing_value_spec: MissingValueSpec,
+    missing_value_spec: MissingValueSpecification,
     value_label_set: Option<String>,
     display: Option<VariableDisplay>,
     attributes: Vec<VariableAttribute>,
@@ -97,7 +97,7 @@ impl SavVariable {
     /// The missing-value specification.
     #[must_use]
     #[inline]
-    pub fn missing_value_spec(&self) -> &MissingValueSpec {
+    pub fn missing_value_spec(&self) -> &MissingValueSpecification {
         &self.missing_value_spec
     }
 
@@ -140,7 +140,7 @@ pub struct SavVariableBuilder {
     print_format: Option<SavFormat>,
     write_format: Option<SavFormat>,
     label: Option<String>,
-    missing_value_spec: Option<MissingValueSpec>,
+    missing_value_spec: Option<MissingValueSpecification>,
     value_label_set: Option<String>,
     display: Option<VariableDisplay>,
     attributes: Vec<VariableAttribute>,
@@ -216,7 +216,7 @@ impl SavVariableBuilder {
     /// Sets the missing-value specification.
     #[must_use]
     #[inline]
-    pub fn missing_value_spec(mut self, spec: MissingValueSpec) -> Self {
+    pub fn missing_value_spec(mut self, spec: MissingValueSpecification) -> Self {
         self.missing_value_spec = Some(spec);
         self
     }

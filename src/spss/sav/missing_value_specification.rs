@@ -15,7 +15,7 @@ const MAX_DISCRETE: usize = 3;
 /// [`Discrete`](Self::Discrete) variant — that constructor enforces
 /// the SAV-format three-value cap.
 #[derive(Debug, Clone, PartialEq)]
-pub enum MissingValueSpec {
+pub enum MissingValueSpecification {
     /// No declared missing values.
     None,
     /// 1–3 discrete missing values.
@@ -32,7 +32,7 @@ pub enum MissingValueSpec {
     },
 }
 
-impl MissingValueSpec {
+impl MissingValueSpecification {
     /// Constructs a [`Discrete`](Self::Discrete) spec from a list of
     /// values.
     ///
@@ -56,31 +56,34 @@ mod tests {
 
     #[test]
     fn discrete_accepts_zero_values() {
-        let spec = MissingValueSpec::discrete(vec![]).unwrap();
-        assert_eq!(spec, MissingValueSpec::Discrete(vec![]));
+        let spec = MissingValueSpecification::discrete(vec![]).unwrap();
+        assert_eq!(spec, MissingValueSpecification::Discrete(vec![]));
     }
 
     #[test]
     fn discrete_accepts_one_value() {
-        let spec = MissingValueSpec::discrete(vec![9.0]).unwrap();
-        assert_eq!(spec, MissingValueSpec::Discrete(vec![9.0]));
+        let spec = MissingValueSpecification::discrete(vec![9.0]).unwrap();
+        assert_eq!(spec, MissingValueSpecification::Discrete(vec![9.0]));
     }
 
     #[test]
     fn discrete_accepts_three_values() {
-        let spec = MissingValueSpec::discrete(vec![1.0, 2.0, 3.0]).unwrap();
-        assert_eq!(spec, MissingValueSpec::Discrete(vec![1.0, 2.0, 3.0]));
+        let spec = MissingValueSpecification::discrete(vec![1.0, 2.0, 3.0]).unwrap();
+        assert_eq!(
+            spec,
+            MissingValueSpecification::Discrete(vec![1.0, 2.0, 3.0])
+        );
     }
 
     #[test]
     fn discrete_rejects_four_values() {
-        let err = MissingValueSpec::discrete(vec![1.0, 2.0, 3.0, 4.0]).unwrap_err();
+        let err = MissingValueSpecification::discrete(vec![1.0, 2.0, 3.0, 4.0]).unwrap_err();
         assert!(matches!(err, SavError::TooManyMissingValues { actual: 4 }));
     }
 
     #[test]
     fn discrete_rejects_many_values() {
-        let err = MissingValueSpec::discrete(vec![0.0; 100]).unwrap_err();
+        let err = MissingValueSpecification::discrete(vec![0.0; 100]).unwrap_err();
         assert!(matches!(
             err,
             SavError::TooManyMissingValues { actual: 100 }

@@ -22,7 +22,7 @@ const INDEX_THRESHOLD: usize = 10;
 /// Numeric value-label keys are compared by IEEE 754 bit pattern via
 /// [`ValueLabelValue`]'s `PartialEq`/`Hash`, matching how the SAV
 /// format compares values against
-/// [`MissingValueSpec::Discrete`](crate::spss::sav::missing_value_spec::MissingValueSpec::Discrete).
+/// [`MissingValueSpecification::Discrete`](crate::spss::sav::missing_value_specification::MissingValueSpecification::Discrete).
 /// A cell value carrying a particular bit pattern resolves the same
 /// way in both the missing-value check and the value-label lookup.
 #[derive(Debug, Clone, Default)]

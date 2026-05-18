@@ -17,7 +17,7 @@ const VALUE_LABEL_KEY_WIDTH: usize = 8;
 /// `PartialEq`/`Eq`/`Hash` use IEEE 754 **bit-pattern** equality on
 /// the numeric variant — the same comparison rule the SAV format
 /// itself uses for matching values against
-/// [`MissingValueSpec::Discrete`](crate::spss::sav::missing_value_spec::MissingValueSpec::Discrete).
+/// [`MissingValueSpecification::Discrete`](crate::spss::sav::missing_value_specification::MissingValueSpecification::Discrete).
 /// Bit-pattern comparison is reflexive (every NaN bit pattern
 /// matches itself) but distinguishes IEEE-equal-but-different-bits
 /// values like `+0.0` and `-0.0`. This makes `ValueLabelValue`

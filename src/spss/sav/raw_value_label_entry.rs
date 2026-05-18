@@ -80,9 +80,6 @@ impl RawValueLabelEntryBuilder {
     pub fn build(self) -> RawValueLabelEntry {
         let value = self.value.unwrap_or([0; 8]);
         let label = self.label.unwrap_or_default();
-        RawValueLabelEntry {
-            value,
-            label,
-        }
+        RawValueLabelEntry { value, label }
     }
 }
