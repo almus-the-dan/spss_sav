@@ -21,12 +21,15 @@ use crate::spss::sav::dictionary_format::{
     EXTENDED_NUMBER_OF_CASES_VERSION_OFFSET, FLOAT_SENTINELS_ELEMENT_COUNT,
     FLOAT_SENTINELS_ELEMENT_SIZE, FLOAT_SENTINELS_HIGHEST_OFFSET, FLOAT_SENTINELS_LOWEST_OFFSET,
     FLOAT_SENTINELS_SYSTEM_MISSING_OFFSET, FORMAT_CODE_DECIMALS_BYTE, FORMAT_CODE_KIND_BYTE,
-    FORMAT_CODE_WIDTH_BYTE, MACHINE_INTEGER_INFO_ELEMENT_COUNT, MACHINE_INTEGER_INFO_ELEMENT_SIZE,
+    FORMAT_CODE_WIDTH_BYTE, LONG_VARIABLE_NAMES_ELEMENT_SIZE,
+    LONG_VARIABLE_NAMES_KEY_VALUE_SEPARATOR, LONG_VARIABLE_NAMES_PAIR_SEPARATOR,
+    MACHINE_INTEGER_INFO_ELEMENT_COUNT, MACHINE_INTEGER_INFO_ELEMENT_SIZE,
     VALUE_LABEL_ENTRY_ALIGNMENT, VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN,
     VARIABLE_TYPE_CONTINUATION, VARIABLE_TYPE_NUMERIC, VARIABLE_TYPE_STRING_MAX,
 };
 use crate::spss::sav::extensions::extended_number_of_cases::ExtendedNumberOfCases;
 use crate::spss::sav::extensions::float_sentinels::FloatSentinels;
+use crate::spss::sav::extensions::long_variable_name::LongVariableName;
 use crate::spss::sav::extensions::machine_integer_info::MachineIntegerInfo;
 use crate::spss::sav::raw_missing_values::RawMissingValues;
 use crate::spss::sav::raw_value_label_entry::RawValueLabelEntry;
@@ -540,6 +543,92 @@ pub(super) fn parse_character_encoding(
     Ok(name)
 }
 
+/// Parses an extension subtype-13 payload (long-variable-name
+/// mappings).
+///
+/// The on-disk shape is a fixed-`element_size`-of-1 byte stream of
+/// [`LONG_VARIABLE_NAMES_PAIR_SEPARATOR`]-separated pairs, each
+/// holding a `short`[`LONG_VARIABLE_NAMES_KEY_VALUE_SEPARATOR`]`long`
+/// mapping. A trailing pair separator (the optional terminating tab
+/// PSPP's grammar permits) is accepted without warning.
+///
+/// This helper validates `actual_size == 1` and decodes each half
+/// through `encoding`. PSPP's character-class constraints on short
+/// names and the 8 / 64 byte length limits are *not* enforced —
+/// finalization or user code is responsible for validating that the
+/// short names match real variables. Duplicate short names are
+/// preserved in declaration order; the streaming layer records what
+/// disk said.
+///
+/// # Errors
+///
+/// * [`FormatErrorKind::UnexpectedValue`] tagged
+///   [`Field::ExtensionElementSize`] when `actual_size != 1`.
+/// * [`FormatErrorKind::UnexpectedValue`] tagged
+///   [`Field::LongVariableNamePair`] when a non-empty pair lacks
+///   a [`LONG_VARIABLE_NAMES_KEY_VALUE_SEPARATOR`], has an empty
+///   key, or has an empty value.
+pub(super) fn parse_long_variable_names(
+    actual_size: u32,
+    payload: &[u8],
+    encoding: &'static Encoding,
+    position: u64,
+) -> Result<Vec<LongVariableName>> {
+    if actual_size != LONG_VARIABLE_NAMES_ELEMENT_SIZE {
+        let error = SavError::format(
+            Section::Dictionary,
+            position,
+            FormatErrorKind::UnexpectedValue {
+                field: Field::ExtensionElementSize,
+            },
+        );
+        return Err(error);
+    }
+    let mut mappings: Vec<LongVariableName> = Vec::new();
+    let pairs = payload.split(|&b| b == LONG_VARIABLE_NAMES_PAIR_SEPARATOR);
+    for pair in pairs {
+        // A trailing pair separator yields a final empty segment;
+        // that's the optional terminator PSPP's grammar permits, not
+        // a malformed pair.
+        if pair.is_empty() {
+            continue;
+        }
+        let eq_index = pair
+            .iter()
+            .position(|&b| b == LONG_VARIABLE_NAMES_KEY_VALUE_SEPARATOR);
+        let Some(eq_index) = eq_index else {
+            let error = SavError::format(
+                Section::Dictionary,
+                position,
+                FormatErrorKind::UnexpectedValue {
+                    field: Field::LongVariableNamePair,
+                },
+            );
+            return Err(error);
+        };
+        let (key_bytes, rest) = pair.split_at(eq_index);
+        let value_bytes = &rest[1..];
+        if key_bytes.is_empty() || value_bytes.is_empty() {
+            let error = SavError::format(
+                Section::Dictionary,
+                position,
+                FormatErrorKind::UnexpectedValue {
+                    field: Field::LongVariableNamePair,
+                },
+            );
+            return Err(error);
+        }
+        let (short_cow, _, _) = encoding.decode(key_bytes);
+        let (long_cow, _, _) = encoding.decode(value_bytes);
+        let mapping = LongVariableName::builder()
+            .short_name(short_cow.into_owned())
+            .long_name(long_cow.into_owned())
+            .build();
+        mappings.push(mapping);
+    }
+    Ok(mappings)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -871,6 +960,123 @@ mod tests {
     #[test]
     fn parse_character_encoding_rejects_wrong_element_size() {
         let err = parse_character_encoding(4, b"UTF-", 0).unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(
+                e.kind(),
+                FormatErrorKind::UnexpectedValue {
+                    field: Field::ExtensionElementSize
+                }
+            ),
+            _ => panic!("expected Format error"),
+        }
+    }
+
+    #[test]
+    fn parse_long_variable_names_single_pair() {
+        let payload = b"V1=Variable1";
+        let result = parse_long_variable_names(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].short_name(), "V1");
+        assert_eq!(result[0].long_name(), "Variable1");
+    }
+
+    #[test]
+    fn parse_long_variable_names_multiple_pairs() {
+        let payload = b"V1=Variable1\tV2=Variable2\tV3=Variable3";
+        let result = parse_long_variable_names(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0].short_name(), "V1");
+        assert_eq!(result[1].short_name(), "V2");
+        assert_eq!(result[2].long_name(), "Variable3");
+    }
+
+    #[test]
+    fn parse_long_variable_names_trailing_separator_accepted() {
+        let payload = b"V1=Variable1\tV2=Variable2\t";
+        let result = parse_long_variable_names(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn parse_long_variable_names_embedded_equals_in_value_split_on_first() {
+        let payload = b"K=v1=more";
+        let result = parse_long_variable_names(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].short_name(), "K");
+        assert_eq!(result[0].long_name(), "v1=more");
+    }
+
+    #[test]
+    fn parse_long_variable_names_empty_payload_yields_empty_vec() {
+        let result = parse_long_variable_names(1, &[], encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn parse_long_variable_names_uses_supplied_encoding() {
+        // 0xE9 = é in Windows-1252, invalid in standalone UTF-8.
+        let payload = b"K=caf\xE9";
+        let result = parse_long_variable_names(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result[0].long_name(), "café");
+    }
+
+    #[test]
+    fn parse_long_variable_names_preserves_duplicates_in_order() {
+        let payload = b"V1=First\tV1=Second";
+        let result = parse_long_variable_names(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].long_name(), "First");
+        assert_eq!(result[1].long_name(), "Second");
+    }
+
+    #[test]
+    fn parse_long_variable_names_rejects_missing_equals() {
+        let payload = b"V1=ok\tV2only";
+        let err = parse_long_variable_names(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(
+                e.kind(),
+                FormatErrorKind::UnexpectedValue {
+                    field: Field::LongVariableNamePair
+                }
+            ),
+            _ => panic!("expected Format error"),
+        }
+    }
+
+    #[test]
+    fn parse_long_variable_names_rejects_empty_key() {
+        let payload = b"=Variable1";
+        let err = parse_long_variable_names(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(
+                e.kind(),
+                FormatErrorKind::UnexpectedValue {
+                    field: Field::LongVariableNamePair
+                }
+            ),
+            _ => panic!("expected Format error"),
+        }
+    }
+
+    #[test]
+    fn parse_long_variable_names_rejects_empty_value() {
+        let payload = b"V1=";
+        let err = parse_long_variable_names(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(
+                e.kind(),
+                FormatErrorKind::UnexpectedValue {
+                    field: Field::LongVariableNamePair
+                }
+            ),
+            _ => panic!("expected Format error"),
+        }
+    }
+
+    #[test]
+    fn parse_long_variable_names_rejects_wrong_element_size() {
+        let err = parse_long_variable_names(4, b"V1=L", encoding_rs::WINDOWS_1252, 0).unwrap_err();
         match err {
             SavError::Format(e) => assert_eq!(
                 e.kind(),

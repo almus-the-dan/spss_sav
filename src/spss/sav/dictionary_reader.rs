@@ -16,19 +16,20 @@ use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::dictionary_format::{
     DICTIONARY_TERMINATOR_FILLER_LEN, DOCUMENT_LINE_LEN, EXTENSION_SUBTYPE_CHARACTER_ENCODING,
     EXTENSION_SUBTYPE_EXTENDED_NUMBER_OF_CASES, EXTENSION_SUBTYPE_FLOAT_INFO,
-    EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO, MISSING_VALUE_ENTRY_LEN,
-    RECORD_TYPE_DICTIONARY_TERMINATOR, RECORD_TYPE_DOCUMENT, RECORD_TYPE_EXTENSION,
-    RECORD_TYPE_VALUE_LABEL, RECORD_TYPE_VALUE_LABEL_VARIABLES, RECORD_TYPE_VARIABLE,
-    VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN, VARIABLE_HAS_LABEL_OFFSET,
-    VARIABLE_LABEL_PADDING, VARIABLE_MISSING_VALUE_COUNT_OFFSET, VARIABLE_PRINT_FORMAT_OFFSET,
-    VARIABLE_RECORD_BODY_LEN, VARIABLE_SHORT_NAME_LEN, VARIABLE_SHORT_NAME_OFFSET,
-    VARIABLE_TYPE_OFFSET, VARIABLE_WRITE_FORMAT_OFFSET,
+    EXTENSION_SUBTYPE_LONG_VARIABLE_NAMES, EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO,
+    MISSING_VALUE_ENTRY_LEN, RECORD_TYPE_DICTIONARY_TERMINATOR, RECORD_TYPE_DOCUMENT,
+    RECORD_TYPE_EXTENSION, RECORD_TYPE_VALUE_LABEL, RECORD_TYPE_VALUE_LABEL_VARIABLES,
+    RECORD_TYPE_VARIABLE, VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN,
+    VARIABLE_HAS_LABEL_OFFSET, VARIABLE_LABEL_PADDING, VARIABLE_MISSING_VALUE_COUNT_OFFSET,
+    VARIABLE_PRINT_FORMAT_OFFSET, VARIABLE_RECORD_BODY_LEN, VARIABLE_SHORT_NAME_LEN,
+    VARIABLE_SHORT_NAME_OFFSET, VARIABLE_TYPE_OFFSET, VARIABLE_WRITE_FORMAT_OFFSET,
 };
 use crate::spss::sav::dictionary_parse::{
     VariableTypeCode, compose_raw_missing_values, normalize_value_label_variable_indices,
     parse_character_encoding, parse_extended_number_of_cases, parse_float_sentinels,
-    parse_has_label, parse_machine_integer_info, parse_missing_value_count, parse_sav_format,
-    parse_short_name, parse_value_label_entry, parse_variable_type, value_label_entry_size,
+    parse_has_label, parse_long_variable_names, parse_machine_integer_info,
+    parse_missing_value_count, parse_sav_format, parse_short_name, parse_value_label_entry,
+    parse_variable_type, value_label_entry_size,
 };
 use crate::spss::sav::dictionary_record::DictionaryRecord;
 use crate::spss::sav::document_record::DocumentRecord;
@@ -209,7 +210,7 @@ impl<R: Read> DictionaryReader<R> {
                     return Ok(Some(record));
                 }
                 RECORD_TYPE_EXTENSION => {
-                    let record = self.read_extension_record(byte_order)?;
+                    let record = self.read_extension_record(byte_order, encoding)?;
                     return Ok(Some(record));
                 }
                 value => {
@@ -408,7 +409,11 @@ impl<R: Read> DictionaryReader<R> {
     /// [`SavWarning::UnknownExtensionSubtype`]. Per-subtype payload
     /// parsers land in later PRs and will short-circuit before
     /// the warning emission.
-    fn read_extension_record(&mut self, byte_order: ByteOrder) -> Result<DictionaryRecord> {
+    fn read_extension_record(
+        &mut self,
+        byte_order: ByteOrder,
+        encoding: &'static Encoding,
+    ) -> Result<DictionaryRecord> {
         let subtype = self.state.read_i32(byte_order, Section::Dictionary)?;
 
         let element_size_position = self.state.position();
@@ -472,6 +477,17 @@ impl<R: Read> DictionaryReader<R> {
             EXTENSION_SUBTYPE_CHARACTER_ENCODING => {
                 let name = parse_character_encoding(element_size, &payload, element_size_position)?;
                 let record = ExtensionRecord::CharacterEncoding(name);
+                let record = DictionaryRecord::Extension(record);
+                Ok(record)
+            }
+            EXTENSION_SUBTYPE_LONG_VARIABLE_NAMES => {
+                let mappings = parse_long_variable_names(
+                    element_size,
+                    &payload,
+                    encoding,
+                    element_size_position,
+                )?;
+                let record = ExtensionRecord::LongVariableNames(mappings);
                 let record = DictionaryRecord::Extension(record);
                 Ok(record)
             }
@@ -2583,6 +2599,203 @@ mod tests {
         let mut bytes = build_header(byte_order);
         // Spec says element_size must be 1; pass 4 instead.
         write_extension_record(&mut bytes, byte_order, 20, 4, 2, &[0; 8]);
+
+        let mut dict = open(bytes);
+        let err = dict.read_record().unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(
+                e.kind(),
+                FormatErrorKind::UnexpectedValue {
+                    field: crate::spss::sav::sav_error::Field::ExtensionElementSize,
+                }
+            ),
+            _ => panic!("expected Format error, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn extension_subtype_13_single_mapping() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        let payload = b"V1=Variable1";
+        write_extension_record(
+            &mut bytes,
+            byte_order,
+            13,
+            1,
+            u32::try_from(payload.len()).unwrap(),
+            payload,
+        );
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let record = dict.read_record().unwrap().unwrap();
+        let DictionaryRecord::Extension(ExtensionRecord::LongVariableNames(mappings)) = record
+        else {
+            panic!("expected LongVariableNames, got {record:?}");
+        };
+        assert_eq!(mappings.len(), 1);
+        assert_eq!(mappings[0].short_name(), "V1");
+        assert_eq!(mappings[0].long_name(), "Variable1");
+        assert!(dict.warnings().is_empty());
+    }
+
+    #[test]
+    fn extension_subtype_13_multiple_mappings_in_order() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        let payload = b"V1=Alpha\tV2=Beta\tV3=Gamma";
+        write_extension_record(
+            &mut bytes,
+            byte_order,
+            13,
+            1,
+            u32::try_from(payload.len()).unwrap(),
+            payload,
+        );
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let DictionaryRecord::Extension(ExtensionRecord::LongVariableNames(mappings)) =
+            dict.read_record().unwrap().unwrap()
+        else {
+            panic!("expected LongVariableNames");
+        };
+        let names: Vec<(&str, &str)> = mappings
+            .iter()
+            .map(|m| (m.short_name(), m.long_name()))
+            .collect();
+        assert_eq!(
+            names,
+            vec![("V1", "Alpha"), ("V2", "Beta"), ("V3", "Gamma")]
+        );
+    }
+
+    #[test]
+    fn extension_subtype_13_optional_trailing_separator() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        let payload = b"V1=Alpha\tV2=Beta\t";
+        write_extension_record(
+            &mut bytes,
+            byte_order,
+            13,
+            1,
+            u32::try_from(payload.len()).unwrap(),
+            payload,
+        );
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let DictionaryRecord::Extension(ExtensionRecord::LongVariableNames(mappings)) =
+            dict.read_record().unwrap().unwrap()
+        else {
+            panic!("expected LongVariableNames");
+        };
+        assert_eq!(mappings.len(), 2);
+        assert!(dict.warnings().is_empty());
+    }
+
+    #[test]
+    fn extension_subtype_13_big_endian() {
+        let byte_order = ByteOrder::BigEndian;
+        let mut bytes = build_header(byte_order);
+        let payload = b"V1=Long";
+        write_extension_record(
+            &mut bytes,
+            byte_order,
+            13,
+            1,
+            u32::try_from(payload.len()).unwrap(),
+            payload,
+        );
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let DictionaryRecord::Extension(ExtensionRecord::LongVariableNames(mappings)) =
+            dict.read_record().unwrap().unwrap()
+        else {
+            panic!("expected LongVariableNames");
+        };
+        assert_eq!(mappings[0].long_name(), "Long");
+    }
+
+    #[test]
+    fn extension_subtype_13_decoded_through_active_encoding() {
+        // 0xE9 = é in Windows-1252 (the test scaffolding's default
+        // header encoding), invalid as standalone UTF-8.
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        let mut payload = Vec::new();
+        payload.extend_from_slice(b"V1=caf\xE9");
+        write_extension_record(
+            &mut bytes,
+            byte_order,
+            13,
+            1,
+            u32::try_from(payload.len()).unwrap(),
+            &payload,
+        );
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let DictionaryRecord::Extension(ExtensionRecord::LongVariableNames(mappings)) =
+            dict.read_record().unwrap().unwrap()
+        else {
+            panic!("expected LongVariableNames");
+        };
+        assert_eq!(mappings[0].long_name(), "café");
+    }
+
+    #[test]
+    fn extension_subtype_13_empty_payload_yields_empty_vec() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_extension_record(&mut bytes, byte_order, 13, 1, 0, &[]);
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let DictionaryRecord::Extension(ExtensionRecord::LongVariableNames(mappings)) =
+            dict.read_record().unwrap().unwrap()
+        else {
+            panic!("expected LongVariableNames");
+        };
+        assert!(mappings.is_empty());
+        assert!(dict.warnings().is_empty());
+    }
+
+    #[test]
+    fn extension_subtype_13_missing_equals_errors() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        let payload = b"V1=ok\tBADPAIR";
+        write_extension_record(
+            &mut bytes,
+            byte_order,
+            13,
+            1,
+            u32::try_from(payload.len()).unwrap(),
+            payload,
+        );
+
+        let mut dict = open(bytes);
+        let err = dict.read_record().unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(
+                e.kind(),
+                FormatErrorKind::UnexpectedValue {
+                    field: crate::spss::sav::sav_error::Field::LongVariableNamePair,
+                }
+            ),
+            _ => panic!("expected Format error, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn extension_subtype_13_wrong_element_size_errors() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_extension_record(&mut bytes, byte_order, 13, 4, 2, &[0; 8]);
 
         let mut dict = open(bytes);
         let err = dict.read_record().unwrap_err();

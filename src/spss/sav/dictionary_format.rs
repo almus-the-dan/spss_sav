@@ -304,6 +304,31 @@ pub(super) const EXTENDED_NUMBER_OF_CASES_VERSION_OFFSET: usize = 0;
 #[allow(dead_code)] // exercised by the subtype-16 parser.
 pub(super) const EXTENDED_NUMBER_OF_CASES_COUNT_OFFSET: usize = 8;
 
+/// Extension subtype 13 — long-variable-name mappings. The payload
+/// is a fixed-`element_size`-of-1, variable-`element_count` byte
+/// stream of `short=long` pairs joined by [`LONG_VARIABLE_NAMES_PAIR_SEPARATOR`]
+/// (a tab byte), with [`LONG_VARIABLE_NAMES_KEY_VALUE_SEPARATOR`]
+/// (`=`) between each pair's two halves. A trailing separator is
+/// permitted. Per PSPP's system file format documentation and
+/// `ReadStat`'s `SAV_RECORD_SUBTYPE_LONG_VAR_NAME`.
+#[allow(dead_code)] // exercised by the subtype-13 parser.
+pub(super) const EXTENSION_SUBTYPE_LONG_VARIABLE_NAMES: i32 = 13;
+
+/// `element_size` an extension subtype-13 record must declare. Each
+/// element is one byte of the `short=long\tshort=long...` stream.
+#[allow(dead_code)] // exercised by the subtype-13 parser.
+pub(super) const LONG_VARIABLE_NAMES_ELEMENT_SIZE: u32 = 1;
+
+/// Byte separator between adjacent `short=long` pairs in a
+/// subtype-13 payload (a literal tab).
+#[allow(dead_code)] // exercised by the subtype-13 parser.
+pub(super) const LONG_VARIABLE_NAMES_PAIR_SEPARATOR: u8 = b'\t';
+
+/// Byte separator between a pair's short and long halves in a
+/// subtype-13 payload (a literal `=`).
+#[allow(dead_code)] // exercised by the subtype-13 parser.
+pub(super) const LONG_VARIABLE_NAMES_KEY_VALUE_SEPARATOR: u8 = b'=';
+
 /// Extension subtype 20 — the file's declared character encoding
 /// name. The payload is a fixed-`element_size`-of-1, variable-
 /// `element_count` byte string carrying the encoding label in ASCII
