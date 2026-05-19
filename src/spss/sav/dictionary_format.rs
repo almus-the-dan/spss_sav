@@ -304,6 +304,22 @@ pub(super) const EXTENDED_NUMBER_OF_CASES_VERSION_OFFSET: usize = 0;
 #[allow(dead_code)] // exercised by the subtype-16 parser.
 pub(super) const EXTENDED_NUMBER_OF_CASES_COUNT_OFFSET: usize = 8;
 
+/// Extension subtype 20 — the file's declared character encoding
+/// name. The payload is a fixed-`element_size`-of-1, variable-
+/// `element_count` byte string carrying the encoding label in ASCII
+/// (e.g., `"UTF-8"`, `"windows-1252"`). Per PSPP's system file
+/// format documentation; `ReadStat` defines the same subtype number
+/// (`SAV_RECORD_SUBTYPE_CHAR_ENCODING = 20`) but does not parse the
+/// payload — it falls back to subtype 3's numeric `character_code`
+/// instead.
+#[allow(dead_code)] // exercised by the subtype-20 parser.
+pub(super) const EXTENSION_SUBTYPE_CHARACTER_ENCODING: i32 = 20;
+
+/// `element_size` an extension subtype-20 record must declare. Each
+/// element is one byte of the encoding name.
+#[allow(dead_code)] // exercised by the subtype-20 parser.
+pub(super) const CHARACTER_ENCODING_ELEMENT_SIZE: u32 = 1;
+
 /// Byte position of the decimals byte within a 4-byte format code
 /// (after reduction to native byte order).
 #[allow(dead_code)] // exercised once the dictionary reader implementation lands.

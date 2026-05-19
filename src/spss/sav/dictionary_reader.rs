@@ -14,7 +14,7 @@ use encoding_rs::Encoding;
 
 use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::dictionary_format::{
-    DICTIONARY_TERMINATOR_FILLER_LEN, DOCUMENT_LINE_LEN,
+    DICTIONARY_TERMINATOR_FILLER_LEN, DOCUMENT_LINE_LEN, EXTENSION_SUBTYPE_CHARACTER_ENCODING,
     EXTENSION_SUBTYPE_EXTENDED_NUMBER_OF_CASES, EXTENSION_SUBTYPE_FLOAT_INFO,
     EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO, MISSING_VALUE_ENTRY_LEN,
     RECORD_TYPE_DICTIONARY_TERMINATOR, RECORD_TYPE_DOCUMENT, RECORD_TYPE_EXTENSION,
@@ -26,9 +26,9 @@ use crate::spss::sav::dictionary_format::{
 };
 use crate::spss::sav::dictionary_parse::{
     VariableTypeCode, compose_raw_missing_values, normalize_value_label_variable_indices,
-    parse_extended_number_of_cases, parse_float_sentinels, parse_has_label,
-    parse_machine_integer_info, parse_missing_value_count, parse_sav_format, parse_short_name,
-    parse_value_label_entry, parse_variable_type, value_label_entry_size,
+    parse_character_encoding, parse_extended_number_of_cases, parse_float_sentinels,
+    parse_has_label, parse_machine_integer_info, parse_missing_value_count, parse_sav_format,
+    parse_short_name, parse_value_label_entry, parse_variable_type, value_label_entry_size,
 };
 use crate::spss::sav::dictionary_record::DictionaryRecord;
 use crate::spss::sav::document_record::DocumentRecord;
@@ -466,6 +466,12 @@ impl<R: Read> DictionaryReader<R> {
                     element_size_position,
                 )?;
                 let record = ExtensionRecord::ExtendedNumberOfCases(extended);
+                let record = DictionaryRecord::Extension(record);
+                Ok(record)
+            }
+            EXTENSION_SUBTYPE_CHARACTER_ENCODING => {
+                let name = parse_character_encoding(element_size, &payload, element_size_position)?;
+                let record = ExtensionRecord::CharacterEncoding(name);
                 let record = DictionaryRecord::Extension(record);
                 Ok(record)
             }
@@ -2059,7 +2065,7 @@ mod tests {
         assert!(matches!(records[0], DictionaryRecord::Variable(_)));
         assert!(matches!(
             records[1],
-            DictionaryRecord::Extension(ExtensionRecord::Unknown(_))
+            DictionaryRecord::Extension(ExtensionRecord::CharacterEncoding(_))
         ));
         assert!(matches!(records[2], DictionaryRecord::Document(_)));
     }
@@ -2484,6 +2490,107 @@ mod tests {
                 e.kind(),
                 FormatErrorKind::UnexpectedValue {
                     field: crate::spss::sav::sav_error::Field::ExtensionElementCount,
+                }
+            ),
+            _ => panic!("expected Format error, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn extension_subtype_20_character_encoding_utf8() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_extension_record(&mut bytes, byte_order, 20, 1, 5, b"UTF-8");
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let record = dict.read_record().unwrap().unwrap();
+        let DictionaryRecord::Extension(ExtensionRecord::CharacterEncoding(name)) = record else {
+            panic!("expected CharacterEncoding, got {record:?}");
+        };
+        assert_eq!(name, "UTF-8");
+        assert!(dict.warnings().is_empty());
+    }
+
+    #[test]
+    fn extension_subtype_20_windows_1252() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_extension_record(&mut bytes, byte_order, 20, 1, 12, b"windows-1252");
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let DictionaryRecord::Extension(ExtensionRecord::CharacterEncoding(name)) =
+            dict.read_record().unwrap().unwrap()
+        else {
+            panic!("expected CharacterEncoding");
+        };
+        assert_eq!(name, "windows-1252");
+    }
+
+    #[test]
+    fn extension_subtype_20_trims_trailing_padding() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_extension_record(&mut bytes, byte_order, 20, 1, 8, b"UTF-8\0  ");
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let DictionaryRecord::Extension(ExtensionRecord::CharacterEncoding(name)) =
+            dict.read_record().unwrap().unwrap()
+        else {
+            panic!("expected CharacterEncoding");
+        };
+        assert_eq!(name, "UTF-8");
+    }
+
+    #[test]
+    fn extension_subtype_20_big_endian() {
+        let byte_order = ByteOrder::BigEndian;
+        let mut bytes = build_header(byte_order);
+        write_extension_record(&mut bytes, byte_order, 20, 1, 5, b"UTF-8");
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let DictionaryRecord::Extension(ExtensionRecord::CharacterEncoding(name)) =
+            dict.read_record().unwrap().unwrap()
+        else {
+            panic!("expected CharacterEncoding");
+        };
+        assert_eq!(name, "UTF-8");
+    }
+
+    #[test]
+    fn extension_subtype_20_empty_payload_yields_empty_string() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_extension_record(&mut bytes, byte_order, 20, 1, 0, &[]);
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let DictionaryRecord::Extension(ExtensionRecord::CharacterEncoding(name)) =
+            dict.read_record().unwrap().unwrap()
+        else {
+            panic!("expected CharacterEncoding");
+        };
+        assert!(name.is_empty());
+        assert!(dict.warnings().is_empty());
+    }
+
+    #[test]
+    fn extension_subtype_20_wrong_element_size_errors() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        // Spec says element_size must be 1; pass 4 instead.
+        write_extension_record(&mut bytes, byte_order, 20, 4, 2, &[0; 8]);
+
+        let mut dict = open(bytes);
+        let err = dict.read_record().unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(
+                e.kind(),
+                FormatErrorKind::UnexpectedValue {
+                    field: crate::spss::sav::sav_error::Field::ExtensionElementSize,
                 }
             ),
             _ => panic!("expected Format error, got {err:?}"),

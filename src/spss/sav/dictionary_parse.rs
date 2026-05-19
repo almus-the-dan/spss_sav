@@ -16,12 +16,12 @@ use encoding_rs::Encoding;
 
 use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::dictionary_format::{
-    EXTENDED_NUMBER_OF_CASES_COUNT_OFFSET, EXTENDED_NUMBER_OF_CASES_ELEMENT_COUNT,
-    EXTENDED_NUMBER_OF_CASES_ELEMENT_SIZE, EXTENDED_NUMBER_OF_CASES_VERSION_OFFSET,
-    FLOAT_SENTINELS_ELEMENT_COUNT, FLOAT_SENTINELS_ELEMENT_SIZE, FLOAT_SENTINELS_HIGHEST_OFFSET,
-    FLOAT_SENTINELS_LOWEST_OFFSET, FLOAT_SENTINELS_SYSTEM_MISSING_OFFSET,
-    FORMAT_CODE_DECIMALS_BYTE, FORMAT_CODE_KIND_BYTE, FORMAT_CODE_WIDTH_BYTE,
-    MACHINE_INTEGER_INFO_ELEMENT_COUNT, MACHINE_INTEGER_INFO_ELEMENT_SIZE,
+    CHARACTER_ENCODING_ELEMENT_SIZE, EXTENDED_NUMBER_OF_CASES_COUNT_OFFSET,
+    EXTENDED_NUMBER_OF_CASES_ELEMENT_COUNT, EXTENDED_NUMBER_OF_CASES_ELEMENT_SIZE,
+    EXTENDED_NUMBER_OF_CASES_VERSION_OFFSET, FLOAT_SENTINELS_ELEMENT_COUNT,
+    FLOAT_SENTINELS_ELEMENT_SIZE, FLOAT_SENTINELS_HIGHEST_OFFSET, FLOAT_SENTINELS_LOWEST_OFFSET,
+    FLOAT_SENTINELS_SYSTEM_MISSING_OFFSET, FORMAT_CODE_DECIMALS_BYTE, FORMAT_CODE_KIND_BYTE,
+    FORMAT_CODE_WIDTH_BYTE, MACHINE_INTEGER_INFO_ELEMENT_COUNT, MACHINE_INTEGER_INFO_ELEMENT_SIZE,
     VALUE_LABEL_ENTRY_ALIGNMENT, VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN,
     VARIABLE_TYPE_CONTINUATION, VARIABLE_TYPE_NUMERIC, VARIABLE_TYPE_STRING_MAX,
 };
@@ -33,7 +33,7 @@ use crate::spss::sav::raw_value_label_entry::RawValueLabelEntry;
 use crate::spss::sav::sav_error::{Field, FormatErrorKind, Result, SavError, Section};
 use crate::spss::sav::sav_format::SavFormat;
 use crate::spss::sav::sav_format_kind::SavFormatKind;
-use crate::spss::sav::text_field::decode_trimmed;
+use crate::spss::sav::text_field::{decode_trimmed, trim_trailing_padding};
 
 /// Classification of the type-2 record's 4-byte `type` field.
 ///
@@ -499,6 +499,47 @@ pub(super) fn parse_machine_integer_info(
     Ok(info)
 }
 
+/// Parses an extension subtype-20 payload (the file's declared
+/// character encoding name).
+///
+/// The on-disk shape is a fixed-`element_size`-of-1 byte string
+/// containing the encoding name in ASCII (e.g., `"UTF-8"`,
+/// `"windows-1252"`). The string is not null-terminated; some
+/// writers right-pad it with spaces or NULs.
+///
+/// This helper validates `actual_size == 1`, trims trailing spaces
+/// and NULs, and decodes the remaining bytes as UTF-8 with the
+/// `String::from_utf8_lossy` replacement strategy. Encoding names
+/// are pure ASCII in practice, so a rogue non-ASCII byte becomes
+/// U+FFFD rather than failing the read. An empty payload yields an
+/// empty string. Reconciliation against the integer-info record's
+/// numeric `character_code` and the reader's active encoding belongs
+/// to schema finalization, not here.
+///
+/// # Errors
+///
+/// Returns [`FormatErrorKind::UnexpectedValue`] tagged
+/// [`Field::ExtensionElementSize`] when `actual_size != 1`.
+pub(super) fn parse_character_encoding(
+    actual_size: u32,
+    payload: &[u8],
+    position: u64,
+) -> Result<String> {
+    if actual_size != CHARACTER_ENCODING_ELEMENT_SIZE {
+        let error = SavError::format(
+            Section::Dictionary,
+            position,
+            FormatErrorKind::UnexpectedValue {
+                field: Field::ExtensionElementSize,
+            },
+        );
+        return Err(error);
+    }
+    let trimmed = trim_trailing_padding(payload);
+    let name = String::from_utf8_lossy(trimmed).into_owned();
+    Ok(name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -797,6 +838,46 @@ mod tests {
         let err = normalize_value_label_variable_indices(&[2], &[0, 4], 0).unwrap_err();
         match err {
             SavError::Format(e) => assert_eq!(e.kind(), FormatErrorKind::DanglingValueLabel),
+            _ => panic!("expected Format error"),
+        }
+    }
+
+    #[test]
+    fn parse_character_encoding_decodes_ascii_name() {
+        let name = parse_character_encoding(1, b"UTF-8", 0).unwrap();
+        assert_eq!(name, "UTF-8");
+    }
+
+    #[test]
+    fn parse_character_encoding_trims_trailing_spaces_and_nuls() {
+        let name = parse_character_encoding(1, b"UTF-8 \0  ", 0).unwrap();
+        assert_eq!(name, "UTF-8");
+    }
+
+    #[test]
+    fn parse_character_encoding_accepts_empty_payload() {
+        let name = parse_character_encoding(1, &[], 0).unwrap();
+        assert!(name.is_empty());
+    }
+
+    #[test]
+    fn parse_character_encoding_lossy_on_non_ascii_bytes() {
+        // 0xFF is invalid UTF-8 and not a sensible encoding-name byte;
+        // the parser should emit U+FFFD rather than failing the read.
+        let name = parse_character_encoding(1, b"A\xFFB", 0).unwrap();
+        assert_eq!(name, "A\u{FFFD}B");
+    }
+
+    #[test]
+    fn parse_character_encoding_rejects_wrong_element_size() {
+        let err = parse_character_encoding(4, b"UTF-", 0).unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(
+                e.kind(),
+                FormatErrorKind::UnexpectedValue {
+                    field: Field::ExtensionElementSize
+                }
+            ),
             _ => panic!("expected Format error"),
         }
     }
