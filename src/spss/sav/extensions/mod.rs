@@ -20,6 +20,8 @@ pub mod machine_integer_info;
 /// Multiple response sets / MRSETS (subtype 7 pre-v14; subtype 19
 /// post-v14 with `CATEGORYLABELS`).
 pub mod multiple_response_set;
+/// Wire-level payload of an extension subtype-11 record.
+pub mod raw_display_parameters;
 /// Catch-all for unrecognized extension subtypes.
 pub mod unknown_extension;
 /// Per-variable custom attributes (subtype 18).

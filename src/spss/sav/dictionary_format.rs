@@ -304,6 +304,22 @@ pub(super) const EXTENDED_NUMBER_OF_CASES_VERSION_OFFSET: usize = 0;
 #[allow(dead_code)] // exercised by the subtype-16 parser.
 pub(super) const EXTENDED_NUMBER_OF_CASES_COUNT_OFFSET: usize = 8;
 
+/// Extension subtype 11 — per-variable display parameters
+/// (measurement level, optional display width, alignment). The
+/// payload is a fixed-`element_size`-of-4 stream of `u32` values
+/// holding either 2 or 3 values per variable (the choice depends on
+/// the writer and is recovered at schema finalization by comparing
+/// `element_count` against the dictionary's variable count). Per
+/// PSPP's system file format documentation and `ReadStat`'s
+/// `SAV_RECORD_SUBTYPE_VAR_DISPLAY`.
+#[allow(dead_code)] // exercised by the subtype-11 parser.
+pub(super) const EXTENSION_SUBTYPE_DISPLAY_PARAMETERS: i32 = 11;
+
+/// `element_size` an extension subtype-11 record must declare. Each
+/// element is a `u32`.
+#[allow(dead_code)] // exercised by the subtype-11 parser.
+pub(super) const DISPLAY_PARAMETERS_ELEMENT_SIZE: u32 = 4;
+
 /// Extension subtype 13 — long-variable-name mappings. The payload
 /// is a fixed-`element_size`-of-1, variable-`element_count` byte
 /// stream of `short=long` pairs joined by [`LONG_VARIABLE_NAMES_PAIR_SEPARATOR`]

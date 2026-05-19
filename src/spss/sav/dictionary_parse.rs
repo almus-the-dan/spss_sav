@@ -16,21 +16,23 @@ use encoding_rs::Encoding;
 
 use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::dictionary_format::{
-    CHARACTER_ENCODING_ELEMENT_SIZE, EXTENDED_NUMBER_OF_CASES_COUNT_OFFSET,
-    EXTENDED_NUMBER_OF_CASES_ELEMENT_COUNT, EXTENDED_NUMBER_OF_CASES_ELEMENT_SIZE,
-    EXTENDED_NUMBER_OF_CASES_VERSION_OFFSET, FLOAT_SENTINELS_ELEMENT_COUNT,
-    FLOAT_SENTINELS_ELEMENT_SIZE, FLOAT_SENTINELS_HIGHEST_OFFSET, FLOAT_SENTINELS_LOWEST_OFFSET,
-    FLOAT_SENTINELS_SYSTEM_MISSING_OFFSET, FORMAT_CODE_DECIMALS_BYTE, FORMAT_CODE_KIND_BYTE,
-    FORMAT_CODE_WIDTH_BYTE, LONG_VARIABLE_NAMES_ELEMENT_SIZE,
-    LONG_VARIABLE_NAMES_KEY_VALUE_SEPARATOR, LONG_VARIABLE_NAMES_PAIR_SEPARATOR,
-    MACHINE_INTEGER_INFO_ELEMENT_COUNT, MACHINE_INTEGER_INFO_ELEMENT_SIZE,
-    VALUE_LABEL_ENTRY_ALIGNMENT, VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN,
-    VARIABLE_TYPE_CONTINUATION, VARIABLE_TYPE_NUMERIC, VARIABLE_TYPE_STRING_MAX,
+    CHARACTER_ENCODING_ELEMENT_SIZE, DISPLAY_PARAMETERS_ELEMENT_SIZE,
+    EXTENDED_NUMBER_OF_CASES_COUNT_OFFSET, EXTENDED_NUMBER_OF_CASES_ELEMENT_COUNT,
+    EXTENDED_NUMBER_OF_CASES_ELEMENT_SIZE, EXTENDED_NUMBER_OF_CASES_VERSION_OFFSET,
+    FLOAT_SENTINELS_ELEMENT_COUNT, FLOAT_SENTINELS_ELEMENT_SIZE, FLOAT_SENTINELS_HIGHEST_OFFSET,
+    FLOAT_SENTINELS_LOWEST_OFFSET, FLOAT_SENTINELS_SYSTEM_MISSING_OFFSET,
+    FORMAT_CODE_DECIMALS_BYTE, FORMAT_CODE_KIND_BYTE, FORMAT_CODE_WIDTH_BYTE,
+    LONG_VARIABLE_NAMES_ELEMENT_SIZE, LONG_VARIABLE_NAMES_KEY_VALUE_SEPARATOR,
+    LONG_VARIABLE_NAMES_PAIR_SEPARATOR, MACHINE_INTEGER_INFO_ELEMENT_COUNT,
+    MACHINE_INTEGER_INFO_ELEMENT_SIZE, VALUE_LABEL_ENTRY_ALIGNMENT,
+    VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN, VARIABLE_TYPE_CONTINUATION,
+    VARIABLE_TYPE_NUMERIC, VARIABLE_TYPE_STRING_MAX,
 };
 use crate::spss::sav::extensions::extended_number_of_cases::ExtendedNumberOfCases;
 use crate::spss::sav::extensions::float_sentinels::FloatSentinels;
 use crate::spss::sav::extensions::long_variable_name::LongVariableName;
 use crate::spss::sav::extensions::machine_integer_info::MachineIntegerInfo;
+use crate::spss::sav::extensions::raw_display_parameters::RawDisplayParameters;
 use crate::spss::sav::raw_missing_values::RawMissingValues;
 use crate::spss::sav::raw_value_label_entry::RawValueLabelEntry;
 use crate::spss::sav::sav_error::{Field, FormatErrorKind, Result, SavError, Section};
@@ -629,6 +631,58 @@ pub(super) fn parse_long_variable_names(
     Ok(mappings)
 }
 
+/// Parses an extension subtype-11 payload (per-variable display
+/// parameters) into a wire-level [`RawDisplayParameters`].
+///
+/// The on-disk shape is `element_count` `u32` values, each carrying
+/// either a measurement-level code, an optional display-width, or an
+/// alignment code. The 2-tuple vs. 3-tuple choice is per-record (all
+/// variables get a width or none do) and cannot be recovered without
+/// the dictionary's variable count, so the streaming layer preserves
+/// the raw values verbatim and defers per-variable slicing to schema
+/// finalization.
+///
+/// # Errors
+///
+/// Returns [`FormatErrorKind::UnexpectedValue`] tagged
+/// [`Field::ExtensionElementSize`] when `actual_size != 4`. The
+/// `element_count` is *not* validated here — finalization, which
+/// knows the variable count, decides whether the count is consistent
+/// with a 2-tuple or 3-tuple form.
+///
+/// # Panics
+///
+/// Panics in debug builds if `payload.len()` does not equal
+/// `actual_size * payload_count`, where `payload_count` is implied
+/// by the caller having read the payload to that exact size.
+pub(super) fn parse_display_parameters(
+    actual_size: u32,
+    payload: &[u8],
+    byte_order: ByteOrder,
+    position: u64,
+) -> Result<RawDisplayParameters> {
+    if actual_size != DISPLAY_PARAMETERS_ELEMENT_SIZE {
+        let error = SavError::format(
+            Section::Dictionary,
+            position,
+            FormatErrorKind::UnexpectedValue {
+                field: Field::ExtensionElementSize,
+            },
+        );
+        return Err(error);
+    }
+    debug_assert_eq!(payload.len() % 4, 0);
+    let values: Vec<u32> = payload
+        .chunks_exact(4)
+        .map(|chunk| {
+            let bytes: [u8; 4] = chunk.try_into().expect("chunks_exact yields 4-byte slices");
+            byte_order.read_u32(bytes)
+        })
+        .collect();
+    let record = RawDisplayParameters::builder().values(values).build();
+    Ok(record)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1077,6 +1131,71 @@ mod tests {
     #[test]
     fn parse_long_variable_names_rejects_wrong_element_size() {
         let err = parse_long_variable_names(4, b"V1=L", encoding_rs::WINDOWS_1252, 0).unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(
+                e.kind(),
+                FormatErrorKind::UnexpectedValue {
+                    field: Field::ExtensionElementSize
+                }
+            ),
+            _ => panic!("expected Format error"),
+        }
+    }
+
+    #[test]
+    fn parse_display_parameters_collects_two_tuple_form_little_endian() {
+        // Two variables in 2-tuple form: (measure, alignment) pairs.
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&1u32.to_le_bytes()); // measure
+        payload.extend_from_slice(&0u32.to_le_bytes()); // alignment
+        payload.extend_from_slice(&3u32.to_le_bytes()); // measure
+        payload.extend_from_slice(&1u32.to_le_bytes()); // alignment
+        let raw = parse_display_parameters(4, &payload, ByteOrder::LittleEndian, 0).unwrap();
+        assert_eq!(raw.values(), &[1, 0, 3, 1]);
+    }
+
+    #[test]
+    fn parse_display_parameters_collects_three_tuple_form_little_endian() {
+        // One variable in 3-tuple form: measure, width, alignment.
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&2u32.to_le_bytes()); // measure
+        payload.extend_from_slice(&12u32.to_le_bytes()); // width
+        payload.extend_from_slice(&1u32.to_le_bytes()); // alignment
+        let raw = parse_display_parameters(4, &payload, ByteOrder::LittleEndian, 0).unwrap();
+        assert_eq!(raw.values(), &[2, 12, 1]);
+    }
+
+    #[test]
+    fn parse_display_parameters_big_endian() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&100u32.to_be_bytes());
+        payload.extend_from_slice(&200u32.to_be_bytes());
+        let raw = parse_display_parameters(4, &payload, ByteOrder::BigEndian, 0).unwrap();
+        assert_eq!(raw.values(), &[100, 200]);
+    }
+
+    #[test]
+    fn parse_display_parameters_empty_payload_yields_empty_record() {
+        let raw = parse_display_parameters(4, &[], ByteOrder::LittleEndian, 0).unwrap();
+        assert!(raw.values().is_empty());
+    }
+
+    #[test]
+    fn parse_display_parameters_preserves_unrecognized_codes() {
+        // Codes 99 / 7 don't match any MeasurementLevel or Alignment
+        // variant; the streaming layer carries them verbatim so
+        // finalization decides whether to bucket them as
+        // MeasurementLevel::Unknown(99) / Alignment::Unknown(7).
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&99u32.to_le_bytes());
+        payload.extend_from_slice(&7u32.to_le_bytes());
+        let raw = parse_display_parameters(4, &payload, ByteOrder::LittleEndian, 0).unwrap();
+        assert_eq!(raw.values(), &[99, 7]);
+    }
+
+    #[test]
+    fn parse_display_parameters_rejects_wrong_element_size() {
+        let err = parse_display_parameters(8, &[0; 16], ByteOrder::LittleEndian, 0).unwrap_err();
         match err {
             SavError::Format(e) => assert_eq!(
                 e.kind(),

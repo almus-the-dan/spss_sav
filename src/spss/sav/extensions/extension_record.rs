@@ -9,9 +9,9 @@ use crate::spss::sav::extensions::long_value_label_record::LongValueLabelRecord;
 use crate::spss::sav::extensions::long_variable_name::LongVariableName;
 use crate::spss::sav::extensions::machine_integer_info::MachineIntegerInfo;
 use crate::spss::sav::extensions::multiple_response_set::MultipleResponseSet;
+use crate::spss::sav::extensions::raw_display_parameters::RawDisplayParameters;
 use crate::spss::sav::extensions::unknown_extension::UnknownExtension;
 use crate::spss::sav::extensions::variable_attribute_record::VariableAttributeRecord;
-use crate::spss::sav::extensions::variable_display::VariableDisplay;
 use crate::spss::sav::extensions::variable_sets::VariableSets;
 use crate::spss::sav::extensions::very_long_string::VeryLongString;
 
@@ -48,8 +48,11 @@ pub enum ExtensionRecord {
     /// `CATEGORYLABELS` support). Parser not yet wired up.
     MultipleResponseSets(Vec<MultipleResponseSet>),
     /// Subtype 11 — per-variable display parameters (measurement
-    /// level, display width, alignment) in declaration order.
-    DisplayParameters(Vec<VariableDisplay>),
+    /// level, display width, alignment) carried verbatim from the
+    /// record's payload. Per-variable slicing into typed
+    /// [`VariableDisplay`](crate::spss::sav::extensions::variable_display::VariableDisplay)
+    /// values happens during schema finalization.
+    DisplayParameters(RawDisplayParameters),
     /// Subtype 13 — long-variable-name mappings (short → long name).
     LongVariableNames(Vec<LongVariableName>),
     /// Subtype 14 — very-long-string widths for variables wider
