@@ -345,6 +345,41 @@ pub(super) const LONG_VARIABLE_NAMES_PAIR_SEPARATOR: u8 = b'\t';
 #[allow(dead_code)] // exercised by the subtype-13 parser.
 pub(super) const LONG_VARIABLE_NAMES_KEY_VALUE_SEPARATOR: u8 = b'=';
 
+/// Extension subtype 14 — very-long-string widths. The payload is a
+/// fixed-`element_size`-of-1, variable-`element_count` byte stream
+/// of `short=width` pairs joined by
+/// [`VERY_LONG_STRINGS_PAIR_SEPARATOR`] (a tab byte), with
+/// [`VERY_LONG_STRINGS_KEY_VALUE_SEPARATOR`] (`=`) between each
+/// pair's two halves and the width written as ASCII decimal digits.
+/// SPSS terminates each pair with a NUL
+/// ([`VERY_LONG_STRINGS_PAIR_PADDING`]) before the tab; `ReadStat`'s
+/// grammar accepts any run of NULs there and an optional trailing
+/// separator. Per PSPP's system file format documentation and
+/// `ReadStat`'s `SAV_RECORD_SUBTYPE_VERY_LONG_STR`.
+#[allow(dead_code)] // exercised by the subtype-14 parser.
+pub(super) const EXTENSION_SUBTYPE_VERY_LONG_STRINGS: i32 = 14;
+
+/// `element_size` an extension subtype-14 record must declare. Each
+/// element is one byte of the `short=width\0\tshort=width...`
+/// stream.
+#[allow(dead_code)] // exercised by the subtype-14 parser.
+pub(super) const VERY_LONG_STRINGS_ELEMENT_SIZE: u32 = 1;
+
+/// Byte separator between adjacent `short=width` pairs in a
+/// subtype-14 payload (a literal tab).
+#[allow(dead_code)] // exercised by the subtype-14 parser.
+pub(super) const VERY_LONG_STRINGS_PAIR_SEPARATOR: u8 = b'\t';
+
+/// Byte separator between a pair's short-name and width halves in a
+/// subtype-14 payload (a literal `=`).
+#[allow(dead_code)] // exercised by the subtype-14 parser.
+pub(super) const VERY_LONG_STRINGS_KEY_VALUE_SEPARATOR: u8 = b'=';
+
+/// NUL padding SPSS writes between a pair's width digits and the
+/// following [`VERY_LONG_STRINGS_PAIR_SEPARATOR`].
+#[allow(dead_code)] // exercised by the subtype-14 parser.
+pub(super) const VERY_LONG_STRINGS_PAIR_PADDING: u8 = 0;
+
 /// Extension subtype 20 — the file's declared character encoding
 /// name. The payload is a fixed-`element_size`-of-1, variable-
 /// `element_count` byte string carrying the encoding label in ASCII

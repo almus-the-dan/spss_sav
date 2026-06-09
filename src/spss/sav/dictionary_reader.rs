@@ -17,20 +17,20 @@ use crate::spss::sav::dictionary_format::{
     DICTIONARY_TERMINATOR_FILLER_LEN, DOCUMENT_LINE_LEN, EXTENSION_SUBTYPE_CHARACTER_ENCODING,
     EXTENSION_SUBTYPE_DISPLAY_PARAMETERS, EXTENSION_SUBTYPE_EXTENDED_NUMBER_OF_CASES,
     EXTENSION_SUBTYPE_FLOAT_INFO, EXTENSION_SUBTYPE_LONG_VARIABLE_NAMES,
-    EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO, MISSING_VALUE_ENTRY_LEN,
-    RECORD_TYPE_DICTIONARY_TERMINATOR, RECORD_TYPE_DOCUMENT, RECORD_TYPE_EXTENSION,
-    RECORD_TYPE_VALUE_LABEL, RECORD_TYPE_VALUE_LABEL_VARIABLES, RECORD_TYPE_VARIABLE,
-    VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN, VARIABLE_HAS_LABEL_OFFSET,
-    VARIABLE_LABEL_PADDING, VARIABLE_MISSING_VALUE_COUNT_OFFSET, VARIABLE_PRINT_FORMAT_OFFSET,
-    VARIABLE_RECORD_BODY_LEN, VARIABLE_SHORT_NAME_LEN, VARIABLE_SHORT_NAME_OFFSET,
-    VARIABLE_TYPE_OFFSET, VARIABLE_WRITE_FORMAT_OFFSET,
+    EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO, EXTENSION_SUBTYPE_VERY_LONG_STRINGS,
+    MISSING_VALUE_ENTRY_LEN, RECORD_TYPE_DICTIONARY_TERMINATOR, RECORD_TYPE_DOCUMENT,
+    RECORD_TYPE_EXTENSION, RECORD_TYPE_VALUE_LABEL, RECORD_TYPE_VALUE_LABEL_VARIABLES,
+    RECORD_TYPE_VARIABLE, VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN,
+    VARIABLE_HAS_LABEL_OFFSET, VARIABLE_LABEL_PADDING, VARIABLE_MISSING_VALUE_COUNT_OFFSET,
+    VARIABLE_PRINT_FORMAT_OFFSET, VARIABLE_RECORD_BODY_LEN, VARIABLE_SHORT_NAME_LEN,
+    VARIABLE_SHORT_NAME_OFFSET, VARIABLE_TYPE_OFFSET, VARIABLE_WRITE_FORMAT_OFFSET,
 };
 use crate::spss::sav::dictionary_parse::{
     VariableTypeCode, compose_raw_missing_values, normalize_value_label_variable_indices,
     parse_character_encoding, parse_display_parameters, parse_extended_number_of_cases,
     parse_float_sentinels, parse_has_label, parse_long_variable_names, parse_machine_integer_info,
     parse_missing_value_count, parse_sav_format, parse_short_name, parse_value_label_entry,
-    parse_variable_type, value_label_entry_size,
+    parse_variable_type, parse_very_long_strings, value_label_entry_size,
 };
 use crate::spss::sav::dictionary_record::DictionaryRecord;
 use crate::spss::sav::document_record::DocumentRecord;
@@ -437,6 +437,7 @@ impl<R: Read> DictionaryReader<R> {
             EXTENSION_SUBTYPE_EXTENDED_NUMBER_OF_CASES => read_extended_number_of_cases(&envelope),
             EXTENSION_SUBTYPE_CHARACTER_ENCODING => read_character_encoding(&envelope),
             EXTENSION_SUBTYPE_LONG_VARIABLE_NAMES => read_long_variable_names(&envelope),
+            EXTENSION_SUBTYPE_VERY_LONG_STRINGS => read_very_long_strings(&envelope),
             EXTENSION_SUBTYPE_DISPLAY_PARAMETERS => read_display_parameters(&envelope),
             _ => Ok(self.read_unknown_extension(envelope)),
         }
@@ -755,6 +756,19 @@ fn read_long_variable_names(envelope: &ExtensionEnvelope) -> Result<DictionaryRe
         envelope.element_size_position,
     )?;
     let record = ExtensionRecord::LongVariableNames(mappings);
+    let record = DictionaryRecord::Extension(record);
+    Ok(record)
+}
+
+/// Subtype 14 — very-long-string width declarations.
+fn read_very_long_strings(envelope: &ExtensionEnvelope) -> Result<DictionaryRecord> {
+    let declarations = parse_very_long_strings(
+        envelope.element_size,
+        &envelope.payload,
+        envelope.encoding,
+        envelope.element_size_position,
+    )?;
+    let record = ExtensionRecord::VeryLongStrings(declarations);
     let record = DictionaryRecord::Extension(record);
     Ok(record)
 }
@@ -2893,6 +2907,149 @@ mod tests {
                 e.kind(),
                 FormatErrorKind::UnexpectedValue {
                     field: crate::spss::sav::sav_error::Field::ExtensionElementSize,
+                }
+            ),
+            _ => panic!("expected Format error, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn extension_subtype_14_single_declaration() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        let payload = b"RESPONSE=00226\0\t";
+        write_extension_record(
+            &mut bytes,
+            byte_order,
+            14,
+            1,
+            u32::try_from(payload.len()).unwrap(),
+            payload,
+        );
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let record = dict.read_record().unwrap().unwrap();
+        let DictionaryRecord::Extension(ExtensionRecord::VeryLongStrings(declarations)) = record
+        else {
+            panic!("expected VeryLongStrings, got {record:?}");
+        };
+        assert_eq!(declarations.len(), 1);
+        assert_eq!(declarations[0].short_name(), "RESPONSE");
+        assert_eq!(declarations[0].width(), 226);
+        assert!(dict.warnings().is_empty());
+    }
+
+    #[test]
+    fn extension_subtype_14_multiple_declarations_in_order() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        let payload = b"V1=00300\0\tV2=01000\0\tV3=32767\0\t";
+        write_extension_record(
+            &mut bytes,
+            byte_order,
+            14,
+            1,
+            u32::try_from(payload.len()).unwrap(),
+            payload,
+        );
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let DictionaryRecord::Extension(ExtensionRecord::VeryLongStrings(declarations)) =
+            dict.read_record().unwrap().unwrap()
+        else {
+            panic!("expected VeryLongStrings");
+        };
+        let pairs: Vec<(&str, u32)> = declarations
+            .iter()
+            .map(|d| (d.short_name(), d.width()))
+            .collect();
+        assert_eq!(pairs, vec![("V1", 300), ("V2", 1000), ("V3", 32767)]);
+        assert!(dict.warnings().is_empty());
+    }
+
+    #[test]
+    fn extension_subtype_14_big_endian() {
+        let byte_order = ByteOrder::BigEndian;
+        let mut bytes = build_header(byte_order);
+        let payload = b"V1=00300\0\t";
+        write_extension_record(
+            &mut bytes,
+            byte_order,
+            14,
+            1,
+            u32::try_from(payload.len()).unwrap(),
+            payload,
+        );
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let DictionaryRecord::Extension(ExtensionRecord::VeryLongStrings(declarations)) =
+            dict.read_record().unwrap().unwrap()
+        else {
+            panic!("expected VeryLongStrings");
+        };
+        assert_eq!(declarations.len(), 1);
+        assert_eq!(declarations[0].width(), 300);
+    }
+
+    #[test]
+    fn extension_subtype_14_empty_payload_yields_empty_vec() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_extension_record(&mut bytes, byte_order, 14, 1, 0, &[]);
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let DictionaryRecord::Extension(ExtensionRecord::VeryLongStrings(declarations)) =
+            dict.read_record().unwrap().unwrap()
+        else {
+            panic!("expected VeryLongStrings");
+        };
+        assert!(declarations.is_empty());
+    }
+
+    #[test]
+    fn extension_subtype_14_wrong_element_size_errors() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_extension_record(&mut bytes, byte_order, 14, 4, 2, &[0; 8]);
+
+        let mut dict = open(bytes);
+        let err = dict.read_record().unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(
+                e.kind(),
+                FormatErrorKind::UnexpectedValue {
+                    field: crate::spss::sav::sav_error::Field::ExtensionElementSize,
+                }
+            ),
+            _ => panic!("expected Format error, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn extension_subtype_14_malformed_pair_errors() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        let payload = b"V1=300\tV2=abc";
+        write_extension_record(
+            &mut bytes,
+            byte_order,
+            14,
+            1,
+            u32::try_from(payload.len()).unwrap(),
+            payload,
+        );
+
+        let mut dict = open(bytes);
+        let err = dict.read_record().unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(
+                e.kind(),
+                FormatErrorKind::UnexpectedValue {
+                    field: crate::spss::sav::sav_error::Field::VeryLongStringPair,
                 }
             ),
             _ => panic!("expected Format error, got {err:?}"),

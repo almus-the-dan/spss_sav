@@ -83,6 +83,8 @@ pub enum Field {
     ExtensionElementCount,
     /// One `short=long` pair inside an extension subtype-13 record.
     LongVariableNamePair,
+    /// One `short=width` pair inside an extension subtype-14 record.
+    VeryLongStringPair,
     /// Cell value within a record.
     CellValue,
 }
@@ -111,6 +113,7 @@ impl fmt::Display for Field {
             Self::ExtensionElementSize => "extension element size",
             Self::ExtensionElementCount => "extension element count",
             Self::LongVariableNamePair => "long variable name pair",
+            Self::VeryLongStringPair => "very long string pair",
             Self::CellValue => "cell value",
         })
     }
