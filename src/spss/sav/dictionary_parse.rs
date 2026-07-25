@@ -32,7 +32,10 @@ use crate::spss::sav::dictionary_format::{
     MACHINE_INTEGER_INFO_ELEMENT_SIZE, VALUE_LABEL_ENTRY_ALIGNMENT,
     VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN, VARIABLE_TYPE_CONTINUATION,
     VARIABLE_ATTRIBUTES_ELEMENT_SIZE, VARIABLE_ATTRIBUTES_NAME_TERMINATOR,
-    VARIABLE_ATTRIBUTES_SET_SEPARATOR, VARIABLE_TYPE_NUMERIC, VARIABLE_TYPE_STRING_MAX,
+    VARIABLE_ATTRIBUTES_SET_SEPARATOR, VARIABLE_SETS_ELEMENT_SIZE,
+    VARIABLE_SETS_LINE_CARRIAGE_RETURN, VARIABLE_SETS_LINE_SEPARATOR,
+    VARIABLE_SETS_MEMBER_SEPARATOR, VARIABLE_SETS_NAME_TERMINATOR, VARIABLE_TYPE_NUMERIC,
+    VARIABLE_TYPE_STRING_MAX,
     VERY_LONG_STRINGS_ELEMENT_SIZE, VERY_LONG_STRINGS_KEY_VALUE_SEPARATOR,
     VERY_LONG_STRINGS_PAIR_PADDING, VERY_LONG_STRINGS_PAIR_SEPARATOR,
 };
@@ -47,6 +50,8 @@ use crate::spss::sav::extensions::machine_integer_info::MachineIntegerInfo;
 use crate::spss::sav::extensions::raw_display_parameters::RawDisplayParameters;
 use crate::spss::sav::extensions::variable_attribute_entry::VariableAttributeEntry;
 use crate::spss::sav::extensions::variable_attribute_record::VariableAttributeRecord;
+use crate::spss::sav::extensions::variable_set::VariableSet;
+use crate::spss::sav::extensions::variable_sets::VariableSets;
 use crate::spss::sav::extensions::very_long_string::VeryLongString;
 use crate::spss::sav::raw_missing_values::RawMissingValues;
 use crate::spss::sav::raw_value_label_entry::RawValueLabelEntry;
@@ -943,6 +948,86 @@ fn decode_attribute_value(bytes: &[u8], encoding: &'static Encoding) -> String {
     };
     let (value, _, _) = encoding.decode(inner);
     value.into_owned()
+}
+
+/// Parses an extension subtype-5 payload (named variable groupings)
+/// into its [`VariableSets`].
+///
+/// The payload is one set per line: a set name, `=`, a space, then the
+/// members' long variable names separated by spaces; each line ends
+/// with a line feed, optionally preceded by a carriage return. A set
+/// may have no members. Blank lines (including the trailing line
+/// feed's empty segment) are skipped. Names and members are decoded
+/// through `encoding`; members are not validated against the schema.
+///
+/// # Errors
+///
+/// * [`Field::ExtensionElementSize`] when `actual_size != 1`.
+/// * [`Field::VariableSet`] when a non-empty line lacks a `=` or has
+///   an empty set name.
+pub(super) fn parse_variable_sets(
+    actual_size: u32,
+    payload: &[u8],
+    encoding: &'static Encoding,
+    position: u64,
+) -> Result<VariableSets> {
+    if actual_size != VARIABLE_SETS_ELEMENT_SIZE {
+        return Err(unexpected_value_error(position, Field::ExtensionElementSize));
+    }
+    let mut builder = VariableSets::builder();
+    for line in payload.split(|&b| b == VARIABLE_SETS_LINE_SEPARATOR) {
+        // A carriage return may precede the line feed; a trailing line
+        // feed leaves a final empty segment. Neither is a set.
+        let line = match line.split_last() {
+            Some((&VARIABLE_SETS_LINE_CARRIAGE_RETURN, head)) => head,
+            _ => line,
+        };
+        if line.is_empty() {
+            continue;
+        }
+        let set = parse_variable_set(line, encoding, position)?;
+        builder = builder.set(set);
+    }
+    Ok(builder.build())
+}
+
+/// Parses one `name= members...` line into a [`VariableSet`]. The name
+/// runs up to the first `=`; a single space after it (the `= `
+/// separator) is skipped, and the remaining space-separated tokens are
+/// the members (empty tokens from repeated spaces are dropped).
+fn parse_variable_set(
+    line: &[u8],
+    encoding: &'static Encoding,
+    position: u64,
+) -> Result<VariableSet> {
+    let field = Field::VariableSet;
+    let name_end = line.iter().position(|&b| b == VARIABLE_SETS_NAME_TERMINATOR);
+    let Some(name_end) = name_end else {
+        return Err(unexpected_value_error(position, field));
+    };
+    let name_bytes = &line[..name_end];
+    if name_bytes.is_empty() {
+        return Err(unexpected_value_error(position, field));
+    }
+    let members = &line[name_end + 1..];
+    // Skip the single space that follows the `=`; any further empty
+    // tokens (from repeated spaces) are dropped below.
+    let members = match members.split_first() {
+        Some((&VARIABLE_SETS_MEMBER_SEPARATOR, rest)) => rest,
+        _ => members,
+    };
+    let mut builder = VariableSet::builder();
+    let (name, _, _) = encoding.decode(name_bytes);
+    builder = builder.name(name.into_owned());
+    let members = members.split(|&b| b == VARIABLE_SETS_MEMBER_SEPARATOR);
+    for member in members {
+        if member.is_empty() {
+            continue;
+        }
+        let (member, _, _) = encoding.decode(member);
+        builder = builder.variable(member.into_owned());
+    }
+    Ok(builder.build())
 }
 
 /// Parses an extension subtype-21 payload (long string value labels)
@@ -2231,6 +2316,92 @@ mod tests {
         )
         .unwrap();
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn parse_variable_sets_single_set_with_members() {
+        let payload = b"demographics= age sex region\n";
+        let result = parse_variable_sets(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result.sets().len(), 1);
+        assert_eq!(result.sets()[0].name(), "demographics");
+        assert_eq!(
+            result.sets()[0].variables(),
+            &["age".to_string(), "sex".to_string(), "region".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_variable_sets_multiple_sets() {
+        let payload = b"grp1= a b\ngrp2= c\n";
+        let result = parse_variable_sets(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result.sets().len(), 2);
+        assert_eq!(result.sets()[0].name(), "grp1");
+        assert_eq!(result.sets()[1].name(), "grp2");
+        assert_eq!(result.sets()[1].variables(), &["c".to_string()]);
+    }
+
+    #[test]
+    fn parse_variable_sets_empty_set_has_no_members() {
+        let payload = b"empty= \n";
+        let result = parse_variable_sets(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result.sets().len(), 1);
+        assert_eq!(result.sets()[0].name(), "empty");
+        assert!(result.sets()[0].variables().is_empty());
+    }
+
+    #[test]
+    fn parse_variable_sets_strips_carriage_return() {
+        let payload = b"grp= a b\r\n";
+        let result = parse_variable_sets(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result.sets()[0].variables(), &["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn parse_variable_sets_ignores_repeated_and_trailing_spaces() {
+        let payload = b"grp=  a   b \n";
+        let result = parse_variable_sets(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result.sets()[0].variables(), &["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn parse_variable_sets_decodes_through_supplied_encoding() {
+        // 0xE9 = é in Windows-1252, invalid in standalone UTF-8.
+        let payload = b"caf\xE9= r\xE9gion\n";
+        let result = parse_variable_sets(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result.sets()[0].name(), "café");
+        assert_eq!(result.sets()[0].variables(), &["région".to_string()]);
+    }
+
+    #[test]
+    fn parse_variable_sets_empty_payload_yields_no_sets() {
+        let result = parse_variable_sets(1, &[], encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert!(result.sets().is_empty());
+    }
+
+    #[test]
+    fn parse_variable_sets_accepts_final_line_without_line_feed() {
+        let payload = b"grp= a b";
+        let result = parse_variable_sets(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result.sets().len(), 1);
+        assert_eq!(result.sets()[0].variables(), &["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn parse_variable_sets_rejects_wrong_element_size() {
+        let err = parse_variable_sets(4, b"grp= a\n", encoding_rs::WINDOWS_1252, 0).unwrap_err();
+        assert_unexpected_value_error(&err, Field::ExtensionElementSize);
+    }
+
+    #[test]
+    fn parse_variable_sets_rejects_line_without_equals() {
+        let err = parse_variable_sets(1, b"noequals\n", encoding_rs::WINDOWS_1252, 0).unwrap_err();
+        assert_unexpected_value_error(&err, Field::VariableSet);
+    }
+
+    #[test]
+    fn parse_variable_sets_rejects_empty_set_name() {
+        let err = parse_variable_sets(1, b"= a b\n", encoding_rs::WINDOWS_1252, 0).unwrap_err();
+        assert_unexpected_value_error(&err, Field::VariableSet);
     }
 
     #[test]

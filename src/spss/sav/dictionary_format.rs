@@ -396,6 +396,41 @@ pub(super) const EXTENSION_SUBTYPE_CHARACTER_ENCODING: i32 = 20;
 #[allow(dead_code)] // exercised by the subtype-20 parser.
 pub(super) const CHARACTER_ENCODING_ELEMENT_SIZE: u32 = 1;
 
+/// Extension subtype 5 — named variable groupings. The payload is a
+/// fixed-`element_size`-of-1, variable-`element_count` byte stream of
+/// one variable set per line. Each line ends with
+/// [`VARIABLE_SETS_LINE_SEPARATOR`] (a line feed). It is optionally preceded
+/// by [`VARIABLE_SETS_LINE_CARRIAGE_RETURN`]. It reads as a set name,
+/// [`VARIABLE_SETS_NAME_TERMINATOR`] (`=`) plus a
+/// [`VARIABLE_SETS_MEMBER_SEPARATOR`] (space), then the members' long
+/// variable names separated by spaces. An empty set has no members.
+#[allow(dead_code)] // exercised by the subtype-5 parser.
+pub(super) const EXTENSION_SUBTYPE_VARIABLE_SETS: i32 = 5;
+
+/// `element_size` an extension subtype-5 record must declare.
+#[allow(dead_code)] // exercised by the subtype-5 parser.
+pub(super) const VARIABLE_SETS_ELEMENT_SIZE: u32 = 1;
+
+/// Byte terminating each variable-set line in a subtype-5 payload (a
+/// line feed).
+#[allow(dead_code)] // exercised by the subtype-5 parser.
+pub(super) const VARIABLE_SETS_LINE_SEPARATOR: u8 = b'\n';
+
+/// Byte optionally preceding the line feed in a subtype-5 payload (a
+/// carriage return), trimmed from each line before parsing.
+#[allow(dead_code)] // exercised by the subtype-5 parser.
+pub(super) const VARIABLE_SETS_LINE_CARRIAGE_RETURN: u8 = b'\r';
+
+/// Byte separating a set's name from its members in a subtype-5
+/// payload (a literal `=`).
+#[allow(dead_code)] // exercised by the subtype-5 parser.
+pub(super) const VARIABLE_SETS_NAME_TERMINATOR: u8 = b'=';
+
+/// Byte separating adjacent member names (and following the `=`) in a
+/// subtype-5 payload (a space).
+#[allow(dead_code)] // exercised by the subtype-5 parser.
+pub(super) const VARIABLE_SETS_MEMBER_SEPARATOR: u8 = b' ';
+
 /// Extension subtype 17 — file-level custom attributes. The payload
 /// is a fixed-`element_size`-of-1, variable-`element_count` byte
 /// stream holding a single attribute set: one or more attributes

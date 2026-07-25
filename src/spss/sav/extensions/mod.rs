@@ -34,6 +34,9 @@ pub mod variable_attribute_entry;
 pub mod variable_attribute_record;
 /// Per-variable display parameters (subtype 11).
 pub mod variable_display;
+/// One named variable grouping inside a variable sets record (subtype
+/// 5).
+pub mod variable_set;
 /// Named variable groupings (subtype 5).
 pub mod variable_sets;
 /// Very-long-string widths (subtype 14).
