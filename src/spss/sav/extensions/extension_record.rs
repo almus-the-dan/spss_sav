@@ -1,21 +1,22 @@
 //! Top-level extension record enum.
 
+use crate::spss::sav::extensions::character_encoding::CharacterEncoding;
 use crate::spss::sav::extensions::data_entry::DataEntry;
 use crate::spss::sav::extensions::extended_number_of_cases::ExtendedNumberOfCases;
 use crate::spss::sav::extensions::extra_product_info::ExtraProductInfo;
-use crate::spss::sav::extensions::file_attribute::FileAttribute;
+use crate::spss::sav::extensions::file_attributes::FileAttributes;
 use crate::spss::sav::extensions::float_sentinels::FloatSentinels;
-use crate::spss::sav::extensions::long_missing_value_record::LongMissingValueRecord;
-use crate::spss::sav::extensions::long_value_label_record::LongValueLabelRecord;
-use crate::spss::sav::extensions::long_variable_name::LongVariableName;
+use crate::spss::sav::extensions::long_missing_values::LongMissingValues;
+use crate::spss::sav::extensions::long_value_labels::LongValueLabels;
+use crate::spss::sav::extensions::long_variable_names::LongVariableNames;
 use crate::spss::sav::extensions::machine_integer_info::MachineIntegerInfo;
-use crate::spss::sav::extensions::multiple_response_set::MultipleResponseSet;
+use crate::spss::sav::extensions::multiple_response_sets::MultipleResponseSets;
 use crate::spss::sav::extensions::raw_display_parameters::RawDisplayParameters;
 use crate::spss::sav::extensions::unknown_extension::UnknownExtension;
 use crate::spss::sav::extensions::uuid::Uuid;
-use crate::spss::sav::extensions::variable_attribute_record::VariableAttributeRecord;
+use crate::spss::sav::extensions::variable_attributes::VariableAttributes;
 use crate::spss::sav::extensions::variable_sets::VariableSets;
-use crate::spss::sav::extensions::very_long_string::VeryLongString;
+use crate::spss::sav::extensions::very_long_strings::VeryLongStrings;
 
 /// One extension record read from a SAV file.
 ///
@@ -46,7 +47,7 @@ pub enum ExtensionRecord {
     /// Subtype 7 — multiple response sets, pre-v14 format.
     /// Subtype 19 carries the post-v14 form (which adds
     /// `CATEGORYLABELS` support). Parser not yet wired up.
-    MultipleResponseSets(Vec<MultipleResponseSet>),
+    MultipleResponseSets(MultipleResponseSets),
     /// Subtype 10 — extra product information (a free-form string
     /// identifying the writing product, beyond the header's product
     /// name).
@@ -60,10 +61,10 @@ pub enum ExtensionRecord {
     /// values happens during schema finalization.
     DisplayParameters(RawDisplayParameters),
     /// Subtype 13 — long-variable-name mappings (short → long name).
-    LongVariableNames(Vec<LongVariableName>),
+    LongVariableNames(LongVariableNames),
     /// Subtype 14 — very-long-string widths for variables wider
     /// than 255 bytes.
-    VeryLongStrings(Vec<VeryLongString>),
+    VeryLongStrings(VeryLongStrings),
     /// Subtype 15 — SPSS Data Entry product information. Subtype
     /// assignment is from the (unreliable) spec md and is not
     /// confirmed against PSPP or `ReadStat`; treat with caution.
@@ -73,17 +74,17 @@ pub enum ExtensionRecord {
     ExtendedNumberOfCases(ExtendedNumberOfCases),
     /// Subtype 17 — file-level custom attributes (key-value pairs
     /// attached to the file, not to any particular variable).
-    FileAttributes(Vec<FileAttribute>),
+    FileAttributes(FileAttributes),
     /// Subtype 18 — per-variable custom attributes.
-    VariableAttributes(Vec<VariableAttributeRecord>),
+    VariableAttributes(VariableAttributes),
     /// Subtype 20 — declared character encoding label.
-    CharacterEncoding(String),
+    CharacterEncoding(CharacterEncoding),
     /// Subtype 21 — long value labels (for very-long-string
     /// variables).
-    LongValueLabels(Vec<LongValueLabelRecord>),
+    LongValueLabels(LongValueLabels),
     /// Subtype 22 — long missing values (for very-long-string
     /// variables).
-    LongMissingValues(Vec<LongMissingValueRecord>),
+    LongMissingValues(LongMissingValues),
     /// An extension subtype this library does not yet recognize. The
     /// raw bytes are preserved verbatim for round-trip fidelity.
     Unknown(UnknownExtension),

@@ -177,7 +177,7 @@ fn comprehensive_metadata_extensions() {
     let encoding = extensions
         .iter()
         .find_map(|e| match e {
-            ExtensionRecord::CharacterEncoding(name) => Some(name.as_str()),
+            ExtensionRecord::CharacterEncoding(name) => Some(name.name()),
             _ => None,
         })
         .expect("character encoding");
@@ -187,7 +187,7 @@ fn comprehensive_metadata_extensions() {
     let long_names = extensions
         .iter()
         .find_map(|e| match e {
-            ExtensionRecord::LongVariableNames(n) => Some(n),
+            ExtensionRecord::LongVariableNames(n) => Some(n.mappings()),
             _ => None,
         })
         .expect("long variable names");
@@ -202,7 +202,7 @@ fn comprehensive_metadata_extensions() {
     let very_long = extensions
         .iter()
         .find_map(|e| match e {
-            ExtensionRecord::VeryLongStrings(v) => Some(v),
+            ExtensionRecord::VeryLongStrings(v) => Some(v.strings()),
             _ => None,
         })
         .expect("very long strings");
@@ -220,7 +220,7 @@ fn comprehensive_attribute_and_long_string_extensions() {
     let long_labels = extensions
         .iter()
         .find_map(|e| match e {
-            ExtensionRecord::LongValueLabels(l) => Some(l),
+            ExtensionRecord::LongValueLabels(l) => Some(l.records()),
             _ => None,
         })
         .expect("long value labels");
@@ -237,7 +237,7 @@ fn comprehensive_attribute_and_long_string_extensions() {
     let long_missing = extensions
         .iter()
         .find_map(|e| match e {
-            ExtensionRecord::LongMissingValues(l) => Some(l),
+            ExtensionRecord::LongMissingValues(l) => Some(l.records()),
             _ => None,
         })
         .expect("long missing values");
@@ -250,7 +250,7 @@ fn comprehensive_attribute_and_long_string_extensions() {
     let file_attributes = extensions
         .iter()
         .find_map(|e| match e {
-            ExtensionRecord::FileAttributes(a) => Some(a),
+            ExtensionRecord::FileAttributes(a) => Some(a.attributes()),
             _ => None,
         })
         .expect("file attributes");
@@ -269,7 +269,7 @@ fn comprehensive_attribute_and_long_string_extensions() {
     let variable_attributes = extensions
         .iter()
         .find_map(|e| match e {
-            ExtensionRecord::VariableAttributes(a) => Some(a),
+            ExtensionRecord::VariableAttributes(a) => Some(a.records()),
             _ => None,
         })
         .expect("variable attributes");
@@ -295,7 +295,7 @@ fn comprehensive_multiple_response_sets() {
     let sets: Vec<&MultipleResponseSet> = extensions
         .iter()
         .filter_map(|e| match e {
-            ExtensionRecord::MultipleResponseSets(s) => Some(s),
+            ExtensionRecord::MultipleResponseSets(s) => Some(s.sets()),
             _ => None,
         })
         .flatten()

@@ -43,9 +43,17 @@ use crate::spss::sav::dictionary_parse::{
 };
 use crate::spss::sav::dictionary_record::DictionaryRecord;
 use crate::spss::sav::document_record::DocumentRecord;
+use crate::spss::sav::extensions::character_encoding::CharacterEncoding;
 use crate::spss::sav::extensions::extension_record::ExtensionRecord;
+use crate::spss::sav::extensions::file_attributes::FileAttributes;
+use crate::spss::sav::extensions::long_missing_values::LongMissingValues;
+use crate::spss::sav::extensions::long_value_labels::LongValueLabels;
+use crate::spss::sav::extensions::long_variable_names::LongVariableNames;
 use crate::spss::sav::extensions::machine_integer_info::MachineIntegerInfo;
+use crate::spss::sav::extensions::multiple_response_sets::MultipleResponseSets;
 use crate::spss::sav::extensions::unknown_extension::UnknownExtension;
+use crate::spss::sav::extensions::variable_attributes::VariableAttributes;
+use crate::spss::sav::extensions::very_long_strings::VeryLongStrings;
 use crate::spss::sav::raw_value_label_entry::RawValueLabelEntry;
 use crate::spss::sav::raw_value_label_set::RawValueLabelSet;
 use crate::spss::sav::reader_state::{ReaderState, u32_as_usize};
@@ -764,7 +772,8 @@ fn read_character_encoding(envelope: &ExtensionEnvelope) -> Result<DictionaryRec
         &envelope.payload,
         envelope.element_size_position,
     )?;
-    let record = ExtensionRecord::CharacterEncoding(name);
+    let encoding = CharacterEncoding::builder().name(name).build();
+    let record = ExtensionRecord::CharacterEncoding(encoding);
     let record = DictionaryRecord::Extension(record);
     Ok(record)
 }
@@ -777,7 +786,8 @@ fn read_long_variable_names(envelope: &ExtensionEnvelope) -> Result<DictionaryRe
         envelope.encoding,
         envelope.element_size_position,
     )?;
-    let record = ExtensionRecord::LongVariableNames(mappings);
+    let names = LongVariableNames::builder().mappings(mappings).build();
+    let record = ExtensionRecord::LongVariableNames(names);
     let record = DictionaryRecord::Extension(record);
     Ok(record)
 }
@@ -790,7 +800,8 @@ fn read_very_long_strings(envelope: &ExtensionEnvelope) -> Result<DictionaryReco
         envelope.encoding,
         envelope.element_size_position,
     )?;
-    let record = ExtensionRecord::VeryLongStrings(declarations);
+    let strings = VeryLongStrings::builder().strings(declarations).build();
+    let record = ExtensionRecord::VeryLongStrings(strings);
     let record = DictionaryRecord::Extension(record);
     Ok(record)
 }
@@ -829,6 +840,7 @@ fn read_multiple_response_sets(envelope: &ExtensionEnvelope) -> Result<Dictionar
         envelope.encoding,
         envelope.element_size_position,
     )?;
+    let sets = MultipleResponseSets::builder().sets(sets).build();
     let record = ExtensionRecord::MultipleResponseSets(sets);
     let record = DictionaryRecord::Extension(record);
     Ok(record)
@@ -855,6 +867,7 @@ fn read_data_file_attributes(envelope: &ExtensionEnvelope) -> Result<DictionaryR
         envelope.encoding,
         envelope.element_size_position,
     )?;
+    let attributes = FileAttributes::builder().attributes(attributes).build();
     let record = ExtensionRecord::FileAttributes(attributes);
     let record = DictionaryRecord::Extension(record);
     Ok(record)
@@ -868,7 +881,8 @@ fn read_variable_attributes(envelope: &ExtensionEnvelope) -> Result<DictionaryRe
         envelope.encoding,
         envelope.element_size_position,
     )?;
-    let record = ExtensionRecord::VariableAttributes(records);
+    let attributes = VariableAttributes::builder().records(records).build();
+    let record = ExtensionRecord::VariableAttributes(attributes);
     let record = DictionaryRecord::Extension(record);
     Ok(record)
 }
@@ -882,7 +896,8 @@ fn read_long_string_value_labels(envelope: &ExtensionEnvelope) -> Result<Diction
         envelope.encoding,
         envelope.element_size_position,
     )?;
-    let record = ExtensionRecord::LongValueLabels(records);
+    let labels = LongValueLabels::builder().records(records).build();
+    let record = ExtensionRecord::LongValueLabels(labels);
     let record = DictionaryRecord::Extension(record);
     Ok(record)
 }
@@ -896,7 +911,8 @@ fn read_long_string_missing_values(envelope: &ExtensionEnvelope) -> Result<Dicti
         envelope.encoding,
         envelope.element_size_position,
     )?;
-    let record = ExtensionRecord::LongMissingValues(records);
+    let values = LongMissingValues::builder().records(records).build();
+    let record = ExtensionRecord::LongMissingValues(values);
     let record = DictionaryRecord::Extension(record);
     Ok(record)
 }
@@ -2756,7 +2772,7 @@ mod tests {
         let DictionaryRecord::Extension(ExtensionRecord::CharacterEncoding(name)) = record else {
             panic!("expected CharacterEncoding, got {record:?}");
         };
-        assert_eq!(name, "UTF-8");
+        assert_eq!(name.name(), "UTF-8");
         assert!(dict.warnings().is_empty());
     }
 
@@ -2773,7 +2789,7 @@ mod tests {
         else {
             panic!("expected CharacterEncoding");
         };
-        assert_eq!(name, "windows-1252");
+        assert_eq!(name.name(), "windows-1252");
     }
 
     #[test]
@@ -2789,7 +2805,7 @@ mod tests {
         else {
             panic!("expected CharacterEncoding");
         };
-        assert_eq!(name, "UTF-8");
+        assert_eq!(name.name(), "UTF-8");
     }
 
     #[test]
@@ -2805,7 +2821,7 @@ mod tests {
         else {
             panic!("expected CharacterEncoding");
         };
-        assert_eq!(name, "UTF-8");
+        assert_eq!(name.name(), "UTF-8");
     }
 
     #[test]
@@ -2821,7 +2837,7 @@ mod tests {
         else {
             panic!("expected CharacterEncoding");
         };
-        assert!(name.is_empty());
+        assert!(name.name().is_empty());
         assert!(dict.warnings().is_empty());
     }
 
@@ -2866,6 +2882,7 @@ mod tests {
         else {
             panic!("expected LongVariableNames, got {record:?}");
         };
+        let mappings = mappings.mappings();
         assert_eq!(mappings.len(), 1);
         assert_eq!(mappings[0].short_name(), "V1");
         assert_eq!(mappings[0].long_name(), "Variable1");
@@ -2893,6 +2910,7 @@ mod tests {
         else {
             panic!("expected LongVariableNames");
         };
+        let mappings = mappings.mappings();
         let names: Vec<(&str, &str)> = mappings
             .iter()
             .map(|m| (m.short_name(), m.long_name()))
@@ -2924,6 +2942,7 @@ mod tests {
         else {
             panic!("expected LongVariableNames");
         };
+        let mappings = mappings.mappings();
         assert_eq!(mappings.len(), 2);
         assert!(dict.warnings().is_empty());
     }
@@ -2949,6 +2968,7 @@ mod tests {
         else {
             panic!("expected LongVariableNames");
         };
+        let mappings = mappings.mappings();
         assert_eq!(mappings[0].long_name(), "Long");
     }
 
@@ -2976,6 +2996,7 @@ mod tests {
         else {
             panic!("expected LongVariableNames");
         };
+        let mappings = mappings.mappings();
         assert_eq!(mappings[0].long_name(), "café");
     }
 
@@ -2992,6 +3013,7 @@ mod tests {
         else {
             panic!("expected LongVariableNames");
         };
+        let mappings = mappings.mappings();
         assert!(mappings.is_empty());
         assert!(dict.warnings().is_empty());
     }
@@ -3063,6 +3085,7 @@ mod tests {
         else {
             panic!("expected VeryLongStrings, got {record:?}");
         };
+        let declarations = declarations.strings();
         assert_eq!(declarations.len(), 1);
         assert_eq!(declarations[0].short_name(), "RESPONSE");
         assert_eq!(declarations[0].width(), 226);
@@ -3090,6 +3113,7 @@ mod tests {
         else {
             panic!("expected VeryLongStrings");
         };
+        let declarations = declarations.strings();
         let pairs: Vec<(&str, u32)> = declarations
             .iter()
             .map(|d| (d.short_name(), d.width()))
@@ -3119,6 +3143,7 @@ mod tests {
         else {
             panic!("expected VeryLongStrings");
         };
+        let declarations = declarations.strings();
         assert_eq!(declarations.len(), 1);
         assert_eq!(declarations[0].width(), 300);
     }
@@ -3136,6 +3161,7 @@ mod tests {
         else {
             panic!("expected VeryLongStrings");
         };
+        let declarations = declarations.strings();
         assert!(declarations.is_empty());
     }
 
@@ -3362,6 +3388,7 @@ mod tests {
         else {
             panic!("expected FileAttributes, got {record:?}");
         };
+        let attributes = attributes.attributes();
         assert_eq!(attributes.len(), 2);
         assert_eq!(attributes[0].name(), "owner");
         assert_eq!(attributes[0].values(), &["Alice".to_string()]);
@@ -3410,6 +3437,7 @@ mod tests {
         else {
             panic!("expected VariableAttributes, got {record:?}");
         };
+        let records = records.records();
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].variable_name(), "weight");
         assert_eq!(records[0].attributes()[0].name(), "$@Role");
@@ -3602,6 +3630,7 @@ mod tests {
         let DictionaryRecord::Extension(ExtensionRecord::LongValueLabels(records)) = record else {
             panic!("expected LongValueLabels, got {record:?}");
         };
+        let records = records.records();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].variable_name(), "abc");
         assert_eq!(records[0].width(), 20);
@@ -3656,6 +3685,7 @@ mod tests {
         let DictionaryRecord::Extension(ExtensionRecord::LongMissingValues(records)) = record else {
             panic!("expected LongMissingValues, got {record:?}");
         };
+        let records = records.records();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].variable_name(), "abc");
         assert_eq!(records[0].values(), &[b"MISS".to_vec(), b"GONE".to_vec()]);
