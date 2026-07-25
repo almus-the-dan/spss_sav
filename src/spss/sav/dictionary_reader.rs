@@ -15,9 +15,10 @@ use encoding_rs::Encoding;
 use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::dictionary_format::{
     DICTIONARY_TERMINATOR_FILLER_LEN, DOCUMENT_LINE_LEN, EXTENSION_SUBTYPE_CHARACTER_ENCODING,
-    EXTENSION_SUBTYPE_DISPLAY_PARAMETERS, EXTENSION_SUBTYPE_EXTENDED_NUMBER_OF_CASES,
-    EXTENSION_SUBTYPE_FLOAT_INFO, EXTENSION_SUBTYPE_LONG_VARIABLE_NAMES,
-    EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO, EXTENSION_SUBTYPE_VERY_LONG_STRINGS,
+    EXTENSION_SUBTYPE_DATA_FILE_ATTRIBUTES, EXTENSION_SUBTYPE_DISPLAY_PARAMETERS,
+    EXTENSION_SUBTYPE_EXTENDED_NUMBER_OF_CASES, EXTENSION_SUBTYPE_FLOAT_INFO,
+    EXTENSION_SUBTYPE_LONG_VARIABLE_NAMES, EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO,
+    EXTENSION_SUBTYPE_VARIABLE_ATTRIBUTES, EXTENSION_SUBTYPE_VERY_LONG_STRINGS,
     MISSING_VALUE_ENTRY_LEN, RECORD_TYPE_DICTIONARY_TERMINATOR, RECORD_TYPE_DOCUMENT,
     RECORD_TYPE_EXTENSION, RECORD_TYPE_VALUE_LABEL, RECORD_TYPE_VALUE_LABEL_VARIABLES,
     RECORD_TYPE_VARIABLE, VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN,
@@ -27,9 +28,10 @@ use crate::spss::sav::dictionary_format::{
 };
 use crate::spss::sav::dictionary_parse::{
     VariableTypeCode, compose_raw_missing_values, normalize_value_label_variable_indices,
-    parse_character_encoding, parse_display_parameters, parse_extended_number_of_cases,
-    parse_float_sentinels, parse_has_label, parse_long_variable_names, parse_machine_integer_info,
-    parse_missing_value_count, parse_sav_format, parse_short_name, parse_value_label_entry,
+    parse_character_encoding, parse_data_file_attributes, parse_display_parameters,
+    parse_extended_number_of_cases, parse_float_sentinels, parse_has_label,
+    parse_long_variable_names, parse_machine_integer_info, parse_missing_value_count,
+    parse_sav_format, parse_short_name, parse_value_label_entry, parse_variable_attributes,
     parse_variable_type, parse_very_long_strings, value_label_entry_size,
 };
 use crate::spss::sav::dictionary_record::DictionaryRecord;
@@ -439,6 +441,8 @@ impl<R: Read> DictionaryReader<R> {
             EXTENSION_SUBTYPE_LONG_VARIABLE_NAMES => read_long_variable_names(&envelope),
             EXTENSION_SUBTYPE_VERY_LONG_STRINGS => read_very_long_strings(&envelope),
             EXTENSION_SUBTYPE_DISPLAY_PARAMETERS => read_display_parameters(&envelope),
+            EXTENSION_SUBTYPE_DATA_FILE_ATTRIBUTES => read_data_file_attributes(&envelope),
+            EXTENSION_SUBTYPE_VARIABLE_ATTRIBUTES => read_variable_attributes(&envelope),
             _ => Ok(self.read_unknown_extension(envelope)),
         }
     }
@@ -769,6 +773,32 @@ fn read_very_long_strings(envelope: &ExtensionEnvelope) -> Result<DictionaryReco
         envelope.element_size_position,
     )?;
     let record = ExtensionRecord::VeryLongStrings(declarations);
+    let record = DictionaryRecord::Extension(record);
+    Ok(record)
+}
+
+/// Subtype 17 — file-level custom attributes.
+fn read_data_file_attributes(envelope: &ExtensionEnvelope) -> Result<DictionaryRecord> {
+    let attributes = parse_data_file_attributes(
+        envelope.element_size,
+        &envelope.payload,
+        envelope.encoding,
+        envelope.element_size_position,
+    )?;
+    let record = ExtensionRecord::FileAttributes(attributes);
+    let record = DictionaryRecord::Extension(record);
+    Ok(record)
+}
+
+/// Subtype 18 — per-variable custom attributes.
+fn read_variable_attributes(envelope: &ExtensionEnvelope) -> Result<DictionaryRecord> {
+    let records = parse_variable_attributes(
+        envelope.element_size,
+        &envelope.payload,
+        envelope.encoding,
+        envelope.element_size_position,
+    )?;
+    let record = ExtensionRecord::VariableAttributes(records);
     let record = DictionaryRecord::Extension(record);
     Ok(record)
 }

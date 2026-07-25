@@ -24,6 +24,9 @@ pub mod multiple_response_set;
 pub mod raw_display_parameters;
 /// Catch-all for unrecognized extension subtypes.
 pub mod unknown_extension;
+/// One attribute inside a per-variable attributes record (subtype
+/// 18).
+pub mod variable_attribute_entry;
 /// Per-variable custom attributes (subtype 18).
 pub mod variable_attribute_record;
 /// Per-variable display parameters (subtype 11).

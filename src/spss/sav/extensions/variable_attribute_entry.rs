@@ -1,34 +1,34 @@
-//! Subtype 17 — file-level custom attributes.
+//! One attribute inside an extension subtype-18 record.
 
-/// One file-level custom attribute from extension record subtype 17.
+/// A single custom attribute belonging to one variable's attribute
+/// set in extension record subtype 18.
 ///
-/// File attributes are arbitrary `name(values)` pairs attached to the
-/// dataset as a whole rather than to a specific variable. A single
-/// attribute may carry more than one value: on disk a `name` is
-/// followed, inside parentheses, by one or more single-quoted,
-/// line-feed-terminated strings.
+/// Structurally this mirrors
+/// [`FileAttribute`](crate::spss::sav::extensions::file_attribute::FileAttribute)
+/// — a `name` followed by one or more values — but it is kept as a
+/// distinct type because it lives inside a
+/// [`VariableAttributeRecord`](crate::spss::sav::extensions::variable_attribute_record::VariableAttributeRecord)
+/// rather than standing on its own.
 ///
 /// This is the wire-level form yielded during dictionary streaming.
 /// The `name` is preserved verbatim, including any `[n]` array-index
-/// suffix SPSS writes for multivalued attributes (e.g. `fred[1]`);
-/// collapsing indexed names into a single logical array is deferred
-/// to schema finalization. The values have had their single outer
-/// quote pair stripped but are otherwise verbatim.
-///
-/// Both `name` and `values` are already decoded through the file's
-/// active encoding.
+/// suffix SPSS writes for multivalued attributes; collapsing indexed
+/// names into a single logical array is deferred to schema
+/// finalization. The values have had their single outer quote pair
+/// stripped but are otherwise verbatim. Both `name` and `values` are
+/// already decoded through the file's active encoding.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FileAttribute {
+pub struct VariableAttributeEntry {
     name: String,
     values: Vec<String>,
 }
 
-impl FileAttribute {
-    /// Returns a fresh [`FileAttributeBuilder`].
+impl VariableAttributeEntry {
+    /// Returns a fresh [`VariableAttributeEntryBuilder`].
     #[must_use]
     #[inline]
-    pub fn builder() -> FileAttributeBuilder {
-        FileAttributeBuilder::default()
+    pub fn builder() -> VariableAttributeEntryBuilder {
+        VariableAttributeEntryBuilder::default()
     }
 
     /// Attribute name, verbatim from disk (may include a trailing
@@ -48,14 +48,14 @@ impl FileAttribute {
     }
 }
 
-/// Builder for [`FileAttribute`].
+/// Builder for [`VariableAttributeEntry`].
 #[derive(Debug, Default, Clone)]
-pub struct FileAttributeBuilder {
+pub struct VariableAttributeEntryBuilder {
     name: Option<String>,
     values: Vec<String>,
 }
 
-impl FileAttributeBuilder {
+impl VariableAttributeEntryBuilder {
     /// Sets the attribute name.
     #[must_use]
     #[inline]
@@ -80,14 +80,14 @@ impl FileAttributeBuilder {
         self
     }
 
-    /// Finalizes this builder into a [`FileAttribute`].
+    /// Finalizes this builder into a [`VariableAttributeEntry`].
     ///
     /// An unset name defaults to the empty string; unset values
     /// default to an empty list.
     #[must_use]
     #[inline]
-    pub fn build(self) -> FileAttribute {
-        FileAttribute {
+    pub fn build(self) -> VariableAttributeEntry {
+        VariableAttributeEntry {
             name: self.name.unwrap_or_default(),
             values: self.values,
         }

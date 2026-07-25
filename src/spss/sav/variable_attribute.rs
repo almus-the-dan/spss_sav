@@ -3,7 +3,7 @@
 /// One custom `(name, value)` attribute attached to a SAV variable.
 ///
 /// Variable attributes are user-defined free-form metadata stored in
-/// extension record subtype 17. Attribute names are typically dotted
+/// extension record subtype 18. Attribute names are typically dotted
 /// identifiers (e.g. `$@Role`); the value is a single string that may
 /// encode arbitrary content.
 ///

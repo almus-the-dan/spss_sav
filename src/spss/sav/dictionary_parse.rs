@@ -31,10 +31,12 @@ use crate::spss::sav::dictionary_format::{
     VERY_LONG_STRINGS_PAIR_SEPARATOR,
 };
 use crate::spss::sav::extensions::extended_number_of_cases::ExtendedNumberOfCases;
+use crate::spss::sav::extensions::file_attribute::FileAttribute;
 use crate::spss::sav::extensions::float_sentinels::FloatSentinels;
 use crate::spss::sav::extensions::long_variable_name::LongVariableName;
 use crate::spss::sav::extensions::machine_integer_info::MachineIntegerInfo;
 use crate::spss::sav::extensions::raw_display_parameters::RawDisplayParameters;
+use crate::spss::sav::extensions::variable_attribute_record::VariableAttributeRecord;
 use crate::spss::sav::extensions::very_long_string::VeryLongString;
 use crate::spss::sav::raw_missing_values::RawMissingValues;
 use crate::spss::sav::raw_value_label_entry::RawValueLabelEntry;
@@ -725,6 +727,65 @@ pub(super) fn parse_very_long_strings(
         declarations.push(declaration);
     }
     Ok(declarations)
+}
+
+/// Parses an extension subtype-17 (data file attributes) payload into
+/// its list of [`FileAttribute`]s.
+///
+/// The payload is a single attribute set: one or more attributes
+/// concatenated. Each attribute is a name (everything up to the next
+/// `(`) followed, inside parentheses, by one or more values, each a
+/// single-quoted string terminated by a line feed (`0x0a`). Only the
+/// single outer quote pair is stripped from each value; interior
+/// bytes (including any doubled `''`) are kept verbatim. Names are
+/// preserved verbatim, including any `[n]` array-index suffix — the
+/// index collapse is deferred to schema finalization. Both names and
+/// values are decoded through `encoding`.
+///
+/// # Errors
+/// - [`Field::ExtensionElementSize`] when `actual_size` isn't `1`.
+/// - [`Field::FileAttribute`] on a structurally malformed attribute
+///   (missing `(`, unterminated value group, or a value not properly
+///   quoted) — exact policy pinned in the implementation.
+pub(super) fn parse_data_file_attributes(
+    actual_size: u32,
+    payload: &[u8],
+    encoding: &'static Encoding,
+    position: u64,
+) -> Result<Vec<FileAttribute>> {
+    todo!(
+        "parse subtype-17 data file attributes: {actual_size} {} {} {position}",
+        payload.len(),
+        encoding.name()
+    )
+}
+
+/// Parses an extension subtype-18 (variable attributes) payload into
+/// its list of [`VariableAttributeRecord`]s.
+///
+/// The payload is a sequence of `variable_name:attribute-set` groups,
+/// each after the first delimited from the previous by `/`. The
+/// attribute set within each group uses the same grammar as subtype
+/// 17 (see [`parse_data_file_attributes`]). Variable names and
+/// attribute contents are decoded through `encoding`.
+///
+/// # Errors
+/// - [`Field::ExtensionElementSize`] when `actual_size` isn't `1`.
+/// - [`Field::VariableAttribute`] on a structurally malformed group
+///   (missing `:`, missing `(`, unterminated value group, or a value
+///   not properly quoted) — exact policy pinned in the
+///   implementation.
+pub(super) fn parse_variable_attributes(
+    actual_size: u32,
+    payload: &[u8],
+    encoding: &'static Encoding,
+    position: u64,
+) -> Result<Vec<VariableAttributeRecord>> {
+    todo!(
+        "parse subtype-18 variable attributes: {actual_size} {} {} {position}",
+        payload.len(),
+        encoding.name()
+    )
 }
 
 /// Parses an extension subtype-11 payload (per-variable display

@@ -396,6 +396,78 @@ pub(super) const EXTENSION_SUBTYPE_CHARACTER_ENCODING: i32 = 20;
 #[allow(dead_code)] // exercised by the subtype-20 parser.
 pub(super) const CHARACTER_ENCODING_ELEMENT_SIZE: u32 = 1;
 
+/// Extension subtype 17 — file-level custom attributes. The payload
+/// is a fixed-`element_size`-of-1, variable-`element_count` byte
+/// stream holding a single attribute set: one or more attributes
+/// concatenated. Each attribute is a name (up to
+/// [`ATTRIBUTE_NAME_TERMINATOR`], `(`) followed by one or more values
+/// enclosed in [`ATTRIBUTE_VALUES_OPEN`]/[`ATTRIBUTE_VALUES_CLOSE`]
+/// (`(`/`)`); each value is a [`ATTRIBUTE_VALUE_QUOTE`]-delimited
+/// (`'`) string followed by [`ATTRIBUTE_VALUE_TERMINATOR`] (a line
+/// feed). Per PSPP's `parse_attributes`; `ReadStat` does not parse
+/// this subtype.
+#[allow(dead_code)] // exercised by the subtype-17 parser.
+pub(super) const EXTENSION_SUBTYPE_DATA_FILE_ATTRIBUTES: i32 = 17;
+
+/// `element_size` an extension subtype-17 record must declare. Each
+/// element is one byte of the attribute stream.
+#[allow(dead_code)] // exercised by the subtype-17 parser.
+pub(super) const DATA_FILE_ATTRIBUTES_ELEMENT_SIZE: u32 = 1;
+
+/// Extension subtype 18 — per-variable custom attributes. The payload
+/// is a fixed-`element_size`-of-1, variable-`element_count` byte
+/// stream of `variable_name`+[`VARIABLE_ATTRIBUTES_NAME_TERMINATOR`]
+/// (`:`)+attribute-set groups, each group after the first delimited
+/// from the previous by [`VARIABLE_ATTRIBUTES_SET_SEPARATOR`] (`/`).
+/// The attribute-set within each group uses the same grammar as
+/// subtype 17. Per PSPP's `parse_variable_attributes`; `ReadStat`
+/// does not parse this subtype.
+#[allow(dead_code)] // exercised by the subtype-18 parser.
+pub(super) const EXTENSION_SUBTYPE_VARIABLE_ATTRIBUTES: i32 = 18;
+
+/// `element_size` an extension subtype-18 record must declare. Each
+/// element is one byte of the attribute stream.
+#[allow(dead_code)] // exercised by the subtype-18 parser.
+pub(super) const VARIABLE_ATTRIBUTES_ELEMENT_SIZE: u32 = 1;
+
+/// Byte terminating an attribute's name in a subtype-17/18 payload
+/// (a literal `(`); the values group opens immediately after.
+#[allow(dead_code)] // exercised by the subtype-17/18 parser.
+pub(super) const ATTRIBUTE_NAME_TERMINATOR: u8 = b'(';
+
+/// Byte opening an attribute's value group in a subtype-17/18 payload
+/// (a literal `(`). Alias of [`ATTRIBUTE_NAME_TERMINATOR`], named for
+/// the value-group side of the grammar.
+#[allow(dead_code)] // exercised by the subtype-17/18 parser.
+pub(super) const ATTRIBUTE_VALUES_OPEN: u8 = b'(';
+
+/// Byte closing an attribute's value group in a subtype-17/18 payload
+/// (a literal `)`).
+#[allow(dead_code)] // exercised by the subtype-17/18 parser.
+pub(super) const ATTRIBUTE_VALUES_CLOSE: u8 = b')';
+
+/// Quote byte wrapping each attribute value in a subtype-17/18
+/// payload (a literal `'`). Only the single outer pair is stripped;
+/// interior bytes are kept verbatim.
+#[allow(dead_code)] // exercised by the subtype-17/18 parser.
+pub(super) const ATTRIBUTE_VALUE_QUOTE: u8 = b'\'';
+
+/// Byte terminating each attribute value in a subtype-17/18 payload
+/// (a line feed, `0x0a`). Values are delimited by this, not by the
+/// surrounding quotes.
+#[allow(dead_code)] // exercised by the subtype-17/18 parser.
+pub(super) const ATTRIBUTE_VALUE_TERMINATOR: u8 = b'\n';
+
+/// Byte separating a variable's name from its attribute set in a
+/// subtype-18 payload (a literal `:`).
+#[allow(dead_code)] // exercised by the subtype-18 parser.
+pub(super) const VARIABLE_ATTRIBUTES_NAME_TERMINATOR: u8 = b':';
+
+/// Byte delimiting adjacent per-variable attribute-set groups in a
+/// subtype-18 payload (a literal `/`).
+#[allow(dead_code)] // exercised by the subtype-18 parser.
+pub(super) const VARIABLE_ATTRIBUTES_SET_SEPARATOR: u8 = b'/';
+
 /// Byte position of the decimals byte within a 4-byte format code
 /// (after reduction to native byte order).
 #[allow(dead_code)] // exercised once the dictionary reader implementation lands.
