@@ -431,6 +431,61 @@ pub(super) const VARIABLE_SETS_NAME_TERMINATOR: u8 = b'=';
 #[allow(dead_code)] // exercised by the subtype-5 parser.
 pub(super) const VARIABLE_SETS_MEMBER_SEPARATOR: u8 = b' ';
 
+/// Extension subtype 7 — multiple response sets (pre-v14). The
+/// payload is a fixed-`element_size`-of-1, variable-`element_count`
+/// byte stream of one set per line, each ending with
+/// [`MULTIPLE_RESPONSE_SETS_LINE_SEPARATOR`] (a line feed). A line is
+/// `$name`[`MULTIPLE_RESPONSE_SETS_NAME_TERMINATOR`] (`=`) then a type
+/// letter ([`MULTIPLE_RESPONSE_SET_TYPE_CATEGORY`] `C` /
+/// [`MULTIPLE_RESPONSE_SET_TYPE_DICHOTOMY_VARIABLE_LABELS`] `D`),
+/// kind-specific fields, a counted-string label, and space-separated
+/// member long names (separated by
+/// [`MULTIPLE_RESPONSE_SETS_FIELD_SEPARATOR`]).
+#[allow(dead_code)] // exercised by the subtype-7/19 parser.
+pub(super) const EXTENSION_SUBTYPE_MULTIPLE_RESPONSE_SETS: i32 = 7;
+
+/// Extension subtype 19 — multiple response sets (v14+). Same grammar
+/// as subtype 7 but additionally permits the
+/// [`MULTIPLE_RESPONSE_SET_TYPE_DICHOTOMY_COUNTED_VALUES`] (`E`) type,
+/// which carries a label-source indicator. Per PSPP; `ReadStat` does
+/// not parse this subtype.
+#[allow(dead_code)] // exercised by the subtype-7/19 parser.
+pub(super) const EXTENSION_SUBTYPE_MULTIPLE_RESPONSE_SETS_EXTENDED: i32 = 19;
+
+/// `element_size` an extension subtype-7/19 record must declare.
+#[allow(dead_code)] // exercised by the subtype-7/19 parser.
+pub(super) const MULTIPLE_RESPONSE_SETS_ELEMENT_SIZE: u32 = 1;
+
+/// Byte terminating each set line in a subtype-7/19 payload (a line
+/// feed).
+#[allow(dead_code)] // exercised by the subtype-7/19 parser.
+pub(super) const MULTIPLE_RESPONSE_SETS_LINE_SEPARATOR: u8 = b'\n';
+
+/// Byte separating a set's name from its body in a subtype-7/19
+/// payload (a literal `=`).
+#[allow(dead_code)] // exercised by the subtype-7/19 parser.
+pub(super) const MULTIPLE_RESPONSE_SETS_NAME_TERMINATOR: u8 = b'=';
+
+/// Byte separating fields (and member names) within a subtype-7/19
+/// set line, and prefixing a counted string's bytes (a space).
+#[allow(dead_code)] // exercised by the subtype-7/19 parser.
+pub(super) const MULTIPLE_RESPONSE_SETS_FIELD_SEPARATOR: u8 = b' ';
+
+/// Set-type letter for a multiple-category set in a subtype-7/19
+/// payload.
+#[allow(dead_code)] // exercised by the subtype-7/19 parser.
+pub(super) const MULTIPLE_RESPONSE_SET_TYPE_CATEGORY: u8 = b'C';
+
+/// Set-type letter for a multiple-dichotomy set with
+/// `CATEGORYLABELS=VARLABELS` in a subtype-7/19 payload.
+#[allow(dead_code)] // exercised by the subtype-7/19 parser.
+pub(super) const MULTIPLE_RESPONSE_SET_TYPE_DICHOTOMY_VARIABLE_LABELS: u8 = b'D';
+
+/// Set-type letter for a multiple-dichotomy set with
+/// `CATEGORYLABELS=COUNTEDVALUES` in a subtype-19 payload.
+#[allow(dead_code)] // exercised by the subtype-7/19 parser.
+pub(super) const MULTIPLE_RESPONSE_SET_TYPE_DICHOTOMY_COUNTED_VALUES: u8 = b'E';
+
 /// Extension subtype 10 — extra product information. The payload is a
 /// fixed-`element_size`-of-1, variable-`element_count` byte string of
 /// free-form text identifying the writing product, beyond the header's

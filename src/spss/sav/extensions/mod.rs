@@ -1,3 +1,6 @@
+/// Where a multiple-dichotomy set's category labels come from
+/// (subtypes 7 / 19).
+pub mod category_label_source;
 /// SPSS Data Entry product information (subtype 15 per the spec
 /// md; not confirmed against PSPP or `ReadStat`).
 pub mod data_entry;
@@ -25,6 +28,8 @@ pub mod machine_integer_info;
 /// Multiple response sets / MRSETS (subtype 7 pre-v14; subtype 19
 /// post-v14 with `CATEGORYLABELS`).
 pub mod multiple_response_set;
+/// The kind of multiple response set (subtypes 7 / 19).
+pub mod multiple_response_set_kind;
 /// Wire-level payload of an extension subtype-11 record.
 pub mod raw_display_parameters;
 /// Catch-all for unrecognized extension subtypes.

@@ -14,7 +14,10 @@ use spss_sav::spss::sav::byte_order::ByteOrder;
 use spss_sav::spss::sav::compression::Compression;
 use spss_sav::spss::sav::dictionary_record::DictionaryRecord;
 use spss_sav::spss::sav::document_record::DocumentRecord;
+use spss_sav::spss::sav::extensions::category_label_source::CategoryLabelSource;
 use spss_sav::spss::sav::extensions::extension_record::ExtensionRecord;
+use spss_sav::spss::sav::extensions::multiple_response_set::MultipleResponseSet;
+use spss_sav::spss::sav::extensions::multiple_response_set_kind::MultipleResponseSetKind;
 use spss_sav::spss::sav::float_format::FloatFormat;
 use spss_sav::spss::sav::raw_missing_values::RawMissingValues;
 use spss_sav::spss::sav::raw_value_label_set::RawValueLabelSet;
@@ -283,33 +286,68 @@ fn comprehensive_attribute_and_long_string_extensions() {
 }
 
 #[test]
-fn comprehensive_multiple_response_sets_are_still_unparsed() {
-    // Subtypes 7 and 19 (multiple response sets) are not yet wired, so
-    // they surface as Unknown. This test captures the ground-truth raw
-    // payloads PSPP wrote; when 7/19 land, replace these assertions
-    // with typed ones.
+fn comprehensive_multiple_response_sets() {
+    // PSPP writes the C/D groups to subtype 7 and the E group to
+    // subtype 19; both surface as MultipleResponseSets records. Flatten
+    // them and assert each set against the real bytes.
     let records = read_dictionary(COMPREHENSIVE);
     let extensions = extensions(&records);
+    let sets: Vec<&MultipleResponseSet> = extensions
+        .iter()
+        .filter_map(|e| match e {
+            ExtensionRecord::MultipleResponseSets(s) => Some(s),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(sets.len(), 3);
 
-    let unknown_payload = |subtype: u32| -> Vec<u8> {
-        extensions
-            .iter()
-            .find_map(|e| match e {
-                ExtensionRecord::Unknown(u) if u.subtype() == subtype => Some(u.payload().to_vec()),
-                _ => None,
-            })
-            .unwrap_or_else(|| panic!("expected Unknown extension subtype {subtype}"))
+    let find = |name: &str| -> &MultipleResponseSet {
+        sets.iter()
+            .copied()
+            .find(|s| s.name() == name)
+            .unwrap_or_else(|| panic!("no multiple response set named {name}"))
     };
 
-    // Subtype 7 — C (category) and D (dichotomy/VARLABELS) groups.
-    let sets_7 = String::from_utf8(unknown_payload(7)).unwrap();
+    // $dich — multiple dichotomy, counted value "1", category labels
+    // from variable labels (wire type D). Names keep their leading `$`.
+    let dich = find("$dich");
+    assert_eq!(dich.label(), "Dichotomy set");
     assert_eq!(
-        sets_7,
-        "$dich=D1 1 13 Dichotomy set q1 q2 q3\n$cat=C 12 Category set q1 q2\n"
+        dich.variables(),
+        ["q1".to_string(), "q2".to_string(), "q3".to_string()]
     );
+    let MultipleResponseSetKind::MultipleDichotomy {
+        counted_value,
+        category_labels,
+    } = dich.kind()
+    else {
+        panic!("expected dichotomy, got {:?}", dich.kind());
+    };
+    assert_eq!(counted_value.as_str(), "1");
+    assert_eq!(*category_labels, CategoryLabelSource::VariableLabels);
 
-    // Subtype 19 — E (dichotomy/COUNTEDVALUES) group with the 1/11
-    // label-source prefix.
-    let sets_19 = String::from_utf8(unknown_payload(19)).unwrap();
-    assert_eq!(sets_19, "$counted=E 1 1 1 0  q2 q3\n");
+    // $cat — multiple category (wire type C), no counted value.
+    let cat = find("$cat");
+    assert_eq!(cat.label(), "Category set");
+    assert_eq!(cat.variables(), ["q1".to_string(), "q2".to_string()]);
+    assert_eq!(*cat.kind(), MultipleResponseSetKind::MultipleCategory);
+
+    // $counted — multiple dichotomy with category labels from counted
+    // values (wire type E, subtype 19), an empty label, label source 1.
+    let counted = find("$counted");
+    assert_eq!(counted.label(), "");
+    assert_eq!(counted.variables(), ["q2".to_string(), "q3".to_string()]);
+    let MultipleResponseSetKind::MultipleDichotomy {
+        counted_value,
+        category_labels,
+    } = counted.kind()
+    else {
+        panic!("expected dichotomy, got {:?}", counted.kind());
+    };
+    assert_eq!(counted_value.as_str(), "1");
+    assert_eq!(
+        *category_labels,
+        CategoryLabelSource::CountedValues { label_source: 1 }
+    );
 }

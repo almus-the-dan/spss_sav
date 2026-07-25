@@ -20,6 +20,7 @@ use crate::spss::sav::dictionary_format::{
     EXTENSION_SUBTYPE_FLOAT_INFO,
     EXTENSION_SUBTYPE_LONG_STRING_MISSING_VALUES, EXTENSION_SUBTYPE_LONG_STRING_VALUE_LABELS,
     EXTENSION_SUBTYPE_LONG_VARIABLE_NAMES, EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO,
+    EXTENSION_SUBTYPE_MULTIPLE_RESPONSE_SETS, EXTENSION_SUBTYPE_MULTIPLE_RESPONSE_SETS_EXTENDED,
     EXTENSION_SUBTYPE_UUID, EXTENSION_SUBTYPE_VARIABLE_ATTRIBUTES, EXTENSION_SUBTYPE_VARIABLE_SETS,
     EXTENSION_SUBTYPE_VERY_LONG_STRINGS,
     MISSING_VALUE_ENTRY_LEN, RECORD_TYPE_DICTIONARY_TERMINATOR, RECORD_TYPE_DOCUMENT,
@@ -35,7 +36,8 @@ use crate::spss::sav::dictionary_parse::{
     parse_extended_number_of_cases, parse_float_sentinels, parse_has_label,
     parse_extra_product_info, parse_long_string_missing_values, parse_long_string_value_labels,
     parse_long_variable_names, parse_machine_integer_info, parse_missing_value_count,
-    parse_sav_format, parse_short_name, parse_uuid, parse_value_label_entry,
+    parse_multiple_response_sets, parse_sav_format, parse_short_name, parse_uuid,
+    parse_value_label_entry,
     parse_variable_attributes, parse_variable_sets, parse_variable_type, parse_very_long_strings,
     value_label_entry_size,
 };
@@ -447,6 +449,10 @@ impl<R: Read> DictionaryReader<R> {
             EXTENSION_SUBTYPE_VERY_LONG_STRINGS => read_very_long_strings(&envelope),
             EXTENSION_SUBTYPE_DISPLAY_PARAMETERS => read_display_parameters(&envelope),
             EXTENSION_SUBTYPE_VARIABLE_SETS => read_variable_sets(&envelope),
+            EXTENSION_SUBTYPE_MULTIPLE_RESPONSE_SETS
+            | EXTENSION_SUBTYPE_MULTIPLE_RESPONSE_SETS_EXTENDED => {
+                read_multiple_response_sets(&envelope)
+            }
             EXTENSION_SUBTYPE_EXTRA_PRODUCT_INFO => read_extra_product_info(&envelope),
             EXTENSION_SUBTYPE_UUID => read_uuid(&envelope),
             EXTENSION_SUBTYPE_DATA_FILE_ATTRIBUTES => read_data_file_attributes(&envelope),
@@ -811,6 +817,19 @@ fn read_uuid(envelope: &ExtensionEnvelope) -> Result<DictionaryRecord> {
         envelope.element_size_position,
     )?;
     let record = ExtensionRecord::Uuid(uuid);
+    let record = DictionaryRecord::Extension(record);
+    Ok(record)
+}
+
+/// Subtypes 7 and 19 — multiple response sets.
+fn read_multiple_response_sets(envelope: &ExtensionEnvelope) -> Result<DictionaryRecord> {
+    let sets = parse_multiple_response_sets(
+        envelope.element_size,
+        &envelope.payload,
+        envelope.encoding,
+        envelope.element_size_position,
+    )?;
+    let record = ExtensionRecord::MultipleResponseSets(sets);
     let record = DictionaryRecord::Extension(record);
     Ok(record)
 }
