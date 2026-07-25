@@ -89,6 +89,13 @@ pub enum Field {
     FileAttribute,
     /// One attribute inside an extension subtype-18 record.
     VariableAttribute,
+    /// A per-variable block inside an extension subtype-21 record.
+    LongValueLabel,
+    /// A per-variable block inside an extension subtype-22 record.
+    LongMissingValue,
+    /// The missing-value count byte inside an extension subtype-22
+    /// record.
+    LongMissingValueCount,
     /// Cell value within a record.
     CellValue,
 }
@@ -120,6 +127,9 @@ impl fmt::Display for Field {
             Self::VeryLongStringPair => "very long string pair",
             Self::FileAttribute => "file attribute",
             Self::VariableAttribute => "variable attribute",
+            Self::LongValueLabel => "long value label",
+            Self::LongMissingValue => "long missing value",
+            Self::LongMissingValueCount => "long missing value count",
             Self::CellValue => "cell value",
         })
     }

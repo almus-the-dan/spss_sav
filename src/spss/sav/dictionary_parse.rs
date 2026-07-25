@@ -14,6 +14,7 @@
 
 use encoding_rs::Encoding;
 
+use crate::spss::sav::byte_cursor::ByteCursor;
 use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::dictionary_format::{
     ATTRIBUTE_NAME_TERMINATOR, ATTRIBUTE_VALUE_QUOTE, ATTRIBUTE_VALUE_TERMINATOR,
@@ -24,7 +25,9 @@ use crate::spss::sav::dictionary_format::{
     FLOAT_SENTINELS_ELEMENT_COUNT, FLOAT_SENTINELS_ELEMENT_SIZE, FLOAT_SENTINELS_HIGHEST_OFFSET,
     FLOAT_SENTINELS_LOWEST_OFFSET, FLOAT_SENTINELS_SYSTEM_MISSING_OFFSET,
     FORMAT_CODE_DECIMALS_BYTE, FORMAT_CODE_KIND_BYTE, FORMAT_CODE_WIDTH_BYTE,
-    LONG_VARIABLE_NAMES_ELEMENT_SIZE, LONG_VARIABLE_NAMES_KEY_VALUE_SEPARATOR,
+    LONG_STRING_MISSING_VALUE_MAX_COUNT, LONG_STRING_MISSING_VALUES_ELEMENT_SIZE,
+    LONG_STRING_VALUE_LABELS_ELEMENT_SIZE, LONG_VARIABLE_NAMES_ELEMENT_SIZE,
+    LONG_VARIABLE_NAMES_KEY_VALUE_SEPARATOR,
     LONG_VARIABLE_NAMES_PAIR_SEPARATOR, MACHINE_INTEGER_INFO_ELEMENT_COUNT,
     MACHINE_INTEGER_INFO_ELEMENT_SIZE, VALUE_LABEL_ENTRY_ALIGNMENT,
     VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN, VARIABLE_TYPE_CONTINUATION,
@@ -36,6 +39,9 @@ use crate::spss::sav::dictionary_format::{
 use crate::spss::sav::extensions::extended_number_of_cases::ExtendedNumberOfCases;
 use crate::spss::sav::extensions::file_attribute::FileAttribute;
 use crate::spss::sav::extensions::float_sentinels::FloatSentinels;
+use crate::spss::sav::extensions::long_missing_value_record::LongMissingValueRecord;
+use crate::spss::sav::extensions::long_value_label::LongValueLabel;
+use crate::spss::sav::extensions::long_value_label_record::LongValueLabelRecord;
 use crate::spss::sav::extensions::long_variable_name::LongVariableName;
 use crate::spss::sav::extensions::machine_integer_info::MachineIntegerInfo;
 use crate::spss::sav::extensions::raw_display_parameters::RawDisplayParameters;
@@ -758,7 +764,7 @@ pub(super) fn parse_data_file_attributes(
     position: u64,
 ) -> Result<Vec<FileAttribute>> {
     if actual_size != DATA_FILE_ATTRIBUTES_ELEMENT_SIZE {
-        return Err(attribute_error(position, Field::ExtensionElementSize));
+        return Err(unexpected_value_error(position, Field::ExtensionElementSize));
     }
     let mut cursor = payload;
     let mut attributes: Vec<FileAttribute> = Vec::new();
@@ -799,7 +805,7 @@ pub(super) fn parse_variable_attributes(
     position: u64,
 ) -> Result<Vec<VariableAttributeRecord>> {
     if actual_size != VARIABLE_ATTRIBUTES_ELEMENT_SIZE {
-        return Err(attribute_error(position, Field::ExtensionElementSize));
+        return Err(unexpected_value_error(position, Field::ExtensionElementSize));
     }
     let mut cursor = payload;
     let mut records: Vec<VariableAttributeRecord> = Vec::new();
@@ -824,11 +830,11 @@ fn parse_variable_attribute(
         .position(|&b| b == VARIABLE_ATTRIBUTES_NAME_TERMINATOR);
     let Some(name_end) = name_end
     else {
-        return Err(attribute_error(position, Field::VariableAttribute));
+        return Err(unexpected_value_error(position, Field::VariableAttribute));
     };
     let name_bytes = &cursor[..name_end];
     if name_bytes.is_empty() {
-        return Err(attribute_error(position, Field::VariableAttribute));
+        return Err(unexpected_value_error(position, Field::VariableAttribute));
     }
     *cursor = &cursor[name_end + 1..];
     let set = parse_attribute_set(cursor, encoding, position, Field::VariableAttribute)?;
@@ -844,8 +850,10 @@ fn parse_variable_attribute(
     Ok(builder.build())
 }
 
-/// Builds the structural-error for a malformed attribute record.
-fn attribute_error(position: u64, field: Field) -> SavError {
+/// Builds a dictionary-section `UnexpectedValue` format error tagged
+/// with `field`. Shared by the text (subtypes 17/18) and binary
+/// (subtypes 21/22) extension parsers.
+fn unexpected_value_error(position: u64, field: Field) -> SavError {
     SavError::format(
         Section::Dictionary,
         position,
@@ -875,11 +883,11 @@ fn parse_attribute_set(
         // The attribute name runs up to the `(` that opens its values.
         let name_end = cursor.iter().position(|&b| b == ATTRIBUTE_NAME_TERMINATOR);
         let Some(name_end) = name_end else {
-            return Err(attribute_error(position, field));
+            return Err(unexpected_value_error(position, field));
         };
         let name_bytes = &cursor[..name_end];
         if name_bytes.is_empty() {
-            return Err(attribute_error(position, field));
+            return Err(unexpected_value_error(position, field));
         }
         *cursor = &cursor[name_end + 1..];
         let values = parse_attribute_values(cursor, encoding, position, field)?;
@@ -903,7 +911,7 @@ fn parse_attribute_values(
     loop {
         let value_end = cursor.iter().position(|&b| b == ATTRIBUTE_VALUE_TERMINATOR);
         let Some(value_end) = value_end else {
-            return Err(attribute_error(position, field));
+            return Err(unexpected_value_error(position, field));
         };
         let value = decode_attribute_value(&cursor[..value_end], encoding);
         values.push(value);
@@ -914,7 +922,7 @@ fn parse_attribute_values(
                 return Ok(values);
             }
             Some(_) => {}
-            None => return Err(attribute_error(position, field)),
+            None => return Err(unexpected_value_error(position, field)),
         }
     }
 }
@@ -935,6 +943,155 @@ fn decode_attribute_value(bytes: &[u8], encoding: &'static Encoding) -> String {
     };
     let (value, _, _) = encoding.decode(inner);
     value.into_owned()
+}
+
+/// Parses an extension subtype-21 payload (long string value labels)
+/// into one [`LongValueLabelRecord`] per variable.
+///
+/// The payload repeats until exhausted: a `u32`-length-prefixed
+/// variable name, a `u32` declared width, a `u32` label count, then
+/// that many `(value, label)` pairs where each of value and label is a
+/// `u32`-length-prefixed byte string. All `u32` fields honor
+/// `byte_order`. Variable names and labels are decoded through
+/// `encoding`; the value bytes are kept verbatim.
+///
+/// # Errors
+///
+/// * [`Field::ExtensionElementSize`] when `actual_size != 1`.
+/// * [`Field::LongValueLabel`] when the payload is truncated (a
+///   length prefix or its bytes run past the end).
+pub(super) fn parse_long_string_value_labels(
+    actual_size: u32,
+    payload: &[u8],
+    byte_order: ByteOrder,
+    encoding: &'static Encoding,
+    position: u64,
+) -> Result<Vec<LongValueLabelRecord>> {
+    if actual_size != LONG_STRING_VALUE_LABELS_ELEMENT_SIZE {
+        return Err(unexpected_value_error(position, Field::ExtensionElementSize));
+    }
+    let mut cursor = ByteCursor::new(payload, Section::Dictionary, position);
+    let mut records: Vec<LongValueLabelRecord> = Vec::new();
+    while !cursor.is_empty() {
+        let record = parse_long_value_label_record(&mut cursor, byte_order, encoding)?;
+        records.push(record);
+    }
+    Ok(records)
+}
+
+/// Parses one per-variable [`LongValueLabelRecord`] from `cursor`,
+/// advancing past it: a `u32`-length-prefixed variable name, a `u32`
+/// declared width, a `u32` label count, then that many `(value,
+/// label)` pairs.
+fn parse_long_value_label_record(
+    cursor: &mut ByteCursor<'_>,
+    byte_order: ByteOrder,
+    encoding: &'static Encoding,
+) -> Result<LongValueLabelRecord> {
+    let field = Field::LongValueLabel;
+    let name_bytes = cursor.take_length_prefixed(byte_order, field)?;
+    let width = cursor.take_u32(byte_order, field)?;
+    let label_count = cursor.take_u32(byte_order, field)?;
+    let mut labels: Vec<LongValueLabel> = Vec::new();
+    for _ in 0..label_count {
+        let label = parse_long_value_label(cursor, byte_order, encoding)?;
+        labels.push(label);
+    }
+    let (variable_name, _, _) = encoding.decode(name_bytes);
+    let record = LongValueLabelRecord::builder()
+        .variable_name(variable_name.into_owned())
+        .width(width)
+        .labels(labels)
+        .build();
+    Ok(record)
+}
+
+/// Parses one `(value, label)` pair from `cursor`, advancing past it.
+/// Both value and label are `u32`-length-prefixed byte strings; the
+/// value bytes are kept verbatim and the label is decoded through
+/// `encoding`.
+fn parse_long_value_label(
+    cursor: &mut ByteCursor<'_>,
+    byte_order: ByteOrder,
+    encoding: &'static Encoding,
+) -> Result<LongValueLabel> {
+    let field = Field::LongValueLabel;
+    let value = cursor.take_length_prefixed(byte_order, field)?;
+    let value = value.to_vec();
+    let label_bytes = cursor.take_length_prefixed(byte_order, field)?;
+    let (label, _, _) = encoding.decode(label_bytes);
+    let label = LongValueLabel::builder()
+        .value(value)
+        .label(label.into_owned())
+        .build();
+    Ok(label)
+}
+
+/// Parses an extension subtype-22 payload (long string missing values)
+/// into one [`LongMissingValueRecord`] per variable.
+///
+/// The payload repeats until exhausted: a `u32`-length-prefixed
+/// variable name, a single count byte (`1..=`
+/// [`LONG_STRING_MISSING_VALUE_MAX_COUNT`]), a `u32` width shared by
+/// every value, then that many raw values each `width` bytes long. The
+/// `u32` fields honor `byte_order`. Variable names are decoded through
+/// `encoding`; the value bytes are kept verbatim.
+///
+/// # Errors
+///
+/// * [`Field::ExtensionElementSize`] when `actual_size != 1`.
+/// * [`Field::LongMissingValueCount`] when the count byte is not
+///   `1..=3` (matching `ReadStat`).
+/// * [`Field::LongMissingValue`] when the payload is truncated.
+pub(super) fn parse_long_string_missing_values(
+    actual_size: u32,
+    payload: &[u8],
+    byte_order: ByteOrder,
+    encoding: &'static Encoding,
+    position: u64,
+) -> Result<Vec<LongMissingValueRecord>> {
+    if actual_size != LONG_STRING_MISSING_VALUES_ELEMENT_SIZE {
+        return Err(unexpected_value_error(position, Field::ExtensionElementSize));
+    }
+    let mut cursor = ByteCursor::new(payload, Section::Dictionary, position);
+    let mut records: Vec<LongMissingValueRecord> = Vec::new();
+    while !cursor.is_empty() {
+        let record = parse_long_missing_value_record(&mut cursor, byte_order, encoding)?;
+        records.push(record);
+    }
+    Ok(records)
+}
+
+/// Parses one per-variable [`LongMissingValueRecord`] from `cursor`,
+/// advancing past it: a `u32`-length-prefixed variable name, a single
+/// count byte (`1..=`[`LONG_STRING_MISSING_VALUE_MAX_COUNT`]), a `u32`
+/// width shared by every value, then that many raw values each `width`
+/// bytes long. The value bytes are kept verbatim; the variable name is
+/// decoded through `encoding`.
+fn parse_long_missing_value_record(
+    cursor: &mut ByteCursor<'_>,
+    byte_order: ByteOrder,
+    encoding: &'static Encoding,
+) -> Result<LongMissingValueRecord> {
+    let field = Field::LongMissingValue;
+    let name_bytes = cursor.take_length_prefixed(byte_order, field)?;
+    let count = cursor.take_u8(field)?;
+    if count == 0 || count > LONG_STRING_MISSING_VALUE_MAX_COUNT {
+        return Err(cursor.unexpected_value(Field::LongMissingValueCount));
+    }
+    let width = cursor.take_u32_as_usize(byte_order, field)?;
+    let mut values: Vec<Vec<u8>> = Vec::new();
+    for _ in 0..count {
+        let value_bytes = cursor.take_bytes(width, field)?;
+        let value = value_bytes.to_vec();
+        values.push(value);
+    }
+    let (variable_name, _, _) = encoding.decode(name_bytes);
+    let record = LongMissingValueRecord::builder()
+        .variable_name(variable_name.into_owned())
+        .values(values)
+        .build();
+    Ok(record)
 }
 
 /// Parses an extension subtype-11 payload (per-variable display
@@ -1706,20 +1863,20 @@ mod tests {
     fn parse_data_file_attributes_rejects_wrong_element_size() {
         let err =
             parse_data_file_attributes(4, b"a('1'\n)", encoding_rs::WINDOWS_1252, 0).unwrap_err();
-        assert_attribute_error(&err, Field::ExtensionElementSize);
+        assert_unexpected_value_error(&err, Field::ExtensionElementSize);
     }
 
     #[test]
     fn parse_data_file_attributes_rejects_missing_open_paren() {
         let err = parse_data_file_attributes(1, b"attr", encoding_rs::WINDOWS_1252, 0).unwrap_err();
-        assert_attribute_error(&err, Field::FileAttribute);
+        assert_unexpected_value_error(&err, Field::FileAttribute);
     }
 
     #[test]
     fn parse_data_file_attributes_rejects_empty_name() {
         let err =
             parse_data_file_attributes(1, b"('1'\n)", encoding_rs::WINDOWS_1252, 0).unwrap_err();
-        assert_attribute_error(&err, Field::FileAttribute);
+        assert_unexpected_value_error(&err, Field::FileAttribute);
     }
 
     #[test]
@@ -1727,14 +1884,14 @@ mod tests {
         // No line feed before the closing paren / end of payload.
         let err =
             parse_data_file_attributes(1, b"a('1')", encoding_rs::WINDOWS_1252, 0).unwrap_err();
-        assert_attribute_error(&err, Field::FileAttribute);
+        assert_unexpected_value_error(&err, Field::FileAttribute);
     }
 
     #[test]
     fn parse_data_file_attributes_rejects_missing_close_paren() {
         let err =
             parse_data_file_attributes(1, b"a('1'\n", encoding_rs::WINDOWS_1252, 0).unwrap_err();
-        assert_attribute_error(&err, Field::FileAttribute);
+        assert_unexpected_value_error(&err, Field::FileAttribute);
     }
 
     #[test]
@@ -1797,31 +1954,31 @@ mod tests {
     fn parse_variable_attributes_rejects_wrong_element_size() {
         let err =
             parse_variable_attributes(4, b"v:a('1'\n)", encoding_rs::WINDOWS_1252, 0).unwrap_err();
-        assert_attribute_error(&err, Field::ExtensionElementSize);
+        assert_unexpected_value_error(&err, Field::ExtensionElementSize);
     }
 
     #[test]
     fn parse_variable_attributes_rejects_missing_colon() {
         let err =
             parse_variable_attributes(1, b"a('1'\n)", encoding_rs::WINDOWS_1252, 0).unwrap_err();
-        assert_attribute_error(&err, Field::VariableAttribute);
+        assert_unexpected_value_error(&err, Field::VariableAttribute);
     }
 
     #[test]
     fn parse_variable_attributes_rejects_empty_variable_name() {
         let err =
             parse_variable_attributes(1, b":a('1'\n)", encoding_rs::WINDOWS_1252, 0).unwrap_err();
-        assert_attribute_error(&err, Field::VariableAttribute);
+        assert_unexpected_value_error(&err, Field::VariableAttribute);
     }
 
     #[test]
     fn parse_variable_attributes_rejects_malformed_attribute() {
         let err =
             parse_variable_attributes(1, b"v:a('1')", encoding_rs::WINDOWS_1252, 0).unwrap_err();
-        assert_attribute_error(&err, Field::VariableAttribute);
+        assert_unexpected_value_error(&err, Field::VariableAttribute);
     }
 
-    fn assert_attribute_error(err: &SavError, expected: Field) {
+    fn assert_unexpected_value_error(err: &SavError, expected: Field) {
         match err {
             SavError::Format(e) => assert_eq!(
                 e.kind(),
@@ -1829,6 +1986,251 @@ mod tests {
             ),
             _ => panic!("expected Format error, got {err:?}"),
         }
+    }
+
+    /// Appends a `u32`-length-prefixed byte string in `byte_order`.
+    fn push_prefixed(buf: &mut Vec<u8>, bytes: &[u8], byte_order: ByteOrder) {
+        let len = u32::try_from(bytes.len()).unwrap();
+        push_u32(buf, len, byte_order);
+        buf.extend_from_slice(bytes);
+    }
+
+    /// Appends a `u32` in `byte_order`.
+    fn push_u32(buf: &mut Vec<u8>, value: u32, byte_order: ByteOrder) {
+        match byte_order {
+            ByteOrder::LittleEndian => buf.extend_from_slice(&value.to_le_bytes()),
+            ByteOrder::BigEndian => buf.extend_from_slice(&value.to_be_bytes()),
+        }
+    }
+
+    #[test]
+    fn parse_long_string_value_labels_single_variable_single_label() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut payload = Vec::new();
+        push_prefixed(&mut payload, b"longvar", byte_order);
+        push_u32(&mut payload, 20, byte_order); // width
+        push_u32(&mut payload, 1, byte_order); // label count
+        push_prefixed(&mut payload, b"code01", byte_order); // value
+        push_prefixed(&mut payload, b"First", byte_order); // label
+
+        let result =
+            parse_long_string_value_labels(1, &payload, byte_order, encoding_rs::WINDOWS_1252, 0)
+                .unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].variable_name(), "longvar");
+        assert_eq!(result[0].width(), 20);
+        assert_eq!(result[0].labels().len(), 1);
+        assert_eq!(result[0].labels()[0].value(), b"code01");
+        assert_eq!(result[0].labels()[0].label(), "First");
+    }
+
+    #[test]
+    fn parse_long_string_value_labels_multiple_labels_and_variables() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut payload = Vec::new();
+        push_prefixed(&mut payload, b"v1", byte_order);
+        push_u32(&mut payload, 10, byte_order);
+        push_u32(&mut payload, 2, byte_order);
+        push_prefixed(&mut payload, b"a", byte_order);
+        push_prefixed(&mut payload, b"Apple", byte_order);
+        push_prefixed(&mut payload, b"b", byte_order);
+        push_prefixed(&mut payload, b"Banana", byte_order);
+        push_prefixed(&mut payload, b"v2", byte_order);
+        push_u32(&mut payload, 12, byte_order);
+        push_u32(&mut payload, 1, byte_order);
+        push_prefixed(&mut payload, b"z", byte_order);
+        push_prefixed(&mut payload, b"Zed", byte_order);
+
+        let result =
+            parse_long_string_value_labels(1, &payload, byte_order, encoding_rs::WINDOWS_1252, 0)
+                .unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].labels().len(), 2);
+        assert_eq!(result[0].labels()[1].label(), "Banana");
+        assert_eq!(result[1].variable_name(), "v2");
+        assert_eq!(result[1].labels()[0].value(), b"z");
+    }
+
+    #[test]
+    fn parse_long_string_value_labels_big_endian() {
+        let byte_order = ByteOrder::BigEndian;
+        let mut payload = Vec::new();
+        push_prefixed(&mut payload, b"v", byte_order);
+        push_u32(&mut payload, 9, byte_order);
+        push_u32(&mut payload, 1, byte_order);
+        push_prefixed(&mut payload, b"x", byte_order);
+        push_prefixed(&mut payload, b"Label", byte_order);
+
+        let result =
+            parse_long_string_value_labels(1, &payload, byte_order, encoding_rs::WINDOWS_1252, 0)
+                .unwrap();
+        assert_eq!(result[0].width(), 9);
+        assert_eq!(result[0].labels()[0].label(), "Label");
+    }
+
+    #[test]
+    fn parse_long_string_value_labels_keeps_value_bytes_verbatim() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut payload = Vec::new();
+        push_prefixed(&mut payload, b"v", byte_order);
+        push_u32(&mut payload, 8, byte_order);
+        push_u32(&mut payload, 1, byte_order);
+        push_prefixed(&mut payload, b"ab   ", byte_order); // trailing spaces preserved
+        push_prefixed(&mut payload, b"L", byte_order);
+
+        let result =
+            parse_long_string_value_labels(1, &payload, byte_order, encoding_rs::WINDOWS_1252, 0)
+                .unwrap();
+        assert_eq!(result[0].labels()[0].value(), b"ab   ");
+    }
+
+    #[test]
+    fn parse_long_string_value_labels_empty_payload_yields_empty_vec() {
+        let result = parse_long_string_value_labels(
+            1,
+            &[],
+            ByteOrder::LittleEndian,
+            encoding_rs::WINDOWS_1252,
+            0,
+        )
+        .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn parse_long_string_value_labels_rejects_wrong_element_size() {
+        let err = parse_long_string_value_labels(
+            4,
+            &[0; 4],
+            ByteOrder::LittleEndian,
+            encoding_rs::WINDOWS_1252,
+            0,
+        )
+        .unwrap_err();
+        assert_unexpected_value_error(&err, Field::ExtensionElementSize);
+    }
+
+    #[test]
+    fn parse_long_string_value_labels_rejects_truncated_payload() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut payload = Vec::new();
+        push_prefixed(&mut payload, b"v", byte_order);
+        push_u32(&mut payload, 8, byte_order);
+        push_u32(&mut payload, 1, byte_order);
+        push_u32(&mut payload, 5, byte_order); // value length 5, but no bytes follow
+        let err =
+            parse_long_string_value_labels(1, &payload, byte_order, encoding_rs::WINDOWS_1252, 0)
+                .unwrap_err();
+        assert_unexpected_value_error(&err, Field::LongValueLabel);
+    }
+
+    #[test]
+    fn parse_long_string_missing_values_single_variable() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut payload = Vec::new();
+        push_prefixed(&mut payload, b"longvar", byte_order);
+        payload.push(2); // n_missing
+        push_u32(&mut payload, 3, byte_order); // width
+        payload.extend_from_slice(b"XXX");
+        payload.extend_from_slice(b"YYY");
+
+        let result =
+            parse_long_string_missing_values(1, &payload, byte_order, encoding_rs::WINDOWS_1252, 0)
+                .unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].variable_name(), "longvar");
+        assert_eq!(result[0].values(), &[b"XXX".to_vec(), b"YYY".to_vec()]);
+    }
+
+    #[test]
+    fn parse_long_string_missing_values_big_endian_multiple_variables() {
+        let byte_order = ByteOrder::BigEndian;
+        let mut payload = Vec::new();
+        push_prefixed(&mut payload, b"v1", byte_order);
+        payload.push(1);
+        push_u32(&mut payload, 2, byte_order);
+        payload.extend_from_slice(b"ab");
+        push_prefixed(&mut payload, b"v2", byte_order);
+        payload.push(3);
+        push_u32(&mut payload, 1, byte_order);
+        payload.extend_from_slice(b"xyz");
+
+        let result =
+            parse_long_string_missing_values(1, &payload, byte_order, encoding_rs::WINDOWS_1252, 0)
+                .unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].values(), &[b"ab".to_vec()]);
+        assert_eq!(
+            result[1].values(),
+            &[b"x".to_vec(), b"y".to_vec(), b"z".to_vec()]
+        );
+    }
+
+    #[test]
+    fn parse_long_string_missing_values_rejects_zero_count() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut payload = Vec::new();
+        push_prefixed(&mut payload, b"v", byte_order);
+        payload.push(0);
+        push_u32(&mut payload, 1, byte_order);
+        let err =
+            parse_long_string_missing_values(1, &payload, byte_order, encoding_rs::WINDOWS_1252, 0)
+                .unwrap_err();
+        assert_unexpected_value_error(&err, Field::LongMissingValueCount);
+    }
+
+    #[test]
+    fn parse_long_string_missing_values_rejects_count_above_three() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut payload = Vec::new();
+        push_prefixed(&mut payload, b"v", byte_order);
+        payload.push(4);
+        push_u32(&mut payload, 1, byte_order);
+        payload.extend_from_slice(b"abcd");
+        let err =
+            parse_long_string_missing_values(1, &payload, byte_order, encoding_rs::WINDOWS_1252, 0)
+                .unwrap_err();
+        assert_unexpected_value_error(&err, Field::LongMissingValueCount);
+    }
+
+    #[test]
+    fn parse_long_string_missing_values_rejects_wrong_element_size() {
+        let err = parse_long_string_missing_values(
+            4,
+            &[0; 4],
+            ByteOrder::LittleEndian,
+            encoding_rs::WINDOWS_1252,
+            0,
+        )
+        .unwrap_err();
+        assert_unexpected_value_error(&err, Field::ExtensionElementSize);
+    }
+
+    #[test]
+    fn parse_long_string_missing_values_rejects_truncated_values() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut payload = Vec::new();
+        push_prefixed(&mut payload, b"v", byte_order);
+        payload.push(2);
+        push_u32(&mut payload, 3, byte_order); // width 3, but only 3 bytes for one value
+        payload.extend_from_slice(b"XXX");
+        let err =
+            parse_long_string_missing_values(1, &payload, byte_order, encoding_rs::WINDOWS_1252, 0)
+                .unwrap_err();
+        assert_unexpected_value_error(&err, Field::LongMissingValue);
+    }
+
+    #[test]
+    fn parse_long_string_missing_values_empty_payload_yields_empty_vec() {
+        let result = parse_long_string_missing_values(
+            1,
+            &[],
+            ByteOrder::LittleEndian,
+            encoding_rs::WINDOWS_1252,
+            0,
+        )
+        .unwrap();
+        assert!(result.is_empty());
     }
 
     #[test]

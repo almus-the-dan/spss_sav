@@ -468,6 +468,44 @@ pub(super) const VARIABLE_ATTRIBUTES_NAME_TERMINATOR: u8 = b':';
 #[allow(dead_code)] // exercised by the subtype-18 parser.
 pub(super) const VARIABLE_ATTRIBUTES_SET_SEPARATOR: u8 = b'/';
 
+/// Extension subtype 21 — long value labels for very-long-string
+/// variables. The payload is a fixed-`element_size`-of-1,
+/// variable-`element_count` byte stream. It repeats, once per
+/// variable, until exhausted: a `u32`-length-prefixed variable name,
+/// a `u32` declared width, a `u32` label count, then that many
+/// `(value, label)` pairs where each of value and label is itself a
+/// `u32`-length-prefixed byte string. All `u32` fields honor the
+/// file's byte order. Per PSPP and `ReadStat`'s
+/// `sav_parse_long_string_value_labels_record`.
+#[allow(dead_code)] // exercised by the subtype-21 parser.
+pub(super) const EXTENSION_SUBTYPE_LONG_STRING_VALUE_LABELS: i32 = 21;
+
+/// `element_size` an extension subtype-21 record must declare.
+#[allow(dead_code)] // exercised by the subtype-21 parser.
+pub(super) const LONG_STRING_VALUE_LABELS_ELEMENT_SIZE: u32 = 1;
+
+/// Extension subtype 22 — long missing values for very-long-string
+/// variables. The payload is a fixed-`element_size`-of-1,
+/// variable-`element_count` byte stream. It repeats, once per
+/// variable, until exhausted: a `u32`-length-prefixed variable name,
+/// a single count byte (`1..=`[`LONG_STRING_MISSING_VALUE_MAX_COUNT`]),
+/// a `u32` width shared by every missing value, then that many raw
+/// values each `width` bytes long. The `u32` fields honor the file's
+/// byte order. Per PSPP and `ReadStat`'s
+/// `sav_parse_long_string_missing_values_record`.
+#[allow(dead_code)] // exercised by the subtype-22 parser.
+pub(super) const EXTENSION_SUBTYPE_LONG_STRING_MISSING_VALUES: i32 = 22;
+
+/// `element_size` an extension subtype-22 record must declare.
+#[allow(dead_code)] // exercised by the subtype-22 parser.
+pub(super) const LONG_STRING_MISSING_VALUES_ELEMENT_SIZE: u32 = 1;
+
+/// Maximum number of missing values a subtype-22 per-variable block
+/// may declare; the count byte must be `1..=3`. Mirrors the type-2
+/// record's discrete missing-value limit.
+#[allow(dead_code)] // exercised by the subtype-22 parser.
+pub(super) const LONG_STRING_MISSING_VALUE_MAX_COUNT: u8 = 3;
+
 /// Byte position of the decimals byte within a 4-byte format code
 /// (after reduction to native byte order).
 #[allow(dead_code)] // exercised once the dictionary reader implementation lands.

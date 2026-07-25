@@ -11,6 +11,9 @@ pub mod file_attribute;
 pub mod float_sentinels;
 /// Long missing values for very-long-string variables (subtype 22).
 pub mod long_missing_value_record;
+/// One value-label pair inside a long string value labels record
+/// (subtype 21).
+pub mod long_value_label;
 /// Long value labels for very-long-string variables (subtype 21).
 pub mod long_value_label_record;
 /// Long variable name mappings (subtype 13).

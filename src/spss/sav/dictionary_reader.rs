@@ -17,6 +17,7 @@ use crate::spss::sav::dictionary_format::{
     DICTIONARY_TERMINATOR_FILLER_LEN, DOCUMENT_LINE_LEN, EXTENSION_SUBTYPE_CHARACTER_ENCODING,
     EXTENSION_SUBTYPE_DATA_FILE_ATTRIBUTES, EXTENSION_SUBTYPE_DISPLAY_PARAMETERS,
     EXTENSION_SUBTYPE_EXTENDED_NUMBER_OF_CASES, EXTENSION_SUBTYPE_FLOAT_INFO,
+    EXTENSION_SUBTYPE_LONG_STRING_MISSING_VALUES, EXTENSION_SUBTYPE_LONG_STRING_VALUE_LABELS,
     EXTENSION_SUBTYPE_LONG_VARIABLE_NAMES, EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO,
     EXTENSION_SUBTYPE_VARIABLE_ATTRIBUTES, EXTENSION_SUBTYPE_VERY_LONG_STRINGS,
     MISSING_VALUE_ENTRY_LEN, RECORD_TYPE_DICTIONARY_TERMINATOR, RECORD_TYPE_DOCUMENT,
@@ -30,9 +31,10 @@ use crate::spss::sav::dictionary_parse::{
     VariableTypeCode, compose_raw_missing_values, normalize_value_label_variable_indices,
     parse_character_encoding, parse_data_file_attributes, parse_display_parameters,
     parse_extended_number_of_cases, parse_float_sentinels, parse_has_label,
-    parse_long_variable_names, parse_machine_integer_info, parse_missing_value_count,
-    parse_sav_format, parse_short_name, parse_value_label_entry, parse_variable_attributes,
-    parse_variable_type, parse_very_long_strings, value_label_entry_size,
+    parse_long_string_missing_values, parse_long_string_value_labels, parse_long_variable_names,
+    parse_machine_integer_info, parse_missing_value_count, parse_sav_format, parse_short_name,
+    parse_value_label_entry, parse_variable_attributes, parse_variable_type,
+    parse_very_long_strings, value_label_entry_size,
 };
 use crate::spss::sav::dictionary_record::DictionaryRecord;
 use crate::spss::sav::document_record::DocumentRecord;
@@ -443,6 +445,10 @@ impl<R: Read> DictionaryReader<R> {
             EXTENSION_SUBTYPE_DISPLAY_PARAMETERS => read_display_parameters(&envelope),
             EXTENSION_SUBTYPE_DATA_FILE_ATTRIBUTES => read_data_file_attributes(&envelope),
             EXTENSION_SUBTYPE_VARIABLE_ATTRIBUTES => read_variable_attributes(&envelope),
+            EXTENSION_SUBTYPE_LONG_STRING_VALUE_LABELS => read_long_string_value_labels(&envelope),
+            EXTENSION_SUBTYPE_LONG_STRING_MISSING_VALUES => {
+                read_long_string_missing_values(&envelope)
+            }
             _ => Ok(self.read_unknown_extension(envelope)),
         }
     }
@@ -803,6 +809,34 @@ fn read_variable_attributes(envelope: &ExtensionEnvelope) -> Result<DictionaryRe
     Ok(record)
 }
 
+/// Subtype 21 — long string value labels.
+fn read_long_string_value_labels(envelope: &ExtensionEnvelope) -> Result<DictionaryRecord> {
+    let records = parse_long_string_value_labels(
+        envelope.element_size,
+        &envelope.payload,
+        envelope.byte_order,
+        envelope.encoding,
+        envelope.element_size_position,
+    )?;
+    let record = ExtensionRecord::LongValueLabels(records);
+    let record = DictionaryRecord::Extension(record);
+    Ok(record)
+}
+
+/// Subtype 22 — long string missing values.
+fn read_long_string_missing_values(envelope: &ExtensionEnvelope) -> Result<DictionaryRecord> {
+    let records = parse_long_string_missing_values(
+        envelope.element_size,
+        &envelope.payload,
+        envelope.byte_order,
+        envelope.encoding,
+        envelope.element_size_position,
+    )?;
+    let record = ExtensionRecord::LongMissingValues(records);
+    let record = DictionaryRecord::Extension(record);
+    Ok(record)
+}
+
 /// Subtype 11 — raw per-variable display parameters.
 fn read_display_parameters(envelope: &ExtensionEnvelope) -> Result<DictionaryRecord> {
     let raw = parse_display_parameters(
@@ -824,6 +858,7 @@ mod tests {
     use crate::spss::sav::dictionary_record::DictionaryRecord;
     use crate::spss::sav::extensions::extension_record::ExtensionRecord;
     use crate::spss::sav::raw_missing_values::RawMissingValues;
+    use crate::spss::sav::sav_error;
     use crate::spss::sav::sav_error::{FormatErrorKind, SavError};
     use crate::spss::sav::sav_format_kind::SavFormatKind;
     use crate::spss::sav::sav_reader::SavReader;
@@ -1954,13 +1989,13 @@ mod tests {
             panic!("expected ValueLabelSet");
         };
         assert_eq!(set.entries().len(), 3);
-        let dups = dict
+        let duplicates = dict
             .warnings()
             .iter()
             .filter(|w| matches!(w, SavWarning::DuplicateValueLabelKey { .. }))
             .count();
         // Two duplicates of the first occurrence.
-        assert_eq!(dups, 2);
+        assert_eq!(duplicates, 2);
     }
 
     /// Appends one 80-byte document line, space-padding `text` up
@@ -2352,7 +2387,7 @@ mod tests {
             SavError::Format(e) => assert_eq!(
                 e.kind(),
                 FormatErrorKind::UnexpectedValue {
-                    field: crate::spss::sav::sav_error::Field::ExtensionElementSize,
+                    field: sav_error::Field::ExtensionElementSize,
                 }
             ),
             _ => panic!("expected Format error, got {err:?}"),
@@ -2372,7 +2407,7 @@ mod tests {
             SavError::Format(e) => assert_eq!(
                 e.kind(),
                 FormatErrorKind::UnexpectedValue {
-                    field: crate::spss::sav::sav_error::Field::ExtensionElementCount,
+                    field: sav_error::Field::ExtensionElementCount,
                 }
             ),
             _ => panic!("expected Format error, got {err:?}"),
@@ -2524,7 +2559,7 @@ mod tests {
             SavError::Format(e) => assert_eq!(
                 e.kind(),
                 FormatErrorKind::UnexpectedValue {
-                    field: crate::spss::sav::sav_error::Field::ExtensionElementSize,
+                    field: sav_error::Field::ExtensionElementSize,
                 }
             ),
             _ => panic!("expected Format error, got {err:?}"),
@@ -2544,7 +2579,7 @@ mod tests {
             SavError::Format(e) => assert_eq!(
                 e.kind(),
                 FormatErrorKind::UnexpectedValue {
-                    field: crate::spss::sav::sav_error::Field::ExtensionElementCount,
+                    field: sav_error::Field::ExtensionElementCount,
                 }
             ),
             _ => panic!("expected Format error, got {err:?}"),
@@ -2618,7 +2653,7 @@ mod tests {
             SavError::Format(e) => assert_eq!(
                 e.kind(),
                 FormatErrorKind::UnexpectedValue {
-                    field: crate::spss::sav::sav_error::Field::ExtensionElementSize,
+                    field: sav_error::Field::ExtensionElementSize,
                 }
             ),
             _ => panic!("expected Format error, got {err:?}"),
@@ -2638,7 +2673,7 @@ mod tests {
             SavError::Format(e) => assert_eq!(
                 e.kind(),
                 FormatErrorKind::UnexpectedValue {
-                    field: crate::spss::sav::sav_error::Field::ExtensionElementCount,
+                    field: sav_error::Field::ExtensionElementCount,
                 }
             ),
             _ => panic!("expected Format error, got {err:?}"),
@@ -2739,7 +2774,7 @@ mod tests {
             SavError::Format(e) => assert_eq!(
                 e.kind(),
                 FormatErrorKind::UnexpectedValue {
-                    field: crate::spss::sav::sav_error::Field::ExtensionElementSize,
+                    field: sav_error::Field::ExtensionElementSize,
                 }
             ),
             _ => panic!("expected Format error, got {err:?}"),
@@ -2917,7 +2952,7 @@ mod tests {
             SavError::Format(e) => assert_eq!(
                 e.kind(),
                 FormatErrorKind::UnexpectedValue {
-                    field: crate::spss::sav::sav_error::Field::LongVariableNamePair,
+                    field: sav_error::Field::LongVariableNamePair,
                 }
             ),
             _ => panic!("expected Format error, got {err:?}"),
@@ -2936,7 +2971,7 @@ mod tests {
             SavError::Format(e) => assert_eq!(
                 e.kind(),
                 FormatErrorKind::UnexpectedValue {
-                    field: crate::spss::sav::sav_error::Field::ExtensionElementSize,
+                    field: sav_error::Field::ExtensionElementSize,
                 }
             ),
             _ => panic!("expected Format error, got {err:?}"),
@@ -3052,7 +3087,7 @@ mod tests {
             SavError::Format(e) => assert_eq!(
                 e.kind(),
                 FormatErrorKind::UnexpectedValue {
-                    field: crate::spss::sav::sav_error::Field::ExtensionElementSize,
+                    field: sav_error::Field::ExtensionElementSize,
                 }
             ),
             _ => panic!("expected Format error, got {err:?}"),
@@ -3079,7 +3114,7 @@ mod tests {
             SavError::Format(e) => assert_eq!(
                 e.kind(),
                 FormatErrorKind::UnexpectedValue {
-                    field: crate::spss::sav::sav_error::Field::VeryLongStringPair,
+                    field: sav_error::Field::VeryLongStringPair,
                 }
             ),
             _ => panic!("expected Format error, got {err:?}"),
@@ -3235,7 +3270,7 @@ mod tests {
             SavError::Format(e) => assert_eq!(
                 e.kind(),
                 FormatErrorKind::UnexpectedValue {
-                    field: crate::spss::sav::sav_error::Field::ExtensionElementSize,
+                    field: sav_error::Field::ExtensionElementSize,
                 }
             ),
             _ => panic!("expected Format error, got {err:?}"),
@@ -3283,7 +3318,7 @@ mod tests {
             SavError::Format(e) => assert_eq!(
                 e.kind(),
                 FormatErrorKind::UnexpectedValue {
-                    field: crate::spss::sav::sav_error::Field::ExtensionElementSize,
+                    field: sav_error::Field::ExtensionElementSize,
                 }
             ),
             _ => panic!("expected Format error, got {err:?}"),
@@ -3332,7 +3367,115 @@ mod tests {
             SavError::Format(e) => assert_eq!(
                 e.kind(),
                 FormatErrorKind::UnexpectedValue {
-                    field: crate::spss::sav::sav_error::Field::ExtensionElementSize,
+                    field: sav_error::Field::ExtensionElementSize,
+                }
+            ),
+            _ => panic!("expected Format error, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn extension_subtype_21_long_string_value_labels() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&3u32.to_le_bytes()); // var name length
+        payload.extend_from_slice(b"abc");
+        payload.extend_from_slice(&20u32.to_le_bytes()); // width
+        payload.extend_from_slice(&1u32.to_le_bytes()); // label count
+        payload.extend_from_slice(&2u32.to_le_bytes()); // value length
+        payload.extend_from_slice(b"hi");
+        payload.extend_from_slice(&5u32.to_le_bytes()); // label length
+        payload.extend_from_slice(b"Hello");
+
+        let mut bytes = build_header(byte_order);
+        write_extension_record(
+            &mut bytes,
+            byte_order,
+            21,
+            1,
+            u32::try_from(payload.len()).unwrap(),
+            &payload,
+        );
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let record = dict.read_record().unwrap().unwrap();
+        let DictionaryRecord::Extension(ExtensionRecord::LongValueLabels(records)) = record else {
+            panic!("expected LongValueLabels, got {record:?}");
+        };
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].variable_name(), "abc");
+        assert_eq!(records[0].width(), 20);
+        assert_eq!(records[0].labels()[0].value(), b"hi");
+        assert_eq!(records[0].labels()[0].label(), "Hello");
+        assert!(dict.warnings().is_empty());
+    }
+
+    #[test]
+    fn extension_subtype_21_wrong_element_size_errors() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_extension_record(&mut bytes, byte_order, 21, 4, 2, &[0; 8]);
+
+        let mut dict = open(bytes);
+        let err = dict.read_record().unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(
+                e.kind(),
+                FormatErrorKind::UnexpectedValue {
+                    field: sav_error::Field::ExtensionElementSize,
+                }
+            ),
+            _ => panic!("expected Format error, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn extension_subtype_22_long_string_missing_values() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&3u32.to_le_bytes()); // var name length
+        payload.extend_from_slice(b"abc");
+        payload.push(2); // n_missing
+        payload.extend_from_slice(&4u32.to_le_bytes()); // value width
+        payload.extend_from_slice(b"MISS");
+        payload.extend_from_slice(b"GONE");
+
+        let mut bytes = build_header(byte_order);
+        write_extension_record(
+            &mut bytes,
+            byte_order,
+            22,
+            1,
+            u32::try_from(payload.len()).unwrap(),
+            &payload,
+        );
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let record = dict.read_record().unwrap().unwrap();
+        let DictionaryRecord::Extension(ExtensionRecord::LongMissingValues(records)) = record else {
+            panic!("expected LongMissingValues, got {record:?}");
+        };
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].variable_name(), "abc");
+        assert_eq!(records[0].values(), &[b"MISS".to_vec(), b"GONE".to_vec()]);
+        assert!(dict.warnings().is_empty());
+    }
+
+    #[test]
+    fn extension_subtype_22_wrong_element_size_errors() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_extension_record(&mut bytes, byte_order, 22, 4, 2, &[0; 8]);
+
+        let mut dict = open(bytes);
+        let err = dict.read_record().unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(
+                e.kind(),
+                FormatErrorKind::UnexpectedValue {
+                    field: sav_error::Field::ExtensionElementSize,
                 }
             ),
             _ => panic!("expected Format error, got {err:?}"),

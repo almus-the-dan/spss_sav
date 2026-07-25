@@ -2,6 +2,8 @@
 pub mod alignment;
 /// Byte order of multibyte values in a SAV file.
 pub mod byte_order;
+/// Shared low-level reads over an in-memory byte slice.
+mod byte_cursor;
 /// Compression scheme of a SAV file.
 pub mod compression;
 /// On-disk byte layout of the SAV dictionary section.
