@@ -104,3 +104,18 @@ pub(crate) fn write_terminator(buf: &mut Vec<u8>, byte_order: ByteOrder) {
     write_rec_type(buf, byte_order, 999);
     buf.extend_from_slice(&[0u8; 4]);
 }
+
+/// Appends a `u32`-length-prefixed byte string in `byte_order`.
+pub(crate) fn push_prefixed(buf: &mut Vec<u8>, bytes: &[u8], byte_order: ByteOrder) {
+    let len = u32::try_from(bytes.len()).unwrap();
+    push_u32(buf, len, byte_order);
+    buf.extend_from_slice(bytes);
+}
+
+/// Appends a `u32` in `byte_order`.
+pub(crate) fn push_u32(buf: &mut Vec<u8>, value: u32, byte_order: ByteOrder) {
+    match byte_order {
+        ByteOrder::LittleEndian => buf.extend_from_slice(&value.to_le_bytes()),
+        ByteOrder::BigEndian => buf.extend_from_slice(&value.to_be_bytes()),
+    }
+}
