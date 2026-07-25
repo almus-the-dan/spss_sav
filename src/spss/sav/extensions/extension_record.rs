@@ -12,6 +12,7 @@ use crate::spss::sav::extensions::machine_integer_info::MachineIntegerInfo;
 use crate::spss::sav::extensions::multiple_response_set::MultipleResponseSet;
 use crate::spss::sav::extensions::raw_display_parameters::RawDisplayParameters;
 use crate::spss::sav::extensions::unknown_extension::UnknownExtension;
+use crate::spss::sav::extensions::uuid::Uuid;
 use crate::spss::sav::extensions::variable_attribute_record::VariableAttributeRecord;
 use crate::spss::sav::extensions::variable_sets::VariableSets;
 use crate::spss::sav::extensions::very_long_string::VeryLongString;
@@ -21,9 +22,9 @@ use crate::spss::sav::extensions::very_long_string::VeryLongString;
 /// Subtype-to-variant assignments here mirror PSPP's documented
 /// system file format and `ReadStat`'s implementation; the spec md
 /// in this repository's reference directory has known errors and is
-/// not authoritative. Subtypes that PSPP/`ReadStat` document but
-/// this enum doesn't yet carry (e.g., `Uuid` = 12, XML display info =
-/// 24) fall through to [`Unknown`](Self::Unknown) for now.
+/// not authoritative. Subtypes that this enum doesn't yet carry 
+/// (e.g., XML display info = 24) fall through to [`Unknown`](Self::Unknown) 
+/// for now.
 ///
 /// The reader preserves unrecognized subtypes verbatim via
 /// [`Unknown`](Self::Unknown) for round-trip fidelity and surfaces
@@ -50,6 +51,8 @@ pub enum ExtensionRecord {
     /// identifying the writing product, beyond the header's product
     /// name).
     ExtraProductInfo(ExtraProductInfo),
+    /// Subtype 12 — a file UUID in RFC 4122 text form.
+    Uuid(Uuid),
     /// Subtype 11 — per-variable display parameters (measurement
     /// level, display width, alignment) carried verbatim from the
     /// record's payload. Per-variable slicing into typed

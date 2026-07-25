@@ -20,7 +20,7 @@ use crate::spss::sav::dictionary_format::{
     EXTENSION_SUBTYPE_FLOAT_INFO,
     EXTENSION_SUBTYPE_LONG_STRING_MISSING_VALUES, EXTENSION_SUBTYPE_LONG_STRING_VALUE_LABELS,
     EXTENSION_SUBTYPE_LONG_VARIABLE_NAMES, EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO,
-    EXTENSION_SUBTYPE_VARIABLE_ATTRIBUTES, EXTENSION_SUBTYPE_VARIABLE_SETS,
+    EXTENSION_SUBTYPE_UUID, EXTENSION_SUBTYPE_VARIABLE_ATTRIBUTES, EXTENSION_SUBTYPE_VARIABLE_SETS,
     EXTENSION_SUBTYPE_VERY_LONG_STRINGS,
     MISSING_VALUE_ENTRY_LEN, RECORD_TYPE_DICTIONARY_TERMINATOR, RECORD_TYPE_DOCUMENT,
     RECORD_TYPE_EXTENSION, RECORD_TYPE_VALUE_LABEL, RECORD_TYPE_VALUE_LABEL_VARIABLES,
@@ -34,10 +34,10 @@ use crate::spss::sav::dictionary_parse::{
     parse_character_encoding, parse_data_file_attributes, parse_display_parameters,
     parse_extended_number_of_cases, parse_float_sentinels, parse_has_label,
     parse_extra_product_info, parse_long_string_missing_values, parse_long_string_value_labels,
-    parse_long_variable_names,
-    parse_machine_integer_info, parse_missing_value_count, parse_sav_format, parse_short_name,
-    parse_value_label_entry, parse_variable_attributes, parse_variable_sets, parse_variable_type,
-    parse_very_long_strings, value_label_entry_size,
+    parse_long_variable_names, parse_machine_integer_info, parse_missing_value_count,
+    parse_sav_format, parse_short_name, parse_uuid, parse_value_label_entry,
+    parse_variable_attributes, parse_variable_sets, parse_variable_type, parse_very_long_strings,
+    value_label_entry_size,
 };
 use crate::spss::sav::dictionary_record::DictionaryRecord;
 use crate::spss::sav::document_record::DocumentRecord;
@@ -448,6 +448,7 @@ impl<R: Read> DictionaryReader<R> {
             EXTENSION_SUBTYPE_DISPLAY_PARAMETERS => read_display_parameters(&envelope),
             EXTENSION_SUBTYPE_VARIABLE_SETS => read_variable_sets(&envelope),
             EXTENSION_SUBTYPE_EXTRA_PRODUCT_INFO => read_extra_product_info(&envelope),
+            EXTENSION_SUBTYPE_UUID => read_uuid(&envelope),
             EXTENSION_SUBTYPE_DATA_FILE_ATTRIBUTES => read_data_file_attributes(&envelope),
             EXTENSION_SUBTYPE_VARIABLE_ATTRIBUTES => read_variable_attributes(&envelope),
             EXTENSION_SUBTYPE_LONG_STRING_VALUE_LABELS => read_long_string_value_labels(&envelope),
@@ -797,6 +798,19 @@ fn read_extra_product_info(envelope: &ExtensionEnvelope) -> Result<DictionaryRec
         envelope.element_size_position,
     )?;
     let record = ExtensionRecord::ExtraProductInfo(info);
+    let record = DictionaryRecord::Extension(record);
+    Ok(record)
+}
+
+/// Subtype 12 — a file UUID.
+fn read_uuid(envelope: &ExtensionEnvelope) -> Result<DictionaryRecord> {
+    let uuid = parse_uuid(
+        envelope.element_size,
+        &envelope.payload,
+        envelope.encoding,
+        envelope.element_size_position,
+    )?;
+    let record = ExtensionRecord::Uuid(uuid);
     let record = DictionaryRecord::Extension(record);
     Ok(record)
 }
@@ -3399,6 +3413,49 @@ mod tests {
                 e.kind(),
                 FormatErrorKind::UnexpectedValue {
                     field: sav_error::Field::ExtensionElementSize,
+                }
+            ),
+            _ => panic!("expected Format error, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn extension_subtype_12_uuid() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        let payload = b"F81D4fae-7DEC-11d0-a765-00A0C91E6BF6";
+        write_extension_record(
+            &mut bytes,
+            byte_order,
+            12,
+            1,
+            u32::try_from(payload.len()).unwrap(),
+            payload,
+        );
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let record = dict.read_record().unwrap().unwrap();
+        let DictionaryRecord::Extension(ExtensionRecord::Uuid(uuid)) = record else {
+            panic!("expected Uuid, got {record:?}");
+        };
+        assert_eq!(uuid.text(), "F81D4fae-7DEC-11d0-a765-00A0C91E6BF6");
+        assert!(dict.warnings().is_empty());
+    }
+
+    #[test]
+    fn extension_subtype_12_wrong_element_size_errors() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_extension_record(&mut bytes, byte_order, 12, 4, 2, &[0; 8]);
+
+        let mut dict = open(bytes);
+        let err = dict.read_record().unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(
+                e.kind(),
+                FormatErrorKind::UnexpectedValue {
+                    field: crate::spss::sav::sav_error::Field::ExtensionElementSize,
                 }
             ),
             _ => panic!("expected Format error, got {err:?}"),

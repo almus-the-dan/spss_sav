@@ -30,7 +30,7 @@ use crate::spss::sav::dictionary_format::{
     LONG_STRING_VALUE_LABELS_ELEMENT_SIZE, LONG_VARIABLE_NAMES_ELEMENT_SIZE,
     LONG_VARIABLE_NAMES_KEY_VALUE_SEPARATOR,
     LONG_VARIABLE_NAMES_PAIR_SEPARATOR, MACHINE_INTEGER_INFO_ELEMENT_COUNT,
-    MACHINE_INTEGER_INFO_ELEMENT_SIZE, VALUE_LABEL_ENTRY_ALIGNMENT,
+    MACHINE_INTEGER_INFO_ELEMENT_SIZE, UUID_ELEMENT_SIZE, VALUE_LABEL_ENTRY_ALIGNMENT,
     VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN, VARIABLE_TYPE_CONTINUATION,
     VARIABLE_ATTRIBUTES_ELEMENT_SIZE, VARIABLE_ATTRIBUTES_NAME_TERMINATOR,
     VARIABLE_ATTRIBUTES_SET_SEPARATOR, VARIABLE_SETS_ELEMENT_SIZE,
@@ -51,6 +51,7 @@ use crate::spss::sav::extensions::long_variable_name::LongVariableName;
 use crate::spss::sav::extensions::machine_integer_info::MachineIntegerInfo;
 use crate::spss::sav::extensions::raw_display_parameters::RawDisplayParameters;
 use crate::spss::sav::extensions::variable_attribute_entry::VariableAttributeEntry;
+use crate::spss::sav::extensions::uuid::Uuid;
 use crate::spss::sav::extensions::variable_attribute_record::VariableAttributeRecord;
 use crate::spss::sav::extensions::variable_set::VariableSet;
 use crate::spss::sav::extensions::variable_sets::VariableSets;
@@ -590,6 +591,31 @@ pub(super) fn parse_extra_product_info(
     let (text, _, _) = encoding.decode(payload);
     let info = ExtraProductInfo::builder().text(text.into_owned()).build();
     Ok(info)
+}
+
+/// Parses an extension subtype-12 payload (a file UUID) into a
+/// [`Uuid`].
+///
+/// The payload is the UUID's RFC 4122 text form. It is decoded through
+/// `encoding` verbatim — the string is neither trimmed nor validated
+/// against RFC 4122, preserving its exact bytes and letter case.
+///
+/// # Errors
+///
+/// Returns [`FormatErrorKind::UnexpectedValue`] tagged
+/// [`Field::ExtensionElementSize`] when `actual_size != 1`.
+pub(super) fn parse_uuid(
+    actual_size: u32,
+    payload: &[u8],
+    encoding: &'static Encoding,
+    position: u64,
+) -> Result<Uuid> {
+    if actual_size != UUID_ELEMENT_SIZE {
+        return Err(unexpected_value_error(position, Field::ExtensionElementSize));
+    }
+    let (text, _, _) = encoding.decode(payload);
+    let uuid = Uuid::builder().text(text.into_owned()).build();
+    Ok(uuid)
 }
 
 /// Parses an extension subtype-13 payload (long-variable-name
@@ -1625,6 +1651,33 @@ mod tests {
     #[test]
     fn parse_extra_product_info_rejects_wrong_element_size() {
         let err = parse_extra_product_info(4, b"prod", encoding_rs::WINDOWS_1252, 0).unwrap_err();
+        assert_unexpected_value_error(&err, Field::ExtensionElementSize);
+    }
+
+    #[test]
+    fn parse_uuid_keeps_mixed_case_text_verbatim() {
+        let payload = b"F81D4fae-7DEC-11d0-a765-00A0C91E6BF6";
+        let result = parse_uuid(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result.text(), "F81D4fae-7DEC-11d0-a765-00A0C91E6BF6");
+    }
+
+    #[test]
+    fn parse_uuid_does_not_validate_or_trim() {
+        // Not a valid UUID and has trailing space; both are kept as-is.
+        let payload = b"not-a-uuid ";
+        let result = parse_uuid(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result.text(), "not-a-uuid ");
+    }
+
+    #[test]
+    fn parse_uuid_empty_payload_yields_empty_text() {
+        let result = parse_uuid(1, &[], encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result.text(), "");
+    }
+
+    #[test]
+    fn parse_uuid_rejects_wrong_element_size() {
+        let err = parse_uuid(4, b"uuid", encoding_rs::WINDOWS_1252, 0).unwrap_err();
         assert_unexpected_value_error(&err, Field::ExtensionElementSize);
     }
 

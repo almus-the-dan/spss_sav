@@ -29,6 +29,8 @@ pub mod multiple_response_set;
 pub mod raw_display_parameters;
 /// Catch-all for unrecognized extension subtypes.
 pub mod unknown_extension;
+/// File UUID (subtype 12).
+pub mod uuid;
 /// One attribute inside a per-variable attributes record (subtype
 /// 18).
 pub mod variable_attribute_entry;

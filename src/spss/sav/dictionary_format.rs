@@ -442,6 +442,17 @@ pub(super) const EXTENSION_SUBTYPE_EXTRA_PRODUCT_INFO: i32 = 10;
 #[allow(dead_code)] // exercised by the subtype-10 parser.
 pub(super) const EXTRA_PRODUCT_INFO_ELEMENT_SIZE: u32 = 1;
 
+/// Extension subtype 12 — a file UUID. The payload is a
+/// fixed-`element_size`-of-1, variable-`element_count` byte string
+/// holding a UUID in RFC 4122 text form (the 36-character hyphenated
+/// hexadecimal representation, possibly mixed case).
+#[allow(dead_code)] // exercised by the subtype-12 parser.
+pub(super) const EXTENSION_SUBTYPE_UUID: i32 = 12;
+
+/// `element_size` an extension subtype-12 record must declare.
+#[allow(dead_code)] // exercised by the subtype-12 parser.
+pub(super) const UUID_ELEMENT_SIZE: u32 = 1;
+
 /// Extension subtype 17 — file-level custom attributes. The payload
 /// is a fixed-`element_size`-of-1, variable-`element_count` byte
 /// stream holding a single attribute set: one or more attributes
