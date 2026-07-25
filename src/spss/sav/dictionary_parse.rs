@@ -16,7 +16,9 @@ use encoding_rs::Encoding;
 
 use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::dictionary_format::{
-    CHARACTER_ENCODING_ELEMENT_SIZE, DISPLAY_PARAMETERS_ELEMENT_SIZE,
+    ATTRIBUTE_NAME_TERMINATOR, ATTRIBUTE_VALUE_QUOTE, ATTRIBUTE_VALUE_TERMINATOR,
+    ATTRIBUTE_VALUES_CLOSE, CHARACTER_ENCODING_ELEMENT_SIZE,
+    DATA_FILE_ATTRIBUTES_ELEMENT_SIZE, DISPLAY_PARAMETERS_ELEMENT_SIZE,
     EXTENDED_NUMBER_OF_CASES_COUNT_OFFSET, EXTENDED_NUMBER_OF_CASES_ELEMENT_COUNT,
     EXTENDED_NUMBER_OF_CASES_ELEMENT_SIZE, EXTENDED_NUMBER_OF_CASES_VERSION_OFFSET,
     FLOAT_SENTINELS_ELEMENT_COUNT, FLOAT_SENTINELS_ELEMENT_SIZE, FLOAT_SENTINELS_HIGHEST_OFFSET,
@@ -26,9 +28,10 @@ use crate::spss::sav::dictionary_format::{
     LONG_VARIABLE_NAMES_PAIR_SEPARATOR, MACHINE_INTEGER_INFO_ELEMENT_COUNT,
     MACHINE_INTEGER_INFO_ELEMENT_SIZE, VALUE_LABEL_ENTRY_ALIGNMENT,
     VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN, VARIABLE_TYPE_CONTINUATION,
-    VARIABLE_TYPE_NUMERIC, VARIABLE_TYPE_STRING_MAX, VERY_LONG_STRINGS_ELEMENT_SIZE,
-    VERY_LONG_STRINGS_KEY_VALUE_SEPARATOR, VERY_LONG_STRINGS_PAIR_PADDING,
-    VERY_LONG_STRINGS_PAIR_SEPARATOR,
+    VARIABLE_ATTRIBUTES_ELEMENT_SIZE, VARIABLE_ATTRIBUTES_NAME_TERMINATOR,
+    VARIABLE_ATTRIBUTES_SET_SEPARATOR, VARIABLE_TYPE_NUMERIC, VARIABLE_TYPE_STRING_MAX,
+    VERY_LONG_STRINGS_ELEMENT_SIZE, VERY_LONG_STRINGS_KEY_VALUE_SEPARATOR,
+    VERY_LONG_STRINGS_PAIR_PADDING, VERY_LONG_STRINGS_PAIR_SEPARATOR,
 };
 use crate::spss::sav::extensions::extended_number_of_cases::ExtendedNumberOfCases;
 use crate::spss::sav::extensions::file_attribute::FileAttribute;
@@ -36,6 +39,7 @@ use crate::spss::sav::extensions::float_sentinels::FloatSentinels;
 use crate::spss::sav::extensions::long_variable_name::LongVariableName;
 use crate::spss::sav::extensions::machine_integer_info::MachineIntegerInfo;
 use crate::spss::sav::extensions::raw_display_parameters::RawDisplayParameters;
+use crate::spss::sav::extensions::variable_attribute_entry::VariableAttributeEntry;
 use crate::spss::sav::extensions::variable_attribute_record::VariableAttributeRecord;
 use crate::spss::sav::extensions::very_long_string::VeryLongString;
 use crate::spss::sav::raw_missing_values::RawMissingValues;
@@ -753,11 +757,24 @@ pub(super) fn parse_data_file_attributes(
     encoding: &'static Encoding,
     position: u64,
 ) -> Result<Vec<FileAttribute>> {
-    todo!(
-        "parse subtype-17 data file attributes: {actual_size} {} {} {position}",
-        payload.len(),
-        encoding.name()
-    )
+    if actual_size != DATA_FILE_ATTRIBUTES_ELEMENT_SIZE {
+        return Err(attribute_error(position, Field::ExtensionElementSize));
+    }
+    let mut cursor = payload;
+    let mut attributes: Vec<FileAttribute> = Vec::new();
+    // Subtype 17 is a single attribute set spanning the whole payload;
+    // it has no `/` set separator, so `parse_attribute_set` consumes
+    // everything in one pass. The loop only re-enters on the malformed
+    // case where a stray `/` ended the set early, in which case we
+    // simply continue with the remainder.
+    while !cursor.is_empty() {
+        let set = parse_attribute_set(&mut cursor, encoding, position, Field::FileAttribute)?;
+        for (name, values) in set {
+            let attribute = FileAttribute::builder().name(name).values(values).build();
+            attributes.push(attribute);
+        }
+    }
+    Ok(attributes)
 }
 
 /// Parses an extension subtype-18 (variable attributes) payload into
@@ -781,11 +798,143 @@ pub(super) fn parse_variable_attributes(
     encoding: &'static Encoding,
     position: u64,
 ) -> Result<Vec<VariableAttributeRecord>> {
-    todo!(
-        "parse subtype-18 variable attributes: {actual_size} {} {} {position}",
-        payload.len(),
-        encoding.name()
+    if actual_size != VARIABLE_ATTRIBUTES_ELEMENT_SIZE {
+        return Err(attribute_error(position, Field::ExtensionElementSize));
+    }
+    let mut cursor = payload;
+    let mut records: Vec<VariableAttributeRecord> = Vec::new();
+    while !cursor.is_empty() {
+        let record = parse_variable_attribute(&mut cursor, encoding, position)?;
+        records.push(record);
+    }
+    Ok(records)
+}
+
+/// Parses one `variable_name:attribute-set` group from `cursor` into a
+/// [`VariableAttributeRecord`], advancing the cursor past the group
+/// (including its trailing `/` set separator, if present). The name
+/// runs up to the `:` that precedes its attributes.
+fn parse_variable_attribute(
+    cursor: &mut &[u8],
+    encoding: &'static Encoding,
+    position: u64,
+) -> Result<VariableAttributeRecord> {
+    let name_end = cursor
+        .iter()
+        .position(|&b| b == VARIABLE_ATTRIBUTES_NAME_TERMINATOR);
+    let Some(name_end) = name_end
+    else {
+        return Err(attribute_error(position, Field::VariableAttribute));
+    };
+    let name_bytes = &cursor[..name_end];
+    if name_bytes.is_empty() {
+        return Err(attribute_error(position, Field::VariableAttribute));
+    }
+    *cursor = &cursor[name_end + 1..];
+    let set = parse_attribute_set(cursor, encoding, position, Field::VariableAttribute)?;
+    let (variable_name, _, _) = encoding.decode(name_bytes);
+    let mut builder = VariableAttributeRecord::builder().variable_name(variable_name.into_owned());
+    for (name, values) in set {
+        let entry = VariableAttributeEntry::builder()
+            .name(name)
+            .values(values)
+            .build();
+        builder = builder.attribute(entry);
+    }
+    Ok(builder.build())
+}
+
+/// Builds the structural-error for a malformed attribute record.
+fn attribute_error(position: u64, field: Field) -> SavError {
+    SavError::format(
+        Section::Dictionary,
+        position,
+        FormatErrorKind::UnexpectedValue { field },
     )
+}
+
+/// Parses one attribute set (the grammar shared by subtypes 17 and
+/// 18) from `cursor`, consuming attributes until the cursor is
+/// exhausted or a [`VARIABLE_ATTRIBUTES_SET_SEPARATOR`] (`/`) is
+/// reached — the separator is consumed. Returns each attribute as its
+/// verbatim (still-`[n]`-suffixed) name paired with its list of
+/// values, each value's single outer quote pair already stripped.
+/// `field` tags any structural error.
+fn parse_attribute_set(
+    cursor: &mut &[u8],
+    encoding: &'static Encoding,
+    position: u64,
+    field: Field,
+) -> Result<Vec<(String, Vec<String>)>> {
+    let mut attributes: Vec<(String, Vec<String>)> = Vec::new();
+    while let Some(&first) = cursor.first() {
+        if first == VARIABLE_ATTRIBUTES_SET_SEPARATOR {
+            *cursor = &cursor[1..];
+            break;
+        }
+        // The attribute name runs up to the `(` that opens its values.
+        let name_end = cursor.iter().position(|&b| b == ATTRIBUTE_NAME_TERMINATOR);
+        let Some(name_end) = name_end else {
+            return Err(attribute_error(position, field));
+        };
+        let name_bytes = &cursor[..name_end];
+        if name_bytes.is_empty() {
+            return Err(attribute_error(position, field));
+        }
+        *cursor = &cursor[name_end + 1..];
+        let values = parse_attribute_values(cursor, encoding, position, field)?;
+        let (name, _, _) = encoding.decode(name_bytes);
+        attributes.push((name.into_owned(), values));
+    }
+    Ok(attributes)
+}
+
+/// Parses the parenthesized value list of one attribute, starting with
+/// `cursor` positioned just past the opening `(`. Each value is
+/// terminated by a line feed; the list ends at the closing `)`, which
+/// is consumed. `field` tags any structural error.
+fn parse_attribute_values(
+    cursor: &mut &[u8],
+    encoding: &'static Encoding,
+    position: u64,
+    field: Field,
+) -> Result<Vec<String>> {
+    let mut values: Vec<String> = Vec::new();
+    loop {
+        let value_end = cursor.iter().position(|&b| b == ATTRIBUTE_VALUE_TERMINATOR);
+        let Some(value_end) = value_end else {
+            return Err(attribute_error(position, field));
+        };
+        let value = decode_attribute_value(&cursor[..value_end], encoding);
+        values.push(value);
+        *cursor = &cursor[value_end + 1..];
+        match cursor.first() {
+            Some(&b) if b == ATTRIBUTE_VALUES_CLOSE => {
+                *cursor = &cursor[1..];
+                return Ok(values);
+            }
+            Some(_) => {}
+            None => return Err(attribute_error(position, field)),
+        }
+    }
+}
+
+/// Strips the single outer single-quote pair (if both present) from an
+/// attribute value and decodes it through `encoding`. Interior bytes
+/// are kept verbatim — doubled quotes are not un-doubled, matching
+/// PSPP, since values are line-feed-delimited rather than
+/// quote-delimited.
+fn decode_attribute_value(bytes: &[u8], encoding: &'static Encoding) -> String {
+    let inner = if bytes.len() >= 2
+        && bytes[0] == ATTRIBUTE_VALUE_QUOTE
+        && bytes[bytes.len() - 1] == ATTRIBUTE_VALUE_QUOTE
+    {
+        &bytes[1..bytes.len() - 1]
+    } else {
+        bytes
+    };
+    let (value, _, _) = encoding.decode(inner);
+    value.into_owned()
 }
 
 /// Parses an extension subtype-11 payload (per-variable display
@@ -1468,6 +1617,217 @@ mod tests {
                 }
             ),
             _ => panic!("expected Format error"),
+        }
+    }
+
+    #[test]
+    fn parse_data_file_attributes_single_attribute_single_value() {
+        let payload = b"attr('value'\n)";
+        let result =
+            parse_data_file_attributes(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name(), "attr");
+        assert_eq!(result[0].values(), &["value".to_string()]);
+    }
+
+    #[test]
+    fn parse_data_file_attributes_multiple_attributes_in_order() {
+        let payload = b"a('1'\n)b('2'\n)";
+        let result =
+            parse_data_file_attributes(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].name(), "a");
+        assert_eq!(result[0].values(), &["1".to_string()]);
+        assert_eq!(result[1].name(), "b");
+        assert_eq!(result[1].values(), &["2".to_string()]);
+    }
+
+    #[test]
+    fn parse_data_file_attributes_multiple_values_in_one_attribute() {
+        let payload = b"a('1'\n'2'\n'3'\n)";
+        let result =
+            parse_data_file_attributes(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result[0].values(),
+            &["1".to_string(), "2".to_string(), "3".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_data_file_attributes_keeps_index_suffix_verbatim() {
+        // PSPP stores multi-valued attributes as fred[1]/fred[2]; the
+        // wire layer keeps the suffix verbatim, deferring the array
+        // collapse to finalization.
+        let payload = b"fred[1]('23'\n)fred[2]('34'\n)";
+        let result =
+            parse_data_file_attributes(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].name(), "fred[1]");
+        assert_eq!(result[0].values(), &["23".to_string()]);
+        assert_eq!(result[1].name(), "fred[2]");
+        assert_eq!(result[1].values(), &["34".to_string()]);
+    }
+
+    #[test]
+    fn parse_data_file_attributes_strips_only_outer_quotes() {
+        // Interior doubled quotes are kept verbatim (values are
+        // line-feed-delimited, not quote-delimited), matching PSPP.
+        let payload = b"a('it''s'\n)";
+        let result =
+            parse_data_file_attributes(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result[0].values(), &["it''s".to_string()]);
+    }
+
+    #[test]
+    fn parse_data_file_attributes_unquoted_value_kept_verbatim() {
+        let payload = b"a(bare\n)";
+        let result =
+            parse_data_file_attributes(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result[0].values(), &["bare".to_string()]);
+    }
+
+    #[test]
+    fn parse_data_file_attributes_decodes_through_supplied_encoding() {
+        // 0xE9 = é in Windows-1252, invalid in standalone UTF-8.
+        let payload = b"a('caf\xE9'\n)";
+        let result =
+            parse_data_file_attributes(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result[0].values(), &["café".to_string()]);
+    }
+
+    #[test]
+    fn parse_data_file_attributes_empty_payload_yields_empty_vec() {
+        let result = parse_data_file_attributes(1, &[], encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn parse_data_file_attributes_rejects_wrong_element_size() {
+        let err =
+            parse_data_file_attributes(4, b"a('1'\n)", encoding_rs::WINDOWS_1252, 0).unwrap_err();
+        assert_attribute_error(&err, Field::ExtensionElementSize);
+    }
+
+    #[test]
+    fn parse_data_file_attributes_rejects_missing_open_paren() {
+        let err = parse_data_file_attributes(1, b"attr", encoding_rs::WINDOWS_1252, 0).unwrap_err();
+        assert_attribute_error(&err, Field::FileAttribute);
+    }
+
+    #[test]
+    fn parse_data_file_attributes_rejects_empty_name() {
+        let err =
+            parse_data_file_attributes(1, b"('1'\n)", encoding_rs::WINDOWS_1252, 0).unwrap_err();
+        assert_attribute_error(&err, Field::FileAttribute);
+    }
+
+    #[test]
+    fn parse_data_file_attributes_rejects_unterminated_value() {
+        // No line feed before the closing paren / end of payload.
+        let err =
+            parse_data_file_attributes(1, b"a('1')", encoding_rs::WINDOWS_1252, 0).unwrap_err();
+        assert_attribute_error(&err, Field::FileAttribute);
+    }
+
+    #[test]
+    fn parse_data_file_attributes_rejects_missing_close_paren() {
+        let err =
+            parse_data_file_attributes(1, b"a('1'\n", encoding_rs::WINDOWS_1252, 0).unwrap_err();
+        assert_attribute_error(&err, Field::FileAttribute);
+    }
+
+    #[test]
+    fn parse_variable_attributes_single_variable_single_attribute() {
+        let payload = b"var:a('1'\n)";
+        let result = parse_variable_attributes(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].variable_name(), "var");
+        assert_eq!(result[0].attributes().len(), 1);
+        assert_eq!(result[0].attributes()[0].name(), "a");
+        assert_eq!(result[0].attributes()[0].values(), &["1".to_string()]);
+    }
+
+    #[test]
+    fn parse_variable_attributes_multiple_variables_slash_delimited() {
+        let payload = b"v1:a('1'\n)/v2:b('2'\n)";
+        let result = parse_variable_attributes(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].variable_name(), "v1");
+        assert_eq!(result[0].attributes()[0].name(), "a");
+        assert_eq!(result[1].variable_name(), "v2");
+        assert_eq!(result[1].attributes()[0].name(), "b");
+    }
+
+    #[test]
+    fn parse_variable_attributes_multiple_attributes_per_variable() {
+        let payload = b"v:a('1'\n)b('2'\n)";
+        let result = parse_variable_attributes(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].attributes().len(), 2);
+        assert_eq!(result[0].attributes()[0].name(), "a");
+        assert_eq!(result[0].attributes()[1].name(), "b");
+    }
+
+    #[test]
+    fn parse_variable_attributes_trailing_slash_accepted() {
+        let payload = b"v:a('1'\n)/";
+        let result = parse_variable_attributes(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].variable_name(), "v");
+    }
+
+    #[test]
+    fn parse_variable_attributes_slash_inside_value_is_not_a_separator() {
+        // A `/` before a value's line feed is content, not the set
+        // delimiter, so it stays in the single record's value.
+        let payload = b"v:a('a/b'\n)";
+        let result = parse_variable_attributes(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].attributes()[0].values(), &["a/b".to_string()]);
+    }
+
+    #[test]
+    fn parse_variable_attributes_empty_payload_yields_empty_vec() {
+        let result = parse_variable_attributes(1, &[], encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn parse_variable_attributes_rejects_wrong_element_size() {
+        let err =
+            parse_variable_attributes(4, b"v:a('1'\n)", encoding_rs::WINDOWS_1252, 0).unwrap_err();
+        assert_attribute_error(&err, Field::ExtensionElementSize);
+    }
+
+    #[test]
+    fn parse_variable_attributes_rejects_missing_colon() {
+        let err =
+            parse_variable_attributes(1, b"a('1'\n)", encoding_rs::WINDOWS_1252, 0).unwrap_err();
+        assert_attribute_error(&err, Field::VariableAttribute);
+    }
+
+    #[test]
+    fn parse_variable_attributes_rejects_empty_variable_name() {
+        let err =
+            parse_variable_attributes(1, b":a('1'\n)", encoding_rs::WINDOWS_1252, 0).unwrap_err();
+        assert_attribute_error(&err, Field::VariableAttribute);
+    }
+
+    #[test]
+    fn parse_variable_attributes_rejects_malformed_attribute() {
+        let err =
+            parse_variable_attributes(1, b"v:a('1')", encoding_rs::WINDOWS_1252, 0).unwrap_err();
+        assert_attribute_error(&err, Field::VariableAttribute);
+    }
+
+    fn assert_attribute_error(err: &SavError, expected: Field) {
+        match err {
+            SavError::Format(e) => assert_eq!(
+                e.kind(),
+                FormatErrorKind::UnexpectedValue { field: expected }
+            ),
+            _ => panic!("expected Format error, got {err:?}"),
         }
     }
 

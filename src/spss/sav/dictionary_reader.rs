@@ -3241,4 +3241,101 @@ mod tests {
             _ => panic!("expected Format error, got {err:?}"),
         }
     }
+
+    #[test]
+    fn extension_subtype_17_data_file_attributes() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        let payload = b"owner('Alice'\n)version('3'\n)";
+        write_extension_record(
+            &mut bytes,
+            byte_order,
+            17,
+            1,
+            u32::try_from(payload.len()).unwrap(),
+            payload,
+        );
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let record = dict.read_record().unwrap().unwrap();
+        let DictionaryRecord::Extension(ExtensionRecord::FileAttributes(attributes)) = record
+        else {
+            panic!("expected FileAttributes, got {record:?}");
+        };
+        assert_eq!(attributes.len(), 2);
+        assert_eq!(attributes[0].name(), "owner");
+        assert_eq!(attributes[0].values(), &["Alice".to_string()]);
+        assert_eq!(attributes[1].name(), "version");
+        assert_eq!(attributes[1].values(), &["3".to_string()]);
+        assert!(dict.warnings().is_empty());
+    }
+
+    #[test]
+    fn extension_subtype_17_wrong_element_size_errors() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_extension_record(&mut bytes, byte_order, 17, 4, 2, &[0; 8]);
+
+        let mut dict = open(bytes);
+        let err = dict.read_record().unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(
+                e.kind(),
+                FormatErrorKind::UnexpectedValue {
+                    field: crate::spss::sav::sav_error::Field::ExtensionElementSize,
+                }
+            ),
+            _ => panic!("expected Format error, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn extension_subtype_18_variable_attributes() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        let payload = b"weight:$@Role('0'\n)/height:units('cm'\n)";
+        write_extension_record(
+            &mut bytes,
+            byte_order,
+            18,
+            1,
+            u32::try_from(payload.len()).unwrap(),
+            payload,
+        );
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let record = dict.read_record().unwrap().unwrap();
+        let DictionaryRecord::Extension(ExtensionRecord::VariableAttributes(records)) = record
+        else {
+            panic!("expected VariableAttributes, got {record:?}");
+        };
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].variable_name(), "weight");
+        assert_eq!(records[0].attributes()[0].name(), "$@Role");
+        assert_eq!(records[0].attributes()[0].values(), &["0".to_string()]);
+        assert_eq!(records[1].variable_name(), "height");
+        assert_eq!(records[1].attributes()[0].values(), &["cm".to_string()]);
+        assert!(dict.warnings().is_empty());
+    }
+
+    #[test]
+    fn extension_subtype_18_wrong_element_size_errors() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_extension_record(&mut bytes, byte_order, 18, 4, 2, &[0; 8]);
+
+        let mut dict = open(bytes);
+        let err = dict.read_record().unwrap_err();
+        match err {
+            SavError::Format(e) => assert_eq!(
+                e.kind(),
+                FormatErrorKind::UnexpectedValue {
+                    field: crate::spss::sav::sav_error::Field::ExtensionElementSize,
+                }
+            ),
+            _ => panic!("expected Format error, got {err:?}"),
+        }
+    }
 }
