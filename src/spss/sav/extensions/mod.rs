@@ -8,6 +8,8 @@ pub mod character_encoding;
 pub mod data_entry;
 /// Extended number of cases (subtype 16).
 pub mod extended_number_of_cases;
+/// Parsing helpers shared across extension subtypes.
+pub mod extension_parse;
 /// Top-level extension record enum.
 pub mod extension_record;
 /// Extra product information (subtype 10).

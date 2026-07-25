@@ -17,44 +17,46 @@ use crate::spss::sav::dictionary_format::{
     DICTIONARY_TERMINATOR_FILLER_LEN, DOCUMENT_LINE_LEN, EXTENSION_SUBTYPE_CHARACTER_ENCODING,
     EXTENSION_SUBTYPE_DATA_FILE_ATTRIBUTES, EXTENSION_SUBTYPE_DISPLAY_PARAMETERS,
     EXTENSION_SUBTYPE_EXTENDED_NUMBER_OF_CASES, EXTENSION_SUBTYPE_EXTRA_PRODUCT_INFO,
-    EXTENSION_SUBTYPE_FLOAT_INFO,
-    EXTENSION_SUBTYPE_LONG_STRING_MISSING_VALUES, EXTENSION_SUBTYPE_LONG_STRING_VALUE_LABELS,
-    EXTENSION_SUBTYPE_LONG_VARIABLE_NAMES, EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO,
-    EXTENSION_SUBTYPE_MULTIPLE_RESPONSE_SETS, EXTENSION_SUBTYPE_MULTIPLE_RESPONSE_SETS_EXTENDED,
-    EXTENSION_SUBTYPE_UUID, EXTENSION_SUBTYPE_VARIABLE_ATTRIBUTES, EXTENSION_SUBTYPE_VARIABLE_SETS,
-    EXTENSION_SUBTYPE_VERY_LONG_STRINGS,
-    MISSING_VALUE_ENTRY_LEN, RECORD_TYPE_DICTIONARY_TERMINATOR, RECORD_TYPE_DOCUMENT,
-    RECORD_TYPE_EXTENSION, RECORD_TYPE_VALUE_LABEL, RECORD_TYPE_VALUE_LABEL_VARIABLES,
-    RECORD_TYPE_VARIABLE, VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN,
-    VARIABLE_HAS_LABEL_OFFSET, VARIABLE_LABEL_PADDING, VARIABLE_MISSING_VALUE_COUNT_OFFSET,
-    VARIABLE_PRINT_FORMAT_OFFSET, VARIABLE_RECORD_BODY_LEN, VARIABLE_SHORT_NAME_LEN,
-    VARIABLE_SHORT_NAME_OFFSET, VARIABLE_TYPE_OFFSET, VARIABLE_WRITE_FORMAT_OFFSET,
+    EXTENSION_SUBTYPE_FLOAT_INFO, EXTENSION_SUBTYPE_LONG_STRING_MISSING_VALUES,
+    EXTENSION_SUBTYPE_LONG_STRING_VALUE_LABELS, EXTENSION_SUBTYPE_LONG_VARIABLE_NAMES,
+    EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO, EXTENSION_SUBTYPE_MULTIPLE_RESPONSE_SETS,
+    EXTENSION_SUBTYPE_MULTIPLE_RESPONSE_SETS_EXTENDED, EXTENSION_SUBTYPE_UUID,
+    EXTENSION_SUBTYPE_VARIABLE_ATTRIBUTES, EXTENSION_SUBTYPE_VARIABLE_SETS,
+    EXTENSION_SUBTYPE_VERY_LONG_STRINGS, MISSING_VALUE_ENTRY_LEN,
+    RECORD_TYPE_DICTIONARY_TERMINATOR, RECORD_TYPE_DOCUMENT, RECORD_TYPE_EXTENSION,
+    RECORD_TYPE_VALUE_LABEL, RECORD_TYPE_VALUE_LABEL_VARIABLES, RECORD_TYPE_VARIABLE,
+    VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN, VARIABLE_HAS_LABEL_OFFSET,
+    VARIABLE_LABEL_PADDING, VARIABLE_MISSING_VALUE_COUNT_OFFSET, VARIABLE_PRINT_FORMAT_OFFSET,
+    VARIABLE_RECORD_BODY_LEN, VARIABLE_SHORT_NAME_LEN, VARIABLE_SHORT_NAME_OFFSET,
+    VARIABLE_TYPE_OFFSET, VARIABLE_WRITE_FORMAT_OFFSET,
 };
 use crate::spss::sav::dictionary_parse::{
     VariableTypeCode, compose_raw_missing_values, normalize_value_label_variable_indices,
-    parse_data_file_attributes, parse_display_parameters,
-    parse_extended_number_of_cases, parse_float_sentinels, parse_has_label,
-    parse_extra_product_info, parse_long_string_missing_values, parse_long_string_value_labels,
-    parse_long_variable_names, parse_machine_integer_info, parse_missing_value_count,
-    parse_multiple_response_sets, parse_sav_format, parse_short_name, parse_uuid,
-    parse_value_label_entry,
-    parse_variable_attributes, parse_variable_sets, parse_variable_type, parse_very_long_strings,
-    value_label_entry_size,
+    parse_data_file_attributes, parse_has_label, parse_long_string_missing_values,
+    parse_long_string_value_labels, parse_machine_integer_info, parse_missing_value_count,
+    parse_multiple_response_sets, parse_sav_format, parse_short_name, parse_value_label_entry,
+    parse_variable_attributes, parse_variable_type, value_label_entry_size,
 };
 use crate::spss::sav::dictionary_record::DictionaryRecord;
 use crate::spss::sav::document_record::DocumentRecord;
 use crate::spss::sav::extension_envelope::ExtensionEnvelope;
 use crate::spss::sav::extensions::character_encoding;
+use crate::spss::sav::extensions::extended_number_of_cases;
 use crate::spss::sav::extensions::extension_record::ExtensionRecord;
+use crate::spss::sav::extensions::extra_product_info;
 use crate::spss::sav::extensions::file_attributes::FileAttributes;
+use crate::spss::sav::extensions::float_sentinels;
 use crate::spss::sav::extensions::long_missing_values::LongMissingValues;
 use crate::spss::sav::extensions::long_value_labels::LongValueLabels;
-use crate::spss::sav::extensions::long_variable_names::LongVariableNames;
+use crate::spss::sav::extensions::long_variable_names;
 use crate::spss::sav::extensions::machine_integer_info::MachineIntegerInfo;
 use crate::spss::sav::extensions::multiple_response_sets::MultipleResponseSets;
+use crate::spss::sav::extensions::raw_display_parameters;
 use crate::spss::sav::extensions::unknown_extension::UnknownExtension;
+use crate::spss::sav::extensions::uuid;
 use crate::spss::sav::extensions::variable_attributes::VariableAttributes;
-use crate::spss::sav::extensions::very_long_strings::VeryLongStrings;
+use crate::spss::sav::extensions::variable_sets;
+use crate::spss::sav::extensions::very_long_strings;
 use crate::spss::sav::raw_value_label_entry::RawValueLabelEntry;
 use crate::spss::sav::raw_value_label_set::RawValueLabelSet;
 use crate::spss::sav::reader_state::{ReaderState, u32_as_usize};
@@ -434,19 +436,19 @@ impl<R: Read> DictionaryReader<R> {
         let envelope = self.read_extension_envelope(byte_order, encoding)?;
         match envelope.subtype {
             EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO => self.read_machine_integer_info(&envelope),
-            EXTENSION_SUBTYPE_FLOAT_INFO => read_float_info(&envelope),
-            EXTENSION_SUBTYPE_EXTENDED_NUMBER_OF_CASES => read_extended_number_of_cases(&envelope),
+            EXTENSION_SUBTYPE_FLOAT_INFO => float_sentinels::read(&envelope),
+            EXTENSION_SUBTYPE_EXTENDED_NUMBER_OF_CASES => extended_number_of_cases::read(&envelope),
             EXTENSION_SUBTYPE_CHARACTER_ENCODING => character_encoding::read(&envelope),
-            EXTENSION_SUBTYPE_LONG_VARIABLE_NAMES => read_long_variable_names(&envelope),
-            EXTENSION_SUBTYPE_VERY_LONG_STRINGS => read_very_long_strings(&envelope),
-            EXTENSION_SUBTYPE_DISPLAY_PARAMETERS => read_display_parameters(&envelope),
-            EXTENSION_SUBTYPE_VARIABLE_SETS => read_variable_sets(&envelope),
+            EXTENSION_SUBTYPE_LONG_VARIABLE_NAMES => long_variable_names::read(&envelope),
+            EXTENSION_SUBTYPE_VERY_LONG_STRINGS => very_long_strings::read(&envelope),
+            EXTENSION_SUBTYPE_DISPLAY_PARAMETERS => raw_display_parameters::read(&envelope),
+            EXTENSION_SUBTYPE_VARIABLE_SETS => variable_sets::read(&envelope),
             EXTENSION_SUBTYPE_MULTIPLE_RESPONSE_SETS
             | EXTENSION_SUBTYPE_MULTIPLE_RESPONSE_SETS_EXTENDED => {
                 read_multiple_response_sets(&envelope)
             }
-            EXTENSION_SUBTYPE_EXTRA_PRODUCT_INFO => read_extra_product_info(&envelope),
-            EXTENSION_SUBTYPE_UUID => read_uuid(&envelope),
+            EXTENSION_SUBTYPE_EXTRA_PRODUCT_INFO => extra_product_info::read(&envelope),
+            EXTENSION_SUBTYPE_UUID => uuid::read(&envelope),
             EXTENSION_SUBTYPE_DATA_FILE_ATTRIBUTES => read_data_file_attributes(&envelope),
             EXTENSION_SUBTYPE_VARIABLE_ATTRIBUTES => read_variable_attributes(&envelope),
             EXTENSION_SUBTYPE_LONG_STRING_VALUE_LABELS => read_long_string_value_labels(&envelope),
@@ -721,88 +723,6 @@ fn four_bytes(body: &[u8], offset: usize) -> [u8; 4] {
         .expect("four-byte slice has the requested length")
 }
 
-/// Subtype 4 — float-sentinel values (system-missing / highest /
-/// lowest), carried verbatim from the envelope.
-fn read_float_info(envelope: &ExtensionEnvelope) -> Result<DictionaryRecord> {
-    let sentinels = parse_float_sentinels(
-        envelope.element_size,
-        envelope.element_count,
-        &envelope.payload,
-        envelope.element_size_position,
-    )?;
-    let record = ExtensionRecord::FloatInfo(sentinels);
-    let record = DictionaryRecord::Extension(record);
-    Ok(record)
-}
-
-/// Subtype 16 — extended (64-bit) case count.
-fn read_extended_number_of_cases(envelope: &ExtensionEnvelope) -> Result<DictionaryRecord> {
-    let extended = parse_extended_number_of_cases(
-        envelope.element_size,
-        envelope.element_count,
-        &envelope.payload,
-        envelope.byte_order,
-        envelope.element_size_position,
-    )?;
-    let record = ExtensionRecord::ExtendedNumberOfCases(extended);
-    let record = DictionaryRecord::Extension(record);
-    Ok(record)
-}
-
-/// Subtype 13 — long-variable-name mappings.
-fn read_long_variable_names(envelope: &ExtensionEnvelope) -> Result<DictionaryRecord> {
-    let mappings = parse_long_variable_names(
-        envelope.element_size,
-        &envelope.payload,
-        envelope.encoding,
-        envelope.element_size_position,
-    )?;
-    let names = LongVariableNames::builder().mappings(mappings).build();
-    let record = ExtensionRecord::LongVariableNames(names);
-    let record = DictionaryRecord::Extension(record);
-    Ok(record)
-}
-
-/// Subtype 14 — very-long-string width declarations.
-fn read_very_long_strings(envelope: &ExtensionEnvelope) -> Result<DictionaryRecord> {
-    let declarations = parse_very_long_strings(
-        envelope.element_size,
-        &envelope.payload,
-        envelope.encoding,
-        envelope.element_size_position,
-    )?;
-    let strings = VeryLongStrings::builder().strings(declarations).build();
-    let record = ExtensionRecord::VeryLongStrings(strings);
-    let record = DictionaryRecord::Extension(record);
-    Ok(record)
-}
-
-/// Subtype 10 — extra product information.
-fn read_extra_product_info(envelope: &ExtensionEnvelope) -> Result<DictionaryRecord> {
-    let info = parse_extra_product_info(
-        envelope.element_size,
-        &envelope.payload,
-        envelope.encoding,
-        envelope.element_size_position,
-    )?;
-    let record = ExtensionRecord::ExtraProductInfo(info);
-    let record = DictionaryRecord::Extension(record);
-    Ok(record)
-}
-
-/// Subtype 12 — a file UUID.
-fn read_uuid(envelope: &ExtensionEnvelope) -> Result<DictionaryRecord> {
-    let uuid = parse_uuid(
-        envelope.element_size,
-        &envelope.payload,
-        envelope.encoding,
-        envelope.element_size_position,
-    )?;
-    let record = ExtensionRecord::Uuid(uuid);
-    let record = DictionaryRecord::Extension(record);
-    Ok(record)
-}
-
 /// Subtypes 7 and 19 — multiple response sets.
 fn read_multiple_response_sets(envelope: &ExtensionEnvelope) -> Result<DictionaryRecord> {
     let sets = parse_multiple_response_sets(
@@ -813,19 +733,6 @@ fn read_multiple_response_sets(envelope: &ExtensionEnvelope) -> Result<Dictionar
     )?;
     let sets = MultipleResponseSets::builder().sets(sets).build();
     let record = ExtensionRecord::MultipleResponseSets(sets);
-    let record = DictionaryRecord::Extension(record);
-    Ok(record)
-}
-
-/// Subtype 5 — named variable groupings.
-fn read_variable_sets(envelope: &ExtensionEnvelope) -> Result<DictionaryRecord> {
-    let sets = parse_variable_sets(
-        envelope.element_size,
-        &envelope.payload,
-        envelope.encoding,
-        envelope.element_size_position,
-    )?;
-    let record = ExtensionRecord::VariableSets(sets);
     let record = DictionaryRecord::Extension(record);
     Ok(record)
 }
@@ -884,19 +791,6 @@ fn read_long_string_missing_values(envelope: &ExtensionEnvelope) -> Result<Dicti
     )?;
     let values = LongMissingValues::builder().records(records).build();
     let record = ExtensionRecord::LongMissingValues(values);
-    let record = DictionaryRecord::Extension(record);
-    Ok(record)
-}
-
-/// Subtype 11 — raw per-variable display parameters.
-fn read_display_parameters(envelope: &ExtensionEnvelope) -> Result<DictionaryRecord> {
-    let raw = parse_display_parameters(
-        envelope.element_size,
-        &envelope.payload,
-        envelope.byte_order,
-        envelope.element_size_position,
-    )?;
-    let record = ExtensionRecord::DisplayParameters(raw);
     let record = DictionaryRecord::Extension(record);
     Ok(record)
 }
@@ -2272,123 +2166,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn extension_subtype_4_float_sentinels() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        // Three known IEEE 754 bit patterns: a NaN (system missing
-        // in IEEE files), -Inf (LOWEST), +Inf (HIGHEST).
-        let sys = f64::from_bits(0xFFF8_0000_0000_0000);
-        let high = f64::INFINITY;
-        let low = f64::NEG_INFINITY;
-        let mut payload = Vec::with_capacity(24);
-        payload.extend_from_slice(&sys.to_le_bytes());
-        payload.extend_from_slice(&high.to_le_bytes());
-        payload.extend_from_slice(&low.to_le_bytes());
-        write_extension_record(&mut bytes, byte_order, 4, 8, 3, &payload);
-        write_terminator(&mut bytes, byte_order);
-
-        let mut dict = open(bytes);
-        let record = dict.read_record().unwrap().unwrap();
-        let DictionaryRecord::Extension(ExtensionRecord::FloatInfo(sentinels)) = record else {
-            panic!("expected FloatInfo, got {record:?}");
-        };
-        assert_eq!(sentinels.system_missing(), sys.to_le_bytes());
-        assert_eq!(sentinels.highest(), high.to_le_bytes());
-        assert_eq!(sentinels.lowest(), low.to_le_bytes());
-        assert!(dict.warnings().is_empty());
-    }
-
-    #[test]
-    fn extension_subtype_4_preserves_arbitrary_bit_patterns() {
-        // Use a non-canonical NaN to confirm the bytes are not
-        // normalized through any IEEE decode path.
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        let sys = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x7F];
-        let high = [0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF];
-        let low = [0xFE, 0xED, 0xFA, 0xCE, 0xFE, 0xED, 0xFA, 0xCE];
-        let mut payload = Vec::with_capacity(24);
-        payload.extend_from_slice(&sys);
-        payload.extend_from_slice(&high);
-        payload.extend_from_slice(&low);
-        write_extension_record(&mut bytes, byte_order, 4, 8, 3, &payload);
-        write_terminator(&mut bytes, byte_order);
-
-        let mut dict = open(bytes);
-        let DictionaryRecord::Extension(ExtensionRecord::FloatInfo(sentinels)) =
-            dict.read_record().unwrap().unwrap()
-        else {
-            panic!("expected FloatInfo");
-        };
-        assert_eq!(sentinels.system_missing(), sys);
-        assert_eq!(sentinels.highest(), high);
-        assert_eq!(sentinels.lowest(), low);
-    }
-
-    #[test]
-    fn extension_subtype_4_carries_bytes_verbatim_regardless_of_byte_order() {
-        // Even with big-endian header byte order, the sentinel
-        // bytes are stored verbatim — no byte-swapping is applied
-        // here because the float-format decode is the consumer's
-        // concern.
-        let byte_order = ByteOrder::BigEndian;
-        let mut bytes = build_header(byte_order);
-        let payload: [u8; 24] = std::array::from_fn(|i| u8::try_from(i).unwrap());
-        write_extension_record(&mut bytes, byte_order, 4, 8, 3, &payload);
-        write_terminator(&mut bytes, byte_order);
-
-        let mut dict = open(bytes);
-        let DictionaryRecord::Extension(ExtensionRecord::FloatInfo(sentinels)) =
-            dict.read_record().unwrap().unwrap()
-        else {
-            panic!("expected FloatInfo");
-        };
-        assert_eq!(sentinels.system_missing(), [0, 1, 2, 3, 4, 5, 6, 7]);
-        assert_eq!(sentinels.highest(), [8, 9, 10, 11, 12, 13, 14, 15]);
-        assert_eq!(sentinels.lowest(), [16, 17, 18, 19, 20, 21, 22, 23]);
-    }
-
-    #[test]
-    fn extension_subtype_4_wrong_element_size_errors() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        // Spec says element_size must be 8; pass 4 instead.
-        write_extension_record(&mut bytes, byte_order, 4, 4, 3, &[0; 12]);
-
-        let mut dict = open(bytes);
-        let err = dict.read_record().unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: sav_error::Field::ExtensionElementSize,
-                }
-            ),
-            _ => panic!("expected Format error, got {err:?}"),
-        }
-    }
-
-    #[test]
-    fn extension_subtype_4_wrong_element_count_errors() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        // Spec says element_count must be 3; pass 2 instead.
-        write_extension_record(&mut bytes, byte_order, 4, 8, 2, &[0; 16]);
-
-        let mut dict = open(bytes);
-        let err = dict.read_record().unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: sav_error::Field::ExtensionElementCount,
-                }
-            ),
-            _ => panic!("expected Format error, got {err:?}"),
-        }
-    }
-
     /// Builds a 32-byte subtype-3 payload from 8 i32 fields in the
     /// given byte order.
     fn build_machine_integer_info_payload(byte_order: ByteOrder, fields: [i32; 8]) -> Vec<u8> {
@@ -2561,606 +2338,6 @@ mod tests {
         }
     }
 
-    /// Builds a 16-byte subtype-16 payload (version flag + case count).
-    fn build_extended_number_of_cases_payload(
-        byte_order: ByteOrder,
-        version: i64,
-        count: i64,
-    ) -> Vec<u8> {
-        let to_bytes = |v: i64| match byte_order {
-            ByteOrder::LittleEndian => v.to_le_bytes(),
-            ByteOrder::BigEndian => v.to_be_bytes(),
-        };
-        let version_bytes = to_bytes(version);
-        let count_bytes = to_bytes(count);
-        let mut buf = Vec::with_capacity(version_bytes.len() + count_bytes.len());
-        buf.extend_from_slice(&version_bytes);
-        buf.extend_from_slice(&count_bytes);
-        buf
-    }
-
-    #[test]
-    fn extension_subtype_16_extended_number_of_cases() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        let payload = build_extended_number_of_cases_payload(byte_order, 1, 1_234_567_890);
-        write_extension_record(&mut bytes, byte_order, 16, 8, 2, &payload);
-        write_terminator(&mut bytes, byte_order);
-
-        let mut dict = open(bytes);
-        let record = dict.read_record().unwrap().unwrap();
-        let DictionaryRecord::Extension(ExtensionRecord::ExtendedNumberOfCases(extended)) = record
-        else {
-            panic!("expected ExtendedNumberOfCases, got {record:?}");
-        };
-        assert_eq!(extended.version(), 1);
-        assert_eq!(extended.count(), 1_234_567_890);
-        assert!(dict.warnings().is_empty());
-    }
-
-    #[test]
-    fn extension_subtype_16_big_endian() {
-        let byte_order = ByteOrder::BigEndian;
-        let mut bytes = build_header(byte_order);
-        let payload = build_extended_number_of_cases_payload(byte_order, 1, -42);
-        write_extension_record(&mut bytes, byte_order, 16, 8, 2, &payload);
-        write_terminator(&mut bytes, byte_order);
-
-        let mut dict = open(bytes);
-        let DictionaryRecord::Extension(ExtensionRecord::ExtendedNumberOfCases(extended)) =
-            dict.read_record().unwrap().unwrap()
-        else {
-            panic!("expected ExtendedNumberOfCases");
-        };
-        assert_eq!(extended.count(), -42);
-    }
-
-    #[test]
-    fn extension_subtype_16_wrong_element_size_errors() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        // Spec says element_size must be 8; pass 4 instead.
-        write_extension_record(&mut bytes, byte_order, 16, 4, 2, &[0; 8]);
-
-        let mut dict = open(bytes);
-        let err = dict.read_record().unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: sav_error::Field::ExtensionElementSize,
-                }
-            ),
-            _ => panic!("expected Format error, got {err:?}"),
-        }
-    }
-
-    #[test]
-    fn extension_subtype_16_wrong_element_count_errors() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        // Spec says element_count must be 2; pass 1 instead.
-        write_extension_record(&mut bytes, byte_order, 16, 8, 1, &[0; 8]);
-
-        let mut dict = open(bytes);
-        let err = dict.read_record().unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: sav_error::Field::ExtensionElementCount,
-                }
-            ),
-            _ => panic!("expected Format error, got {err:?}"),
-        }
-    }
-
-    #[test]
-    fn extension_subtype_13_single_mapping() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        let payload = b"V1=Variable1";
-        write_extension_record(
-            &mut bytes,
-            byte_order,
-            13,
-            1,
-            u32::try_from(payload.len()).unwrap(),
-            payload,
-        );
-        write_terminator(&mut bytes, byte_order);
-
-        let mut dict = open(bytes);
-        let record = dict.read_record().unwrap().unwrap();
-        let DictionaryRecord::Extension(ExtensionRecord::LongVariableNames(mappings)) = record
-        else {
-            panic!("expected LongVariableNames, got {record:?}");
-        };
-        let mappings = mappings.mappings();
-        assert_eq!(mappings.len(), 1);
-        assert_eq!(mappings[0].short_name(), "V1");
-        assert_eq!(mappings[0].long_name(), "Variable1");
-        assert!(dict.warnings().is_empty());
-    }
-
-    #[test]
-    fn extension_subtype_13_multiple_mappings_in_order() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        let payload = b"V1=Alpha\tV2=Beta\tV3=Gamma";
-        write_extension_record(
-            &mut bytes,
-            byte_order,
-            13,
-            1,
-            u32::try_from(payload.len()).unwrap(),
-            payload,
-        );
-        write_terminator(&mut bytes, byte_order);
-
-        let mut dict = open(bytes);
-        let DictionaryRecord::Extension(ExtensionRecord::LongVariableNames(mappings)) =
-            dict.read_record().unwrap().unwrap()
-        else {
-            panic!("expected LongVariableNames");
-        };
-        let mappings = mappings.mappings();
-        let names: Vec<(&str, &str)> = mappings
-            .iter()
-            .map(|m| (m.short_name(), m.long_name()))
-            .collect();
-        assert_eq!(
-            names,
-            vec![("V1", "Alpha"), ("V2", "Beta"), ("V3", "Gamma")]
-        );
-    }
-
-    #[test]
-    fn extension_subtype_13_optional_trailing_separator() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        let payload = b"V1=Alpha\tV2=Beta\t";
-        write_extension_record(
-            &mut bytes,
-            byte_order,
-            13,
-            1,
-            u32::try_from(payload.len()).unwrap(),
-            payload,
-        );
-        write_terminator(&mut bytes, byte_order);
-
-        let mut dict = open(bytes);
-        let DictionaryRecord::Extension(ExtensionRecord::LongVariableNames(mappings)) =
-            dict.read_record().unwrap().unwrap()
-        else {
-            panic!("expected LongVariableNames");
-        };
-        let mappings = mappings.mappings();
-        assert_eq!(mappings.len(), 2);
-        assert!(dict.warnings().is_empty());
-    }
-
-    #[test]
-    fn extension_subtype_13_big_endian() {
-        let byte_order = ByteOrder::BigEndian;
-        let mut bytes = build_header(byte_order);
-        let payload = b"V1=Long";
-        write_extension_record(
-            &mut bytes,
-            byte_order,
-            13,
-            1,
-            u32::try_from(payload.len()).unwrap(),
-            payload,
-        );
-        write_terminator(&mut bytes, byte_order);
-
-        let mut dict = open(bytes);
-        let DictionaryRecord::Extension(ExtensionRecord::LongVariableNames(mappings)) =
-            dict.read_record().unwrap().unwrap()
-        else {
-            panic!("expected LongVariableNames");
-        };
-        let mappings = mappings.mappings();
-        assert_eq!(mappings[0].long_name(), "Long");
-    }
-
-    #[test]
-    fn extension_subtype_13_decoded_through_active_encoding() {
-        // 0xE9 = é in Windows-1252 (the test scaffolding's default
-        // header encoding), invalid as standalone UTF-8.
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        let mut payload = Vec::new();
-        payload.extend_from_slice(b"V1=caf\xE9");
-        write_extension_record(
-            &mut bytes,
-            byte_order,
-            13,
-            1,
-            u32::try_from(payload.len()).unwrap(),
-            &payload,
-        );
-        write_terminator(&mut bytes, byte_order);
-
-        let mut dict = open(bytes);
-        let DictionaryRecord::Extension(ExtensionRecord::LongVariableNames(mappings)) =
-            dict.read_record().unwrap().unwrap()
-        else {
-            panic!("expected LongVariableNames");
-        };
-        let mappings = mappings.mappings();
-        assert_eq!(mappings[0].long_name(), "café");
-    }
-
-    #[test]
-    fn extension_subtype_13_empty_payload_yields_empty_vec() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        write_extension_record(&mut bytes, byte_order, 13, 1, 0, &[]);
-        write_terminator(&mut bytes, byte_order);
-
-        let mut dict = open(bytes);
-        let DictionaryRecord::Extension(ExtensionRecord::LongVariableNames(mappings)) =
-            dict.read_record().unwrap().unwrap()
-        else {
-            panic!("expected LongVariableNames");
-        };
-        let mappings = mappings.mappings();
-        assert!(mappings.is_empty());
-        assert!(dict.warnings().is_empty());
-    }
-
-    #[test]
-    fn extension_subtype_13_missing_equals_errors() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        let payload = b"V1=ok\tBADPAIR";
-        write_extension_record(
-            &mut bytes,
-            byte_order,
-            13,
-            1,
-            u32::try_from(payload.len()).unwrap(),
-            payload,
-        );
-
-        let mut dict = open(bytes);
-        let err = dict.read_record().unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: sav_error::Field::LongVariableNamePair,
-                }
-            ),
-            _ => panic!("expected Format error, got {err:?}"),
-        }
-    }
-
-    #[test]
-    fn extension_subtype_13_wrong_element_size_errors() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        write_extension_record(&mut bytes, byte_order, 13, 4, 2, &[0; 8]);
-
-        let mut dict = open(bytes);
-        let err = dict.read_record().unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: sav_error::Field::ExtensionElementSize,
-                }
-            ),
-            _ => panic!("expected Format error, got {err:?}"),
-        }
-    }
-
-    #[test]
-    fn extension_subtype_14_single_declaration() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        let payload = b"RESPONSE=00226\0\t";
-        write_extension_record(
-            &mut bytes,
-            byte_order,
-            14,
-            1,
-            u32::try_from(payload.len()).unwrap(),
-            payload,
-        );
-        write_terminator(&mut bytes, byte_order);
-
-        let mut dict = open(bytes);
-        let record = dict.read_record().unwrap().unwrap();
-        let DictionaryRecord::Extension(ExtensionRecord::VeryLongStrings(declarations)) = record
-        else {
-            panic!("expected VeryLongStrings, got {record:?}");
-        };
-        let declarations = declarations.strings();
-        assert_eq!(declarations.len(), 1);
-        assert_eq!(declarations[0].short_name(), "RESPONSE");
-        assert_eq!(declarations[0].width(), 226);
-        assert!(dict.warnings().is_empty());
-    }
-
-    #[test]
-    fn extension_subtype_14_multiple_declarations_in_order() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        let payload = b"V1=00300\0\tV2=01000\0\tV3=32767\0\t";
-        write_extension_record(
-            &mut bytes,
-            byte_order,
-            14,
-            1,
-            u32::try_from(payload.len()).unwrap(),
-            payload,
-        );
-        write_terminator(&mut bytes, byte_order);
-
-        let mut dict = open(bytes);
-        let DictionaryRecord::Extension(ExtensionRecord::VeryLongStrings(declarations)) =
-            dict.read_record().unwrap().unwrap()
-        else {
-            panic!("expected VeryLongStrings");
-        };
-        let declarations = declarations.strings();
-        let pairs: Vec<(&str, u32)> = declarations
-            .iter()
-            .map(|d| (d.short_name(), d.width()))
-            .collect();
-        assert_eq!(pairs, vec![("V1", 300), ("V2", 1000), ("V3", 32767)]);
-        assert!(dict.warnings().is_empty());
-    }
-
-    #[test]
-    fn extension_subtype_14_big_endian() {
-        let byte_order = ByteOrder::BigEndian;
-        let mut bytes = build_header(byte_order);
-        let payload = b"V1=00300\0\t";
-        write_extension_record(
-            &mut bytes,
-            byte_order,
-            14,
-            1,
-            u32::try_from(payload.len()).unwrap(),
-            payload,
-        );
-        write_terminator(&mut bytes, byte_order);
-
-        let mut dict = open(bytes);
-        let DictionaryRecord::Extension(ExtensionRecord::VeryLongStrings(declarations)) =
-            dict.read_record().unwrap().unwrap()
-        else {
-            panic!("expected VeryLongStrings");
-        };
-        let declarations = declarations.strings();
-        assert_eq!(declarations.len(), 1);
-        assert_eq!(declarations[0].width(), 300);
-    }
-
-    #[test]
-    fn extension_subtype_14_empty_payload_yields_empty_vec() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        write_extension_record(&mut bytes, byte_order, 14, 1, 0, &[]);
-        write_terminator(&mut bytes, byte_order);
-
-        let mut dict = open(bytes);
-        let DictionaryRecord::Extension(ExtensionRecord::VeryLongStrings(declarations)) =
-            dict.read_record().unwrap().unwrap()
-        else {
-            panic!("expected VeryLongStrings");
-        };
-        let declarations = declarations.strings();
-        assert!(declarations.is_empty());
-    }
-
-    #[test]
-    fn extension_subtype_14_wrong_element_size_errors() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        write_extension_record(&mut bytes, byte_order, 14, 4, 2, &[0; 8]);
-
-        let mut dict = open(bytes);
-        let err = dict.read_record().unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: sav_error::Field::ExtensionElementSize,
-                }
-            ),
-            _ => panic!("expected Format error, got {err:?}"),
-        }
-    }
-
-    #[test]
-    fn extension_subtype_14_malformed_pair_errors() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        let payload = b"V1=300\tV2=abc";
-        write_extension_record(
-            &mut bytes,
-            byte_order,
-            14,
-            1,
-            u32::try_from(payload.len()).unwrap(),
-            payload,
-        );
-
-        let mut dict = open(bytes);
-        let err = dict.read_record().unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: sav_error::Field::VeryLongStringPair,
-                }
-            ),
-            _ => panic!("expected Format error, got {err:?}"),
-        }
-    }
-
-    /// Builds a subtype-11 payload from a flat `(measure, [width,]
-    /// alignment)` u32 stream.
-    fn build_display_parameters_payload(byte_order: ByteOrder, values: &[u32]) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(values.len() * 4);
-        for &v in values {
-            match byte_order {
-                ByteOrder::LittleEndian => buf.extend_from_slice(&v.to_le_bytes()),
-                ByteOrder::BigEndian => buf.extend_from_slice(&v.to_be_bytes()),
-            }
-        }
-        buf
-    }
-
-    #[test]
-    fn extension_subtype_11_two_tuple_form() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        // Two variables, 2-tuple form: (measure, alignment) each.
-        let values = [1u32, 0, 3, 1];
-        let payload = build_display_parameters_payload(byte_order, &values);
-        write_extension_record(
-            &mut bytes,
-            byte_order,
-            11,
-            4,
-            u32::try_from(values.len()).unwrap(),
-            &payload,
-        );
-        write_terminator(&mut bytes, byte_order);
-
-        let mut dict = open(bytes);
-        let record = dict.read_record().unwrap().unwrap();
-        let DictionaryRecord::Extension(ExtensionRecord::DisplayParameters(raw)) = record else {
-            panic!("expected DisplayParameters, got {record:?}");
-        };
-        assert_eq!(raw.values(), &values);
-        assert!(dict.warnings().is_empty());
-    }
-
-    #[test]
-    fn extension_subtype_11_three_tuple_form() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        // One variable, 3-tuple form: (measure, width, alignment).
-        let values = [2u32, 12, 1];
-        let payload = build_display_parameters_payload(byte_order, &values);
-        write_extension_record(
-            &mut bytes,
-            byte_order,
-            11,
-            4,
-            u32::try_from(values.len()).unwrap(),
-            &payload,
-        );
-        write_terminator(&mut bytes, byte_order);
-
-        let mut dict = open(bytes);
-        let DictionaryRecord::Extension(ExtensionRecord::DisplayParameters(raw)) =
-            dict.read_record().unwrap().unwrap()
-        else {
-            panic!("expected DisplayParameters");
-        };
-        assert_eq!(raw.values(), &values);
-    }
-
-    #[test]
-    fn extension_subtype_11_big_endian() {
-        let byte_order = ByteOrder::BigEndian;
-        let mut bytes = build_header(byte_order);
-        let values = [1u32, 0, 3, 8, 1];
-        let payload = build_display_parameters_payload(byte_order, &values);
-        write_extension_record(
-            &mut bytes,
-            byte_order,
-            11,
-            4,
-            u32::try_from(values.len()).unwrap(),
-            &payload,
-        );
-        write_terminator(&mut bytes, byte_order);
-
-        let mut dict = open(bytes);
-        let DictionaryRecord::Extension(ExtensionRecord::DisplayParameters(raw)) =
-            dict.read_record().unwrap().unwrap()
-        else {
-            panic!("expected DisplayParameters");
-        };
-        assert_eq!(raw.values(), &values);
-    }
-
-    #[test]
-    fn extension_subtype_11_empty_payload_yields_empty_values() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        write_extension_record(&mut bytes, byte_order, 11, 4, 0, &[]);
-        write_terminator(&mut bytes, byte_order);
-
-        let mut dict = open(bytes);
-        let DictionaryRecord::Extension(ExtensionRecord::DisplayParameters(raw)) =
-            dict.read_record().unwrap().unwrap()
-        else {
-            panic!("expected DisplayParameters");
-        };
-        assert!(raw.values().is_empty());
-        assert!(dict.warnings().is_empty());
-    }
-
-    #[test]
-    fn extension_subtype_11_preserves_unrecognized_codes() {
-        // measure = 99 (not 0..=3), alignment = 7 (not 0..=2).
-        // Streaming preserves them; finalization will bucket them
-        // into MeasurementLevel::Unknown / Alignment::Unknown when
-        // it produces typed VariableDisplay values.
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        let values = [99u32, 7];
-        let payload = build_display_parameters_payload(byte_order, &values);
-        write_extension_record(
-            &mut bytes,
-            byte_order,
-            11,
-            4,
-            u32::try_from(values.len()).unwrap(),
-            &payload,
-        );
-        write_terminator(&mut bytes, byte_order);
-
-        let mut dict = open(bytes);
-        let DictionaryRecord::Extension(ExtensionRecord::DisplayParameters(raw)) =
-            dict.read_record().unwrap().unwrap()
-        else {
-            panic!("expected DisplayParameters");
-        };
-        assert_eq!(raw.values(), &values);
-    }
-
-    #[test]
-    fn extension_subtype_11_wrong_element_size_errors() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        // Spec says element_size must be 4; pass 8 instead.
-        write_extension_record(&mut bytes, byte_order, 11, 8, 2, &[0; 16]);
-
-        let mut dict = open(bytes);
-        let err = dict.read_record().unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: sav_error::Field::ExtensionElementSize,
-                }
-            ),
-            _ => panic!("expected Format error, got {err:?}"),
-        }
-    }
-
     #[test]
     fn extension_subtype_17_data_file_attributes() {
         let byte_order = ByteOrder::LittleEndian;
@@ -3261,141 +2438,6 @@ mod tests {
     }
 
     #[test]
-    fn extension_subtype_12_uuid() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        let payload = b"F81D4fae-7DEC-11d0-a765-00A0C91E6BF6";
-        write_extension_record(
-            &mut bytes,
-            byte_order,
-            12,
-            1,
-            u32::try_from(payload.len()).unwrap(),
-            payload,
-        );
-        write_terminator(&mut bytes, byte_order);
-
-        let mut dict = open(bytes);
-        let record = dict.read_record().unwrap().unwrap();
-        let DictionaryRecord::Extension(ExtensionRecord::Uuid(uuid)) = record else {
-            panic!("expected Uuid, got {record:?}");
-        };
-        assert_eq!(uuid.text(), "F81D4fae-7DEC-11d0-a765-00A0C91E6BF6");
-        assert!(dict.warnings().is_empty());
-    }
-
-    #[test]
-    fn extension_subtype_12_wrong_element_size_errors() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        write_extension_record(&mut bytes, byte_order, 12, 4, 2, &[0; 8]);
-
-        let mut dict = open(bytes);
-        let err = dict.read_record().unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: crate::spss::sav::sav_error::Field::ExtensionElementSize,
-                }
-            ),
-            _ => panic!("expected Format error, got {err:?}"),
-        }
-    }
-
-    #[test]
-    fn extension_subtype_10_extra_product_info() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        let payload = b"Acme Stats 4.3";
-        write_extension_record(
-            &mut bytes,
-            byte_order,
-            10,
-            1,
-            u32::try_from(payload.len()).unwrap(),
-            payload,
-        );
-        write_terminator(&mut bytes, byte_order);
-
-        let mut dict = open(bytes);
-        let record = dict.read_record().unwrap().unwrap();
-        let DictionaryRecord::Extension(ExtensionRecord::ExtraProductInfo(info)) = record else {
-            panic!("expected ExtraProductInfo, got {record:?}");
-        };
-        assert_eq!(info.text(), "Acme Stats 4.3");
-        assert!(dict.warnings().is_empty());
-    }
-
-    #[test]
-    fn extension_subtype_10_wrong_element_size_errors() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        write_extension_record(&mut bytes, byte_order, 10, 4, 2, &[0; 8]);
-
-        let mut dict = open(bytes);
-        let err = dict.read_record().unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: crate::spss::sav::sav_error::Field::ExtensionElementSize,
-                }
-            ),
-            _ => panic!("expected Format error, got {err:?}"),
-        }
-    }
-
-    #[test]
-    fn extension_subtype_5_variable_sets() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        let payload = b"demographics= age sex\nmetrics= height\n";
-        write_extension_record(
-            &mut bytes,
-            byte_order,
-            5,
-            1,
-            u32::try_from(payload.len()).unwrap(),
-            payload,
-        );
-        write_terminator(&mut bytes, byte_order);
-
-        let mut dict = open(bytes);
-        let record = dict.read_record().unwrap().unwrap();
-        let DictionaryRecord::Extension(ExtensionRecord::VariableSets(sets)) = record else {
-            panic!("expected VariableSets, got {record:?}");
-        };
-        assert_eq!(sets.sets().len(), 2);
-        assert_eq!(sets.sets()[0].name(), "demographics");
-        assert_eq!(
-            sets.sets()[0].variables(),
-            &["age".to_string(), "sex".to_string()]
-        );
-        assert_eq!(sets.sets()[1].name(), "metrics");
-        assert!(dict.warnings().is_empty());
-    }
-
-    #[test]
-    fn extension_subtype_5_wrong_element_size_errors() {
-        let byte_order = ByteOrder::LittleEndian;
-        let mut bytes = build_header(byte_order);
-        write_extension_record(&mut bytes, byte_order, 5, 4, 2, &[0; 8]);
-
-        let mut dict = open(bytes);
-        let err = dict.read_record().unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: sav_error::Field::ExtensionElementSize,
-                }
-            ),
-            _ => panic!("expected Format error, got {err:?}"),
-        }
-    }
-
-    #[test]
     fn extension_subtype_21_long_string_value_labels() {
         let byte_order = ByteOrder::LittleEndian;
         let mut payload = Vec::new();
@@ -3476,7 +2518,8 @@ mod tests {
 
         let mut dict = open(bytes);
         let record = dict.read_record().unwrap().unwrap();
-        let DictionaryRecord::Extension(ExtensionRecord::LongMissingValues(records)) = record else {
+        let DictionaryRecord::Extension(ExtensionRecord::LongMissingValues(records)) = record
+        else {
             panic!("expected LongMissingValues, got {record:?}");
         };
         let records = records.records();

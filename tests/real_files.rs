@@ -149,12 +149,11 @@ fn comprehensive_value_labels_and_documents() {
     assert_eq!(set.entries()[1].value(), 1.0f64.to_le_bytes());
 
     let documents = documents(&records);
-    assert!(
-        documents
-            .iter()
-            .any(|d| d.lines().iter().any(|l| l.contains("documentary line for testing"))),
-        "documents = {documents:?}"
-    );
+    let contains = documents.iter().any(|d| d
+        .lines()
+        .iter()
+        .any(|l| l.contains("documentary line for testing")));
+    assert!(contains, "documents = {documents:?}");
 }
 
 #[test]

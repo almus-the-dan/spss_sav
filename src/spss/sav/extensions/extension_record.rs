@@ -23,8 +23,8 @@ use crate::spss::sav::extensions::very_long_strings::VeryLongStrings;
 /// Subtype-to-variant assignments here mirror PSPP's documented
 /// system file format and `ReadStat`'s implementation; the spec md
 /// in this repository's reference directory has known errors and is
-/// not authoritative. Subtypes that this enum doesn't yet carry 
-/// (e.g., XML display info = 24) fall through to [`Unknown`](Self::Unknown) 
+/// not authoritative. Subtypes that this enum doesn't yet carry
+/// (e.g., XML display info = 24) fall through to [`Unknown`](Self::Unknown)
 /// for now.
 ///
 /// The reader preserves unrecognized subtypes verbatim via

@@ -7,7 +7,20 @@ use std::io::Cursor;
 
 use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::dictionary_reader::DictionaryReader;
+use crate::spss::sav::sav_error::{Field, FormatErrorKind, SavError};
 use crate::spss::sav::sav_reader::SavReader;
+
+/// Asserts that `err` is a dictionary `UnexpectedValue` format error
+/// tagged with `expected`.
+pub(crate) fn assert_unexpected_value_error(err: &SavError, expected: Field) {
+    match err {
+        SavError::Format(e) => assert_eq!(
+            e.kind(),
+            FormatErrorKind::UnexpectedValue { field: expected }
+        ),
+        _ => panic!("expected Format error, got {err:?}"),
+    }
+}
 
 /// Builds a minimal valid 176-byte SAV header (uncompressed,
 /// little-endian, IEEE 754, bias 100.0).

@@ -18,51 +18,31 @@ use crate::spss::sav::byte_cursor::ByteCursor;
 use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::dictionary_format::{
     ATTRIBUTE_NAME_TERMINATOR, ATTRIBUTE_VALUE_QUOTE, ATTRIBUTE_VALUE_TERMINATOR,
-    ATTRIBUTE_VALUES_CLOSE,
-    DATA_FILE_ATTRIBUTES_ELEMENT_SIZE, DISPLAY_PARAMETERS_ELEMENT_SIZE,
-    EXTENDED_NUMBER_OF_CASES_COUNT_OFFSET, EXTENDED_NUMBER_OF_CASES_ELEMENT_COUNT,
-    EXTENDED_NUMBER_OF_CASES_ELEMENT_SIZE, EXTENDED_NUMBER_OF_CASES_VERSION_OFFSET,
-    EXTRA_PRODUCT_INFO_ELEMENT_SIZE, FLOAT_SENTINELS_ELEMENT_COUNT, FLOAT_SENTINELS_ELEMENT_SIZE,
-    FLOAT_SENTINELS_HIGHEST_OFFSET,
-    FLOAT_SENTINELS_LOWEST_OFFSET, FLOAT_SENTINELS_SYSTEM_MISSING_OFFSET,
-    FORMAT_CODE_DECIMALS_BYTE, FORMAT_CODE_KIND_BYTE, FORMAT_CODE_WIDTH_BYTE,
-    LONG_STRING_MISSING_VALUE_MAX_COUNT, LONG_STRING_MISSING_VALUES_ELEMENT_SIZE,
-    LONG_STRING_VALUE_LABELS_ELEMENT_SIZE, LONG_VARIABLE_NAMES_ELEMENT_SIZE,
-    LONG_VARIABLE_NAMES_KEY_VALUE_SEPARATOR,
-    LONG_VARIABLE_NAMES_PAIR_SEPARATOR, MACHINE_INTEGER_INFO_ELEMENT_COUNT,
-    MACHINE_INTEGER_INFO_ELEMENT_SIZE, MULTIPLE_RESPONSE_SET_TYPE_CATEGORY,
-    MULTIPLE_RESPONSE_SET_TYPE_DICHOTOMY_COUNTED_VALUES,
+    ATTRIBUTE_VALUES_CLOSE, DATA_FILE_ATTRIBUTES_ELEMENT_SIZE, FORMAT_CODE_DECIMALS_BYTE,
+    FORMAT_CODE_KIND_BYTE, FORMAT_CODE_WIDTH_BYTE, LONG_STRING_MISSING_VALUE_MAX_COUNT,
+    LONG_STRING_MISSING_VALUES_ELEMENT_SIZE, LONG_STRING_VALUE_LABELS_ELEMENT_SIZE,
+    MACHINE_INTEGER_INFO_ELEMENT_COUNT, MACHINE_INTEGER_INFO_ELEMENT_SIZE,
+    MULTIPLE_RESPONSE_SET_TYPE_CATEGORY, MULTIPLE_RESPONSE_SET_TYPE_DICHOTOMY_COUNTED_VALUES,
     MULTIPLE_RESPONSE_SET_TYPE_DICHOTOMY_VARIABLE_LABELS, MULTIPLE_RESPONSE_SETS_ELEMENT_SIZE,
     MULTIPLE_RESPONSE_SETS_FIELD_SEPARATOR, MULTIPLE_RESPONSE_SETS_LINE_SEPARATOR,
-    MULTIPLE_RESPONSE_SETS_NAME_TERMINATOR, UUID_ELEMENT_SIZE, VALUE_LABEL_ENTRY_ALIGNMENT,
-    VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN, VARIABLE_TYPE_CONTINUATION,
-    VARIABLE_ATTRIBUTES_ELEMENT_SIZE, VARIABLE_ATTRIBUTES_NAME_TERMINATOR,
-    VARIABLE_ATTRIBUTES_SET_SEPARATOR, VARIABLE_SETS_ELEMENT_SIZE,
-    VARIABLE_SETS_LINE_CARRIAGE_RETURN, VARIABLE_SETS_LINE_SEPARATOR,
-    VARIABLE_SETS_MEMBER_SEPARATOR, VARIABLE_SETS_NAME_TERMINATOR, VARIABLE_TYPE_NUMERIC,
-    VARIABLE_TYPE_STRING_MAX,
-    VERY_LONG_STRINGS_ELEMENT_SIZE, VERY_LONG_STRINGS_KEY_VALUE_SEPARATOR,
-    VERY_LONG_STRINGS_PAIR_PADDING, VERY_LONG_STRINGS_PAIR_SEPARATOR,
+    MULTIPLE_RESPONSE_SETS_NAME_TERMINATOR, VALUE_LABEL_ENTRY_ALIGNMENT,
+    VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN, VARIABLE_ATTRIBUTES_ELEMENT_SIZE,
+    VARIABLE_ATTRIBUTES_NAME_TERMINATOR, VARIABLE_ATTRIBUTES_SET_SEPARATOR,
+    VARIABLE_TYPE_CONTINUATION, VARIABLE_TYPE_NUMERIC, VARIABLE_TYPE_STRING_MAX,
 };
-use crate::spss::sav::extensions::extended_number_of_cases::ExtendedNumberOfCases;
-use crate::spss::sav::extensions::extra_product_info::ExtraProductInfo;
+use crate::spss::sav::extensions::category_label_source::CategoryLabelSource;
+use crate::spss::sav::extensions::extension_parse::{
+    unexpected_value_error, validate_extension_shape,
+};
 use crate::spss::sav::extensions::file_attribute::FileAttribute;
-use crate::spss::sav::extensions::float_sentinels::FloatSentinels;
 use crate::spss::sav::extensions::long_missing_value_record::LongMissingValueRecord;
 use crate::spss::sav::extensions::long_value_label::LongValueLabel;
 use crate::spss::sav::extensions::long_value_label_record::LongValueLabelRecord;
-use crate::spss::sav::extensions::long_variable_name::LongVariableName;
-use crate::spss::sav::extensions::category_label_source::CategoryLabelSource;
 use crate::spss::sav::extensions::machine_integer_info::MachineIntegerInfo;
 use crate::spss::sav::extensions::multiple_response_set::MultipleResponseSet;
 use crate::spss::sav::extensions::multiple_response_set_kind::MultipleResponseSetKind;
-use crate::spss::sav::extensions::raw_display_parameters::RawDisplayParameters;
 use crate::spss::sav::extensions::variable_attribute_entry::VariableAttributeEntry;
-use crate::spss::sav::extensions::uuid::Uuid;
 use crate::spss::sav::extensions::variable_attribute_record::VariableAttributeRecord;
-use crate::spss::sav::extensions::variable_set::VariableSet;
-use crate::spss::sav::extensions::variable_sets::VariableSets;
-use crate::spss::sav::extensions::very_long_string::VeryLongString;
 use crate::spss::sav::raw_missing_values::RawMissingValues;
 use crate::spss::sav::raw_value_label_entry::RawValueLabelEntry;
 use crate::spss::sav::reader_state::u32_as_usize;
@@ -339,142 +319,6 @@ pub(super) fn normalize_value_label_variable_indices(
     Ok(out)
 }
 
-/// Validates that a type-7 record's envelope (`element_size`,
-/// `element_count`) matches the shape a specific subtype is
-/// supposed to declare.
-///
-/// # Errors
-///
-/// Returns [`FormatErrorKind::UnexpectedValue`] tagged with
-/// [`Field::ExtensionElementSize`] or
-/// [`Field::ExtensionElementCount`] on the first mismatch. The
-/// `position` is the byte offset at which the envelope began (the
-/// `element_size` field).
-pub(super) fn validate_extension_shape(
-    actual_size: u32,
-    actual_count: u32,
-    expected_size: u32,
-    expected_count: u32,
-    position: u64,
-) -> Result<()> {
-    if actual_size != expected_size {
-        let error = SavError::format(
-            Section::Dictionary,
-            position,
-            FormatErrorKind::UnexpectedValue {
-                field: Field::ExtensionElementSize,
-            },
-        );
-        return Err(error);
-    }
-    if actual_count != expected_count {
-        let error = SavError::format(
-            Section::Dictionary,
-            position,
-            FormatErrorKind::UnexpectedValue {
-                field: Field::ExtensionElementCount,
-            },
-        );
-        return Err(error);
-    }
-    Ok(())
-}
-
-/// Parses an extension subtype-16 payload (extended number of
-/// cases: two `i64` fields — a version flag plus the authoritative
-/// case count).
-///
-/// Validates the envelope against the subtype's spec shape
-/// (`element_size == 8`, `element_count == 2`) and decodes both
-/// `i64`s in the file's byte order.
-///
-/// # Errors
-///
-/// Returns [`FormatErrorKind::UnexpectedValue`] when the envelope
-/// shape disagrees with the spec.
-///
-/// # Panics
-///
-/// Panics in debug builds if `payload.len()` does not equal
-/// `actual_size * actual_count`. The caller (the dictionary reader)
-/// reads the payload from those dimensions, so this is a logic
-/// invariant.
-pub(super) fn parse_extended_number_of_cases(
-    actual_size: u32,
-    actual_count: u32,
-    payload: &[u8],
-    byte_order: ByteOrder,
-    position: u64,
-) -> Result<ExtendedNumberOfCases> {
-    validate_extension_shape(
-        actual_size,
-        actual_count,
-        EXTENDED_NUMBER_OF_CASES_ELEMENT_SIZE,
-        EXTENDED_NUMBER_OF_CASES_ELEMENT_COUNT,
-        position,
-    )?;
-    debug_assert_eq!(payload.len(), 16);
-    let i64_at = |offset: usize| -> i64 {
-        let bytes: [u8; 8] = payload[offset..offset + 8]
-            .try_into()
-            .expect("envelope validation guarantees a 16-byte payload");
-        byte_order.read_i64(bytes)
-    };
-    let record = ExtendedNumberOfCases::builder()
-        .version(i64_at(EXTENDED_NUMBER_OF_CASES_VERSION_OFFSET))
-        .count(i64_at(EXTENDED_NUMBER_OF_CASES_COUNT_OFFSET))
-        .build();
-    Ok(record)
-}
-
-/// Parses an extension subtype-4 payload (float sentinel values:
-/// system missing, highest, lowest).
-///
-/// Validates the envelope against the subtype's spec shape
-/// (`element_size == 8`, `element_count == 3`) and slices the
-/// 24-byte payload into three 8-byte slabs. Bytes are carried
-/// verbatim — no float-format decode is applied here, so the
-/// returned [`FloatSentinels`] round-trips bit-exactly regardless
-/// of whether the file uses IEEE 754, IBM HFP, or VAX.
-///
-/// # Errors
-///
-/// Returns [`FormatErrorKind::UnexpectedValue`] when the envelope
-/// shape disagrees with the spec.
-///
-/// # Panics
-///
-/// Panics in debug builds if `payload.len()` does not equal
-/// `actual_size * actual_count`. The caller (the dictionary reader)
-/// reads the payload from those dimensions, so this is a logic
-/// invariant.
-pub(super) fn parse_float_sentinels(
-    actual_size: u32,
-    actual_count: u32,
-    payload: &[u8],
-    position: u64,
-) -> Result<FloatSentinels> {
-    validate_extension_shape(
-        actual_size,
-        actual_count,
-        FLOAT_SENTINELS_ELEMENT_SIZE,
-        FLOAT_SENTINELS_ELEMENT_COUNT,
-        position,
-    )?;
-    debug_assert_eq!(payload.len(), 24);
-    let slab = |offset: usize| -> [u8; 8] {
-        payload[offset..offset + 8]
-            .try_into()
-            .expect("envelope validation guarantees a 24-byte payload")
-    };
-    let sentinels = FloatSentinels::builder()
-        .system_missing(slab(FLOAT_SENTINELS_SYSTEM_MISSING_OFFSET))
-        .highest(slab(FLOAT_SENTINELS_HIGHEST_OFFSET))
-        .lowest(slab(FLOAT_SENTINELS_LOWEST_OFFSET))
-        .build();
-    Ok(sentinels)
-}
-
 /// Parses an extension subtype-5 payload (machine integer info: 8
 /// `i32` fields holding version numbers, machine code,
 /// floating-point representation, compression code, endianness, and
@@ -535,235 +379,6 @@ pub(super) fn parse_machine_integer_info(
     Ok(info)
 }
 
-/// Parses an extension subtype-10 payload (extra product information)
-/// into an [`ExtraProductInfo`].
-///
-/// The payload is a free-form text string whose byte length is exact,
-/// so it is decoded through `encoding` verbatim — no trailing padding
-/// is trimmed.
-///
-/// # Errors
-///
-/// Returns [`FormatErrorKind::UnexpectedValue`] tagged
-/// [`Field::ExtensionElementSize`] when `actual_size != 1`.
-pub(super) fn parse_extra_product_info(
-    actual_size: u32,
-    payload: &[u8],
-    encoding: &'static Encoding,
-    position: u64,
-) -> Result<ExtraProductInfo> {
-    if actual_size != EXTRA_PRODUCT_INFO_ELEMENT_SIZE {
-        return Err(unexpected_value_error(position, Field::ExtensionElementSize));
-    }
-    let (text, _, _) = encoding.decode(payload);
-    let info = ExtraProductInfo::builder().text(text.into_owned()).build();
-    Ok(info)
-}
-
-/// Parses an extension subtype-12 payload (a file UUID) into a
-/// [`Uuid`].
-///
-/// The payload is the UUID's RFC 4122 text form. It is decoded through
-/// `encoding` verbatim — the string is neither trimmed nor validated
-/// against RFC 4122, preserving its exact bytes and letter case.
-///
-/// # Errors
-///
-/// Returns [`FormatErrorKind::UnexpectedValue`] tagged
-/// [`Field::ExtensionElementSize`] when `actual_size != 1`.
-pub(super) fn parse_uuid(
-    actual_size: u32,
-    payload: &[u8],
-    encoding: &'static Encoding,
-    position: u64,
-) -> Result<Uuid> {
-    if actual_size != UUID_ELEMENT_SIZE {
-        return Err(unexpected_value_error(position, Field::ExtensionElementSize));
-    }
-    let (text, _, _) = encoding.decode(payload);
-    let uuid = Uuid::builder().text(text.into_owned()).build();
-    Ok(uuid)
-}
-
-/// Parses an extension subtype-13 payload (long-variable-name
-/// mappings).
-///
-/// The on-disk shape is a fixed-`element_size`-of-1 byte stream of
-/// [`LONG_VARIABLE_NAMES_PAIR_SEPARATOR`]-separated pairs, each
-/// holding a `short`[`LONG_VARIABLE_NAMES_KEY_VALUE_SEPARATOR`]`long`
-/// mapping. A trailing pair separator (the optional terminating tab
-/// PSPP's grammar permits) is accepted without warning.
-///
-/// This helper validates `actual_size == 1` and decodes each half
-/// through `encoding`. PSPP's character-class constraints on short
-/// names and the 8 / 64 byte length limits are *not* enforced —
-/// finalization or user code is responsible for validating that the
-/// short names match real variables. Duplicate short names are
-/// preserved in declaration order; the streaming layer records what
-/// disk said.
-///
-/// # Errors
-///
-/// * [`FormatErrorKind::UnexpectedValue`] tagged
-///   [`Field::ExtensionElementSize`] when `actual_size != 1`.
-/// * [`FormatErrorKind::UnexpectedValue`] tagged
-///   [`Field::LongVariableNamePair`] when a non-empty pair lacks
-///   a [`LONG_VARIABLE_NAMES_KEY_VALUE_SEPARATOR`], has an empty
-///   key, or has an empty value.
-pub(super) fn parse_long_variable_names(
-    actual_size: u32,
-    payload: &[u8],
-    encoding: &'static Encoding,
-    position: u64,
-) -> Result<Vec<LongVariableName>> {
-    if actual_size != LONG_VARIABLE_NAMES_ELEMENT_SIZE {
-        let error = SavError::format(
-            Section::Dictionary,
-            position,
-            FormatErrorKind::UnexpectedValue {
-                field: Field::ExtensionElementSize,
-            },
-        );
-        return Err(error);
-    }
-    let mut mappings: Vec<LongVariableName> = Vec::new();
-    let pairs = payload.split(|&b| b == LONG_VARIABLE_NAMES_PAIR_SEPARATOR);
-    for pair in pairs {
-        // A trailing pair separator yields a final empty segment;
-        // that's the optional terminator PSPP's grammar permits, not
-        // a malformed pair.
-        if pair.is_empty() {
-            continue;
-        }
-        let eq_index = pair
-            .iter()
-            .position(|&b| b == LONG_VARIABLE_NAMES_KEY_VALUE_SEPARATOR);
-        let Some(eq_index) = eq_index else {
-            let error = SavError::format(
-                Section::Dictionary,
-                position,
-                FormatErrorKind::UnexpectedValue {
-                    field: Field::LongVariableNamePair,
-                },
-            );
-            return Err(error);
-        };
-        let (key_bytes, rest) = pair.split_at(eq_index);
-        let value_bytes = &rest[1..];
-        if key_bytes.is_empty() || value_bytes.is_empty() {
-            let error = SavError::format(
-                Section::Dictionary,
-                position,
-                FormatErrorKind::UnexpectedValue {
-                    field: Field::LongVariableNamePair,
-                },
-            );
-            return Err(error);
-        }
-        let (short_cow, _, _) = encoding.decode(key_bytes);
-        let (long_cow, _, _) = encoding.decode(value_bytes);
-        let mapping = LongVariableName::builder()
-            .short_name(short_cow.into_owned())
-            .long_name(long_cow.into_owned())
-            .build();
-        mappings.push(mapping);
-    }
-    Ok(mappings)
-}
-
-/// Parses an extension subtype-14 payload (very-long-string widths)
-/// into [`VeryLongString`] declarations.
-///
-/// The on-disk shape is `short=width` pairs joined by
-/// [`VERY_LONG_STRINGS_PAIR_SEPARATOR`] (a tab), with the width
-/// written as ASCII decimal digits. SPSS terminates each pair with a
-/// NUL before the tab; any run of trailing NULs in a pair is
-/// trimmed, and a trailing separator is permitted. The short name is
-/// decoded through `encoding`; the width is *not* validated against
-/// the schema (that it exceeds 255, or matches the variable's
-/// declared segments) — finalization, which knows the variables,
-/// reconciles the declarations.
-///
-/// # Errors
-///
-/// * [`FormatErrorKind::UnexpectedValue`] tagged
-///   [`Field::ExtensionElementSize`] when `actual_size != 1`.
-/// * [`FormatErrorKind::UnexpectedValue`] tagged
-///   [`Field::VeryLongStringPair`] when a non-empty pair lacks a
-///   [`VERY_LONG_STRINGS_KEY_VALUE_SEPARATOR`], has an empty key or
-///   width, or has a width that isn't decimal digits or doesn't fit
-///   in a `u32`.
-pub(super) fn parse_very_long_strings(
-    actual_size: u32,
-    payload: &[u8],
-    encoding: &'static Encoding,
-    position: u64,
-) -> Result<Vec<VeryLongString>> {
-    if actual_size != VERY_LONG_STRINGS_ELEMENT_SIZE {
-        let error = SavError::format(
-            Section::Dictionary,
-            position,
-            FormatErrorKind::UnexpectedValue {
-                field: Field::ExtensionElementSize,
-            },
-        );
-        return Err(error);
-    }
-    let pair_error = || {
-        SavError::format(
-            Section::Dictionary,
-            position,
-            FormatErrorKind::UnexpectedValue {
-                field: Field::VeryLongStringPair,
-            },
-        )
-    };
-    let mut declarations: Vec<VeryLongString> = Vec::new();
-    let pairs = payload.split(|&b| b == VERY_LONG_STRINGS_PAIR_SEPARATOR);
-    for pair in pairs {
-        let trimmed_len = pair
-            .iter()
-            .rposition(|&b| b != VERY_LONG_STRINGS_PAIR_PADDING)
-            .map_or(0, |index| index + 1);
-        let pair = &pair[..trimmed_len];
-        // A pair that's empty after trimming is the NUL terminator
-        // of the preceding pair or the optional trailing separator,
-        // not a malformed pair.
-        if pair.is_empty() {
-            continue;
-        }
-        let eq_index = pair
-            .iter()
-            .position(|&b| b == VERY_LONG_STRINGS_KEY_VALUE_SEPARATOR);
-        let Some(eq_index) = eq_index else {
-            return Err(pair_error());
-        };
-        let (key_bytes, rest) = pair.split_at(eq_index);
-        let width_bytes = &rest[1..];
-        if key_bytes.is_empty() || width_bytes.is_empty() {
-            return Err(pair_error());
-        }
-        let mut width: u32 = 0;
-        for &byte in width_bytes {
-            if !byte.is_ascii_digit() {
-                return Err(pair_error());
-            }
-            let digit = u32::from(byte - b'0');
-            width = width
-                .checked_mul(10)
-                .and_then(|w| w.checked_add(digit))
-                .ok_or_else(pair_error)?;
-        }
-        let (short_cow, _, _) = encoding.decode(key_bytes);
-        let declaration = VeryLongString::builder()
-            .short_name(short_cow.into_owned())
-            .width(width)
-            .build();
-        declarations.push(declaration);
-    }
-    Ok(declarations)
-}
-
 /// Parses an extension subtype-17 (data file attributes) payload into
 /// its list of [`FileAttribute`]s.
 ///
@@ -789,7 +404,10 @@ pub(super) fn parse_data_file_attributes(
     position: u64,
 ) -> Result<Vec<FileAttribute>> {
     if actual_size != DATA_FILE_ATTRIBUTES_ELEMENT_SIZE {
-        return Err(unexpected_value_error(position, Field::ExtensionElementSize));
+        return Err(unexpected_value_error(
+            position,
+            Field::ExtensionElementSize,
+        ));
     }
     let mut cursor = payload;
     let mut attributes: Vec<FileAttribute> = Vec::new();
@@ -830,7 +448,10 @@ pub(super) fn parse_variable_attributes(
     position: u64,
 ) -> Result<Vec<VariableAttributeRecord>> {
     if actual_size != VARIABLE_ATTRIBUTES_ELEMENT_SIZE {
-        return Err(unexpected_value_error(position, Field::ExtensionElementSize));
+        return Err(unexpected_value_error(
+            position,
+            Field::ExtensionElementSize,
+        ));
     }
     let mut cursor = payload;
     let mut records: Vec<VariableAttributeRecord> = Vec::new();
@@ -853,8 +474,7 @@ fn parse_variable_attribute(
     let name_end = cursor
         .iter()
         .position(|&b| b == VARIABLE_ATTRIBUTES_NAME_TERMINATOR);
-    let Some(name_end) = name_end
-    else {
+    let Some(name_end) = name_end else {
         return Err(unexpected_value_error(position, Field::VariableAttribute));
     };
     let name_bytes = &cursor[..name_end];
@@ -873,17 +493,6 @@ fn parse_variable_attribute(
         builder = builder.attribute(entry);
     }
     Ok(builder.build())
-}
-
-/// Builds a dictionary-section `UnexpectedValue` format error tagged
-/// with `field`. Shared by the text (subtypes 17/18) and binary
-/// (subtypes 21/22) extension parsers.
-fn unexpected_value_error(position: u64, field: Field) -> SavError {
-    SavError::format(
-        Section::Dictionary,
-        position,
-        FormatErrorKind::UnexpectedValue { field },
-    )
 }
 
 /// Parses one attribute set (the grammar shared by subtypes 17 and
@@ -970,86 +579,6 @@ fn decode_attribute_value(bytes: &[u8], encoding: &'static Encoding) -> String {
     value.into_owned()
 }
 
-/// Parses an extension subtype-5 payload (named variable groupings)
-/// into its [`VariableSets`].
-///
-/// The payload is one set per line: a set name, `=`, a space, then the
-/// members' long variable names separated by spaces; each line ends
-/// with a line feed, optionally preceded by a carriage return. A set
-/// may have no members. Blank lines (including the trailing line
-/// feed's empty segment) are skipped. Names and members are decoded
-/// through `encoding`; members are not validated against the schema.
-///
-/// # Errors
-///
-/// * [`Field::ExtensionElementSize`] when `actual_size != 1`.
-/// * [`Field::VariableSet`] when a non-empty line lacks a `=` or has
-///   an empty set name.
-pub(super) fn parse_variable_sets(
-    actual_size: u32,
-    payload: &[u8],
-    encoding: &'static Encoding,
-    position: u64,
-) -> Result<VariableSets> {
-    if actual_size != VARIABLE_SETS_ELEMENT_SIZE {
-        return Err(unexpected_value_error(position, Field::ExtensionElementSize));
-    }
-    let mut builder = VariableSets::builder();
-    for line in payload.split(|&b| b == VARIABLE_SETS_LINE_SEPARATOR) {
-        // A carriage return may precede the line feed; a trailing line
-        // feed leaves a final empty segment. Neither is a set.
-        let line = match line.split_last() {
-            Some((&VARIABLE_SETS_LINE_CARRIAGE_RETURN, head)) => head,
-            _ => line,
-        };
-        if line.is_empty() {
-            continue;
-        }
-        let set = parse_variable_set(line, encoding, position)?;
-        builder = builder.set(set);
-    }
-    Ok(builder.build())
-}
-
-/// Parses one `name= members...` line into a [`VariableSet`]. The name
-/// runs up to the first `=`; a single space after it (the `= `
-/// separator) is skipped, and the remaining space-separated tokens are
-/// the members (empty tokens from repeated spaces are dropped).
-fn parse_variable_set(
-    line: &[u8],
-    encoding: &'static Encoding,
-    position: u64,
-) -> Result<VariableSet> {
-    let field = Field::VariableSet;
-    let name_end = line.iter().position(|&b| b == VARIABLE_SETS_NAME_TERMINATOR);
-    let Some(name_end) = name_end else {
-        return Err(unexpected_value_error(position, field));
-    };
-    let name_bytes = &line[..name_end];
-    if name_bytes.is_empty() {
-        return Err(unexpected_value_error(position, field));
-    }
-    let members = &line[name_end + 1..];
-    // Skip the single space that follows the `=`; any further empty
-    // tokens (from repeated spaces) are dropped below.
-    let members = match members.split_first() {
-        Some((&VARIABLE_SETS_MEMBER_SEPARATOR, rest)) => rest,
-        _ => members,
-    };
-    let mut builder = VariableSet::builder();
-    let (name, _, _) = encoding.decode(name_bytes);
-    builder = builder.name(name.into_owned());
-    let members = members.split(|&b| b == VARIABLE_SETS_MEMBER_SEPARATOR);
-    for member in members {
-        if member.is_empty() {
-            continue;
-        }
-        let (member, _, _) = encoding.decode(member);
-        builder = builder.variable(member.into_owned());
-    }
-    Ok(builder.build())
-}
-
 /// Parses an extension subtype-7 or subtype-19 payload (multiple
 /// response sets) into its [`MultipleResponseSet`]s.
 ///
@@ -1076,7 +605,10 @@ pub(super) fn parse_multiple_response_sets(
     position: u64,
 ) -> Result<Vec<MultipleResponseSet>> {
     if actual_size != MULTIPLE_RESPONSE_SETS_ELEMENT_SIZE {
-        return Err(unexpected_value_error(position, Field::ExtensionElementSize));
+        return Err(unexpected_value_error(
+            position,
+            Field::ExtensionElementSize,
+        ));
     }
     let mut sets: Vec<MultipleResponseSet> = Vec::new();
     let lines = payload.split(|&b| b == MULTIPLE_RESPONSE_SETS_LINE_SEPARATOR);
@@ -1205,11 +737,7 @@ fn read_dichotomy_counted_values_kind(
 /// -bytes>`) from the front of `cursor`, advancing past it. Errors,
 /// tagged `field`, when the length is missing/non-numeric or the bytes
 /// run past the end.
-fn read_counted_string<'a>(
-    cursor: &mut &'a [u8],
-    position: u64,
-    field: Field,
-) -> Result<&'a [u8]> {
+fn read_counted_string<'a>(cursor: &mut &'a [u8], position: u64, field: Field) -> Result<&'a [u8]> {
     let length_bytes = take_before(cursor, MULTIPLE_RESPONSE_SETS_FIELD_SEPARATOR)
         .ok_or_else(|| unexpected_value_error(position, field))?;
     let length =
@@ -1257,9 +785,7 @@ fn parse_ascii_u32(bytes: &[u8]) -> Option<u32> {
         if !byte.is_ascii_digit() {
             return None;
         }
-        value = value
-            .checked_mul(10)?
-            .checked_add(u32::from(byte - b'0'))?;
+        value = value.checked_mul(10)?.checked_add(u32::from(byte - b'0'))?;
     }
     Some(value)
 }
@@ -1287,7 +813,10 @@ pub(super) fn parse_long_string_value_labels(
     position: u64,
 ) -> Result<Vec<LongValueLabelRecord>> {
     if actual_size != LONG_STRING_VALUE_LABELS_ELEMENT_SIZE {
-        return Err(unexpected_value_error(position, Field::ExtensionElementSize));
+        return Err(unexpected_value_error(
+            position,
+            Field::ExtensionElementSize,
+        ));
     }
     let mut cursor = ByteCursor::new(payload, Section::Dictionary, position);
     let mut records: Vec<LongValueLabelRecord> = Vec::new();
@@ -1370,7 +899,10 @@ pub(super) fn parse_long_string_missing_values(
     position: u64,
 ) -> Result<Vec<LongMissingValueRecord>> {
     if actual_size != LONG_STRING_MISSING_VALUES_ELEMENT_SIZE {
-        return Err(unexpected_value_error(position, Field::ExtensionElementSize));
+        return Err(unexpected_value_error(
+            position,
+            Field::ExtensionElementSize,
+        ));
     }
     let mut cursor = ByteCursor::new(payload, Section::Dictionary, position);
     let mut records: Vec<LongMissingValueRecord> = Vec::new();
@@ -1410,58 +942,6 @@ fn parse_long_missing_value_record(
         .variable_name(variable_name.into_owned())
         .values(values)
         .build();
-    Ok(record)
-}
-
-/// Parses an extension subtype-11 payload (per-variable display
-/// parameters) into a wire-level [`RawDisplayParameters`].
-///
-/// The on-disk shape is `element_count` `u32` values, each carrying
-/// either a measurement-level code, an optional display-width, or an
-/// alignment code. The 2-tuple vs. 3-tuple choice is per-record (all
-/// variables get a width or none do) and cannot be recovered without
-/// the dictionary's variable count, so the streaming layer preserves
-/// the raw values verbatim and defers per-variable slicing to schema
-/// finalization.
-///
-/// # Errors
-///
-/// Returns [`FormatErrorKind::UnexpectedValue`] tagged
-/// [`Field::ExtensionElementSize`] when `actual_size != 4`. The
-/// `element_count` is *not* validated here — finalization, which
-/// knows the variable count, decides whether the count is consistent
-/// with a 2-tuple or 3-tuple form.
-///
-/// # Panics
-///
-/// Panics in debug builds if `payload.len()` does not equal
-/// `actual_size * payload_count`, where `payload_count` is implied
-/// by the caller having read the payload to that exact size.
-pub(super) fn parse_display_parameters(
-    actual_size: u32,
-    payload: &[u8],
-    byte_order: ByteOrder,
-    position: u64,
-) -> Result<RawDisplayParameters> {
-    if actual_size != DISPLAY_PARAMETERS_ELEMENT_SIZE {
-        let error = SavError::format(
-            Section::Dictionary,
-            position,
-            FormatErrorKind::UnexpectedValue {
-                field: Field::ExtensionElementSize,
-            },
-        );
-        return Err(error);
-    }
-    debug_assert_eq!(payload.len() % 4, 0);
-    let values: Vec<u32> = payload
-        .chunks_exact(4)
-        .map(|chunk| {
-            let bytes: [u8; 4] = chunk.try_into().expect("chunks_exact yields 4-byte slices");
-            byte_order.read_u32(bytes)
-        })
-        .collect();
-    let record = RawDisplayParameters::builder().values(values).build();
     Ok(record)
 }
 
@@ -1768,354 +1248,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_extra_product_info_keeps_text_verbatim() {
-        // Trailing spaces must be preserved (the length is exact).
-        let payload = b"Acme Stats 4.3  ";
-        let result = parse_extra_product_info(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert_eq!(result.text(), "Acme Stats 4.3  ");
-    }
-
-    #[test]
-    fn parse_extra_product_info_decodes_through_supplied_encoding() {
-        // 0xE9 = é in Windows-1252, invalid in standalone UTF-8.
-        let payload = b"Caf\xE9 Analytics";
-        let result = parse_extra_product_info(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert_eq!(result.text(), "Café Analytics");
-    }
-
-    #[test]
-    fn parse_extra_product_info_empty_payload_yields_empty_text() {
-        let result = parse_extra_product_info(1, &[], encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert_eq!(result.text(), "");
-    }
-
-    #[test]
-    fn parse_extra_product_info_rejects_wrong_element_size() {
-        let err = parse_extra_product_info(4, b"prod", encoding_rs::WINDOWS_1252, 0).unwrap_err();
-        assert_unexpected_value_error(&err, Field::ExtensionElementSize);
-    }
-
-    #[test]
-    fn parse_uuid_keeps_mixed_case_text_verbatim() {
-        let payload = b"F81D4fae-7DEC-11d0-a765-00A0C91E6BF6";
-        let result = parse_uuid(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert_eq!(result.text(), "F81D4fae-7DEC-11d0-a765-00A0C91E6BF6");
-    }
-
-    #[test]
-    fn parse_uuid_does_not_validate_or_trim() {
-        // Not a valid UUID and has trailing space; both are kept as-is.
-        let payload = b"not-a-uuid ";
-        let result = parse_uuid(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert_eq!(result.text(), "not-a-uuid ");
-    }
-
-    #[test]
-    fn parse_uuid_empty_payload_yields_empty_text() {
-        let result = parse_uuid(1, &[], encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert_eq!(result.text(), "");
-    }
-
-    #[test]
-    fn parse_uuid_rejects_wrong_element_size() {
-        let err = parse_uuid(4, b"uuid", encoding_rs::WINDOWS_1252, 0).unwrap_err();
-        assert_unexpected_value_error(&err, Field::ExtensionElementSize);
-    }
-
-    #[test]
-    fn parse_long_variable_names_single_pair() {
-        let payload = b"V1=Variable1";
-        let result = parse_long_variable_names(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].short_name(), "V1");
-        assert_eq!(result[0].long_name(), "Variable1");
-    }
-
-    #[test]
-    fn parse_long_variable_names_multiple_pairs() {
-        let payload = b"V1=Variable1\tV2=Variable2\tV3=Variable3";
-        let result = parse_long_variable_names(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert_eq!(result.len(), 3);
-        assert_eq!(result[0].short_name(), "V1");
-        assert_eq!(result[1].short_name(), "V2");
-        assert_eq!(result[2].long_name(), "Variable3");
-    }
-
-    #[test]
-    fn parse_long_variable_names_trailing_separator_accepted() {
-        let payload = b"V1=Variable1\tV2=Variable2\t";
-        let result = parse_long_variable_names(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert_eq!(result.len(), 2);
-    }
-
-    #[test]
-    fn parse_long_variable_names_embedded_equals_in_value_split_on_first() {
-        let payload = b"K=v1=more";
-        let result = parse_long_variable_names(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].short_name(), "K");
-        assert_eq!(result[0].long_name(), "v1=more");
-    }
-
-    #[test]
-    fn parse_long_variable_names_empty_payload_yields_empty_vec() {
-        let result = parse_long_variable_names(1, &[], encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn parse_long_variable_names_uses_supplied_encoding() {
-        // 0xE9 = é in Windows-1252, invalid in standalone UTF-8.
-        let payload = b"K=caf\xE9";
-        let result = parse_long_variable_names(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert_eq!(result[0].long_name(), "café");
-    }
-
-    #[test]
-    fn parse_long_variable_names_preserves_duplicates_in_order() {
-        let payload = b"V1=First\tV1=Second";
-        let result = parse_long_variable_names(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0].long_name(), "First");
-        assert_eq!(result[1].long_name(), "Second");
-    }
-
-    #[test]
-    fn parse_long_variable_names_rejects_missing_equals() {
-        let payload = b"V1=ok\tV2only";
-        let err = parse_long_variable_names(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: Field::LongVariableNamePair
-                }
-            ),
-            _ => panic!("expected Format error"),
-        }
-    }
-
-    #[test]
-    fn parse_long_variable_names_rejects_empty_key() {
-        let payload = b"=Variable1";
-        let err = parse_long_variable_names(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: Field::LongVariableNamePair
-                }
-            ),
-            _ => panic!("expected Format error"),
-        }
-    }
-
-    #[test]
-    fn parse_long_variable_names_rejects_empty_value() {
-        let payload = b"V1=";
-        let err = parse_long_variable_names(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: Field::LongVariableNamePair
-                }
-            ),
-            _ => panic!("expected Format error"),
-        }
-    }
-
-    #[test]
-    fn parse_long_variable_names_rejects_wrong_element_size() {
-        let err = parse_long_variable_names(4, b"V1=L", encoding_rs::WINDOWS_1252, 0).unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: Field::ExtensionElementSize
-                }
-            ),
-            _ => panic!("expected Format error"),
-        }
-    }
-
-    #[test]
-    fn parse_very_long_strings_single_pair() {
-        let payload = b"RESPONSE=00226";
-        let result = parse_very_long_strings(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].short_name(), "RESPONSE");
-        assert_eq!(result[0].width(), 226);
-    }
-
-    #[test]
-    fn parse_very_long_strings_spss_nul_terminated_pairs() {
-        // SPSS terminates every pair with a NUL before the tab,
-        // including the last.
-        let payload = b"V1=00300\0\tV2=01000\0\t";
-        let result = parse_very_long_strings(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
-        let pairs: Vec<(&str, u32)> = result.iter().map(|d| (d.short_name(), d.width())).collect();
-        assert_eq!(pairs, vec![("V1", 300), ("V2", 1000)]);
-    }
-
-    #[test]
-    fn parse_very_long_strings_plain_tab_separators() {
-        let payload = b"V1=300\tV2=1000";
-        let result = parse_very_long_strings(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[1].width(), 1000);
-    }
-
-    #[test]
-    fn parse_very_long_strings_multiple_nuls_before_separator() {
-        let payload = b"V1=300\0\0\0\tV2=1000";
-        let result = parse_very_long_strings(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0].width(), 300);
-    }
-
-    #[test]
-    fn parse_very_long_strings_trailing_nuls_without_separator() {
-        let payload = b"V1=300\0\0";
-        let result = parse_very_long_strings(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].width(), 300);
-    }
-
-    #[test]
-    fn parse_very_long_strings_empty_payload_yields_empty_vec() {
-        let result = parse_very_long_strings(1, &[], encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn parse_very_long_strings_decodes_key_through_supplied_encoding() {
-        // 0xE9 = é in Windows-1252, invalid in standalone UTF-8.
-        let payload = b"CAF\xE9=300";
-        let result = parse_very_long_strings(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert_eq!(result[0].short_name(), "CAFé");
-    }
-
-    #[test]
-    fn parse_very_long_strings_preserves_duplicates_in_order() {
-        let payload = b"V1=300\tV1=400";
-        let result = parse_very_long_strings(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0].width(), 300);
-        assert_eq!(result[1].width(), 400);
-    }
-
-    #[test]
-    fn parse_very_long_strings_maximum_width_accepted() {
-        let payload = b"V1=4294967295";
-        let result = parse_very_long_strings(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert_eq!(result[0].width(), u32::MAX);
-    }
-
-    #[test]
-    fn parse_very_long_strings_rejects_missing_equals() {
-        let payload = b"V1=300\tV2only";
-        let err = parse_very_long_strings(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: Field::VeryLongStringPair
-                }
-            ),
-            _ => panic!("expected Format error"),
-        }
-    }
-
-    #[test]
-    fn parse_very_long_strings_rejects_empty_key() {
-        let payload = b"=300";
-        let err = parse_very_long_strings(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: Field::VeryLongStringPair
-                }
-            ),
-            _ => panic!("expected Format error"),
-        }
-    }
-
-    #[test]
-    fn parse_very_long_strings_rejects_empty_width() {
-        let payload = b"V1=";
-        let err = parse_very_long_strings(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: Field::VeryLongStringPair
-                }
-            ),
-            _ => panic!("expected Format error"),
-        }
-    }
-
-    #[test]
-    fn parse_very_long_strings_rejects_non_digit_width() {
-        let payload = b"V1=3O0";
-        let err = parse_very_long_strings(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: Field::VeryLongStringPair
-                }
-            ),
-            _ => panic!("expected Format error"),
-        }
-    }
-
-    #[test]
-    fn parse_very_long_strings_rejects_width_overflowing_u32() {
-        let payload = b"V1=4294967296";
-        let err = parse_very_long_strings(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: Field::VeryLongStringPair
-                }
-            ),
-            _ => panic!("expected Format error"),
-        }
-    }
-
-    #[test]
-    fn parse_very_long_strings_interior_nul_preserved_in_key() {
-        // NULs are trimmed only from a pair's end; an interior NUL
-        // is not silently dropped into a different name. (Like
-        // subtype 13, no character-class enforcement at streaming.)
-        let payload = b"V\x001=300";
-        let result = parse_very_long_strings(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert_eq!(result[0].short_name(), "V\u{0}1");
-    }
-
-    #[test]
-    fn parse_very_long_strings_rejects_wrong_element_size() {
-        let err = parse_very_long_strings(4, b"V1=300", encoding_rs::WINDOWS_1252, 0).unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: Field::ExtensionElementSize
-                }
-            ),
-            _ => panic!("expected Format error"),
-        }
-    }
-
-    #[test]
     fn parse_data_file_attributes_single_attribute_single_value() {
         let payload = b"attr('value'\n)";
-        let result =
-            parse_data_file_attributes(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        let result = parse_data_file_attributes(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name(), "attr");
         assert_eq!(result[0].values(), &["value".to_string()]);
@@ -2124,8 +1259,7 @@ mod tests {
     #[test]
     fn parse_data_file_attributes_multiple_attributes_in_order() {
         let payload = b"a('1'\n)b('2'\n)";
-        let result =
-            parse_data_file_attributes(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        let result = parse_data_file_attributes(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].name(), "a");
         assert_eq!(result[0].values(), &["1".to_string()]);
@@ -2136,8 +1270,7 @@ mod tests {
     #[test]
     fn parse_data_file_attributes_multiple_values_in_one_attribute() {
         let payload = b"a('1'\n'2'\n'3'\n)";
-        let result =
-            parse_data_file_attributes(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        let result = parse_data_file_attributes(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(
             result[0].values(),
@@ -2151,8 +1284,7 @@ mod tests {
         // wire layer keeps the suffix verbatim, deferring the array
         // collapse to finalization.
         let payload = b"fred[1]('23'\n)fred[2]('34'\n)";
-        let result =
-            parse_data_file_attributes(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        let result = parse_data_file_attributes(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].name(), "fred[1]");
         assert_eq!(result[0].values(), &["23".to_string()]);
@@ -2165,16 +1297,14 @@ mod tests {
         // Interior doubled quotes are kept verbatim (values are
         // line-feed-delimited, not quote-delimited), matching PSPP.
         let payload = b"a('it''s'\n)";
-        let result =
-            parse_data_file_attributes(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        let result = parse_data_file_attributes(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
         assert_eq!(result[0].values(), &["it''s".to_string()]);
     }
 
     #[test]
     fn parse_data_file_attributes_unquoted_value_kept_verbatim() {
         let payload = b"a(bare\n)";
-        let result =
-            parse_data_file_attributes(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        let result = parse_data_file_attributes(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
         assert_eq!(result[0].values(), &["bare".to_string()]);
     }
 
@@ -2182,8 +1312,7 @@ mod tests {
     fn parse_data_file_attributes_decodes_through_supplied_encoding() {
         // 0xE9 = é in Windows-1252, invalid in standalone UTF-8.
         let payload = b"a('caf\xE9'\n)";
-        let result =
-            parse_data_file_attributes(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        let result = parse_data_file_attributes(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
         assert_eq!(result[0].values(), &["café".to_string()]);
     }
 
@@ -2568,95 +1697,10 @@ mod tests {
     }
 
     #[test]
-    fn parse_variable_sets_single_set_with_members() {
-        let payload = b"demographics= age sex region\n";
-        let result = parse_variable_sets(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert_eq!(result.sets().len(), 1);
-        assert_eq!(result.sets()[0].name(), "demographics");
-        assert_eq!(
-            result.sets()[0].variables(),
-            &["age".to_string(), "sex".to_string(), "region".to_string()]
-        );
-    }
-
-    #[test]
-    fn parse_variable_sets_multiple_sets() {
-        let payload = b"grp1= a b\ngrp2= c\n";
-        let result = parse_variable_sets(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert_eq!(result.sets().len(), 2);
-        assert_eq!(result.sets()[0].name(), "grp1");
-        assert_eq!(result.sets()[1].name(), "grp2");
-        assert_eq!(result.sets()[1].variables(), &["c".to_string()]);
-    }
-
-    #[test]
-    fn parse_variable_sets_empty_set_has_no_members() {
-        let payload = b"empty= \n";
-        let result = parse_variable_sets(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert_eq!(result.sets().len(), 1);
-        assert_eq!(result.sets()[0].name(), "empty");
-        assert!(result.sets()[0].variables().is_empty());
-    }
-
-    #[test]
-    fn parse_variable_sets_strips_carriage_return() {
-        let payload = b"grp= a b\r\n";
-        let result = parse_variable_sets(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert_eq!(result.sets()[0].variables(), &["a".to_string(), "b".to_string()]);
-    }
-
-    #[test]
-    fn parse_variable_sets_ignores_repeated_and_trailing_spaces() {
-        let payload = b"grp=  a   b \n";
-        let result = parse_variable_sets(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert_eq!(result.sets()[0].variables(), &["a".to_string(), "b".to_string()]);
-    }
-
-    #[test]
-    fn parse_variable_sets_decodes_through_supplied_encoding() {
-        // 0xE9 = é in Windows-1252, invalid in standalone UTF-8.
-        let payload = b"caf\xE9= r\xE9gion\n";
-        let result = parse_variable_sets(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert_eq!(result.sets()[0].name(), "café");
-        assert_eq!(result.sets()[0].variables(), &["région".to_string()]);
-    }
-
-    #[test]
-    fn parse_variable_sets_empty_payload_yields_no_sets() {
-        let result = parse_variable_sets(1, &[], encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert!(result.sets().is_empty());
-    }
-
-    #[test]
-    fn parse_variable_sets_accepts_final_line_without_line_feed() {
-        let payload = b"grp= a b";
-        let result = parse_variable_sets(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
-        assert_eq!(result.sets().len(), 1);
-        assert_eq!(result.sets()[0].variables(), &["a".to_string(), "b".to_string()]);
-    }
-
-    #[test]
-    fn parse_variable_sets_rejects_wrong_element_size() {
-        let err = parse_variable_sets(4, b"grp= a\n", encoding_rs::WINDOWS_1252, 0).unwrap_err();
-        assert_unexpected_value_error(&err, Field::ExtensionElementSize);
-    }
-
-    #[test]
-    fn parse_variable_sets_rejects_line_without_equals() {
-        let err = parse_variable_sets(1, b"noequals\n", encoding_rs::WINDOWS_1252, 0).unwrap_err();
-        assert_unexpected_value_error(&err, Field::VariableSet);
-    }
-
-    #[test]
-    fn parse_variable_sets_rejects_empty_set_name() {
-        let err = parse_variable_sets(1, b"= a b\n", encoding_rs::WINDOWS_1252, 0).unwrap_err();
-        assert_unexpected_value_error(&err, Field::VariableSet);
-    }
-
-    #[test]
     fn parse_multiple_response_sets_dichotomy_variable_labels() {
         let payload = b"$dich=D1 1 13 Dichotomy set q1 q2 q3\n";
-        let result = parse_multiple_response_sets(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        let result =
+            parse_multiple_response_sets(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
         assert_eq!(result.len(), 1);
         let set = &result[0];
         assert_eq!(set.name(), "$dich"); // leading '$' preserved
@@ -2679,7 +1723,8 @@ mod tests {
     #[test]
     fn parse_multiple_response_sets_category() {
         let payload = b"$cat=C 12 Category set q1 q2\n";
-        let result = parse_multiple_response_sets(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        let result =
+            parse_multiple_response_sets(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
         let set = &result[0];
         assert_eq!(set.name(), "$cat");
         assert_eq!(set.label(), "Category set");
@@ -2690,7 +1735,8 @@ mod tests {
     #[test]
     fn parse_multiple_response_sets_dichotomy_counted_values() {
         let payload = b"$counted=E 1 1 1 0  q2 q3\n";
-        let result = parse_multiple_response_sets(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        let result =
+            parse_multiple_response_sets(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
         let set = &result[0];
         assert_eq!(set.name(), "$counted");
         assert_eq!(set.label(), ""); // empty label (counted string length 0)
@@ -2713,13 +1759,17 @@ mod tests {
     fn parse_multiple_response_sets_label_source_eleven() {
         // LABELSOURCE=VARLABEL is encoded as 11.
         let payload = b"$e=E 11 1 1 3 lbl a b\n";
-        let result = parse_multiple_response_sets(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        let result =
+            parse_multiple_response_sets(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
         let MultipleResponseSetKind::MultipleDichotomy {
             category_labels: CategoryLabelSource::CountedValues { label_source },
             ..
         } = result[0].kind()
         else {
-            panic!("expected counted-values dichotomy, got {:?}", result[0].kind());
+            panic!(
+                "expected counted-values dichotomy, got {:?}",
+                result[0].kind()
+            );
         };
         assert_eq!(*label_source, 11);
         assert_eq!(result[0].label(), "lbl");
@@ -2732,7 +1782,8 @@ mod tests {
         // counted value ("yes", length 3) whose internal space-free
         // bytes are read by length.
         let payload = b"$a=D3 yes 5 Label q1\n$b=C 3 Two q2 q3\n";
-        let result = parse_multiple_response_sets(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        let result =
+            parse_multiple_response_sets(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
         assert_eq!(result.len(), 2);
         let MultipleResponseSetKind::MultipleDichotomy { counted_value, .. } = result[0].kind()
         else {
@@ -2748,7 +1799,8 @@ mod tests {
     fn parse_multiple_response_sets_decodes_through_supplied_encoding() {
         // 0xE9 = é in Windows-1252; the label byte length counts bytes.
         let payload = b"$s=C 5 caf\xE9x q1\n";
-        let result = parse_multiple_response_sets(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        let result =
+            parse_multiple_response_sets(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
         assert_eq!(result[0].label(), "caféx");
     }
 
@@ -2760,9 +1812,8 @@ mod tests {
 
     #[test]
     fn parse_multiple_response_sets_rejects_wrong_element_size() {
-        let err =
-            parse_multiple_response_sets(4, b"$a=C 1 x q1\n", encoding_rs::WINDOWS_1252, 0)
-                .unwrap_err();
+        let err = parse_multiple_response_sets(4, b"$a=C 1 x q1\n", encoding_rs::WINDOWS_1252, 0)
+            .unwrap_err();
         assert_unexpected_value_error(&err, Field::ExtensionElementSize);
     }
 
@@ -2775,84 +1826,17 @@ mod tests {
 
     #[test]
     fn parse_multiple_response_sets_rejects_unknown_type_letter() {
-        let err =
-            parse_multiple_response_sets(1, b"$a=X 1 x q1\n", encoding_rs::WINDOWS_1252, 0)
-                .unwrap_err();
+        let err = parse_multiple_response_sets(1, b"$a=X 1 x q1\n", encoding_rs::WINDOWS_1252, 0)
+            .unwrap_err();
         assert_unexpected_value_error(&err, Field::MultipleResponseSet);
     }
 
     #[test]
     fn parse_multiple_response_sets_rejects_counted_string_running_past_end() {
         // Label length 9 but only "Label" (5 bytes) remain.
-        let err =
-            parse_multiple_response_sets(1, b"$a=C 9 Label\n", encoding_rs::WINDOWS_1252, 0)
-                .unwrap_err();
+        let err = parse_multiple_response_sets(1, b"$a=C 9 Label\n", encoding_rs::WINDOWS_1252, 0)
+            .unwrap_err();
         assert_unexpected_value_error(&err, Field::MultipleResponseSet);
-    }
-
-    #[test]
-    fn parse_display_parameters_collects_two_tuple_form_little_endian() {
-        // Two variables in 2-tuple form: (measure, alignment) pairs.
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&1u32.to_le_bytes()); // measure
-        payload.extend_from_slice(&0u32.to_le_bytes()); // alignment
-        payload.extend_from_slice(&3u32.to_le_bytes()); // measure
-        payload.extend_from_slice(&1u32.to_le_bytes()); // alignment
-        let raw = parse_display_parameters(4, &payload, ByteOrder::LittleEndian, 0).unwrap();
-        assert_eq!(raw.values(), &[1, 0, 3, 1]);
-    }
-
-    #[test]
-    fn parse_display_parameters_collects_three_tuple_form_little_endian() {
-        // One variable in 3-tuple form: measure, width, alignment.
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&2u32.to_le_bytes()); // measure
-        payload.extend_from_slice(&12u32.to_le_bytes()); // width
-        payload.extend_from_slice(&1u32.to_le_bytes()); // alignment
-        let raw = parse_display_parameters(4, &payload, ByteOrder::LittleEndian, 0).unwrap();
-        assert_eq!(raw.values(), &[2, 12, 1]);
-    }
-
-    #[test]
-    fn parse_display_parameters_big_endian() {
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&100u32.to_be_bytes());
-        payload.extend_from_slice(&200u32.to_be_bytes());
-        let raw = parse_display_parameters(4, &payload, ByteOrder::BigEndian, 0).unwrap();
-        assert_eq!(raw.values(), &[100, 200]);
-    }
-
-    #[test]
-    fn parse_display_parameters_empty_payload_yields_empty_record() {
-        let raw = parse_display_parameters(4, &[], ByteOrder::LittleEndian, 0).unwrap();
-        assert!(raw.values().is_empty());
-    }
-
-    #[test]
-    fn parse_display_parameters_preserves_unrecognized_codes() {
-        // Codes 99 / 7 don't match any MeasurementLevel or Alignment
-        // variant; the streaming layer carries them verbatim so
-        // finalization decides whether to bucket them as
-        // MeasurementLevel::Unknown(99) / Alignment::Unknown(7).
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&99u32.to_le_bytes());
-        payload.extend_from_slice(&7u32.to_le_bytes());
-        let raw = parse_display_parameters(4, &payload, ByteOrder::LittleEndian, 0).unwrap();
-        assert_eq!(raw.values(), &[99, 7]);
-    }
-
-    #[test]
-    fn parse_display_parameters_rejects_wrong_element_size() {
-        let err = parse_display_parameters(8, &[0; 16], ByteOrder::LittleEndian, 0).unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: Field::ExtensionElementSize
-                }
-            ),
-            _ => panic!("expected Format error"),
-        }
     }
 
     #[test]

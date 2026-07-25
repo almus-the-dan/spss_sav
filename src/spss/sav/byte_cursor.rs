@@ -134,7 +134,11 @@ mod tests {
     fn take_u32_honors_byte_order() {
         let data = [0x01, 0x00, 0x00, 0x00];
         let mut le = ByteCursor::new(&data, Section::Dictionary, 0);
-        assert_eq!(le.take_u32(ByteOrder::LittleEndian, Field::CellValue).unwrap(), 1);
+        assert_eq!(
+            le.take_u32(ByteOrder::LittleEndian, Field::CellValue)
+                .unwrap(),
+            1
+        );
         let mut be = ByteCursor::new(&data, Section::Dictionary, 0);
         assert_eq!(
             be.take_u32(ByteOrder::BigEndian, Field::CellValue).unwrap(),
@@ -146,7 +150,9 @@ mod tests {
     fn take_u32_errors_when_truncated() {
         let data = [0x01, 0x02, 0x03];
         let mut cursor = ByteCursor::new(&data, Section::Dictionary, 0);
-        let err = cursor.take_u32(ByteOrder::LittleEndian, Field::CellValue).unwrap_err();
+        let err = cursor
+            .take_u32(ByteOrder::LittleEndian, Field::CellValue)
+            .unwrap_err();
         assert_error(&err, Field::CellValue);
     }
 
