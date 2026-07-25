@@ -18,7 +18,7 @@ use crate::spss::sav::byte_cursor::ByteCursor;
 use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::dictionary_format::{
     ATTRIBUTE_NAME_TERMINATOR, ATTRIBUTE_VALUE_QUOTE, ATTRIBUTE_VALUE_TERMINATOR,
-    ATTRIBUTE_VALUES_CLOSE, CHARACTER_ENCODING_ELEMENT_SIZE,
+    ATTRIBUTE_VALUES_CLOSE,
     DATA_FILE_ATTRIBUTES_ELEMENT_SIZE, DISPLAY_PARAMETERS_ELEMENT_SIZE,
     EXTENDED_NUMBER_OF_CASES_COUNT_OFFSET, EXTENDED_NUMBER_OF_CASES_ELEMENT_COUNT,
     EXTENDED_NUMBER_OF_CASES_ELEMENT_SIZE, EXTENDED_NUMBER_OF_CASES_VERSION_OFFSET,
@@ -69,7 +69,7 @@ use crate::spss::sav::reader_state::u32_as_usize;
 use crate::spss::sav::sav_error::{Field, FormatErrorKind, Result, SavError, Section};
 use crate::spss::sav::sav_format::SavFormat;
 use crate::spss::sav::sav_format_kind::SavFormatKind;
-use crate::spss::sav::text_field::{decode_trimmed, trim_trailing_padding};
+use crate::spss::sav::text_field::decode_trimmed;
 
 /// Classification of the type-2 record's 4-byte `type` field.
 ///
@@ -533,47 +533,6 @@ pub(super) fn parse_machine_integer_info(
         .character_code(i32_at(28))
         .build();
     Ok(info)
-}
-
-/// Parses an extension subtype-20 payload (the file's declared
-/// character encoding name).
-///
-/// The on-disk shape is a fixed-`element_size`-of-1 byte string
-/// containing the encoding name in ASCII (e.g., `"UTF-8"`,
-/// `"windows-1252"`). The string is not null-terminated; some
-/// writers right-pad it with spaces or NULs.
-///
-/// This helper validates `actual_size == 1`, trims trailing spaces
-/// and NULs, and decodes the remaining bytes as UTF-8 with the
-/// `String::from_utf8_lossy` replacement strategy. Encoding names
-/// are pure ASCII in practice, so a rogue non-ASCII byte becomes
-/// U+FFFD rather than failing the read. An empty payload yields an
-/// empty string. Reconciliation against the integer-info record's
-/// numeric `character_code` and the reader's active encoding belongs
-/// to schema finalization, not here.
-///
-/// # Errors
-///
-/// Returns [`FormatErrorKind::UnexpectedValue`] tagged
-/// [`Field::ExtensionElementSize`] when `actual_size != 1`.
-pub(super) fn parse_character_encoding(
-    actual_size: u32,
-    payload: &[u8],
-    position: u64,
-) -> Result<String> {
-    if actual_size != CHARACTER_ENCODING_ELEMENT_SIZE {
-        let error = SavError::format(
-            Section::Dictionary,
-            position,
-            FormatErrorKind::UnexpectedValue {
-                field: Field::ExtensionElementSize,
-            },
-        );
-        return Err(error);
-    }
-    let trimmed = trim_trailing_padding(payload);
-    let name = String::from_utf8_lossy(trimmed).into_owned();
-    Ok(name)
 }
 
 /// Parses an extension subtype-10 payload (extra product information)
@@ -1804,46 +1763,6 @@ mod tests {
         let err = normalize_value_label_variable_indices(&[2], &[0, 4], 0).unwrap_err();
         match err {
             SavError::Format(e) => assert_eq!(e.kind(), FormatErrorKind::DanglingValueLabel),
-            _ => panic!("expected Format error"),
-        }
-    }
-
-    #[test]
-    fn parse_character_encoding_decodes_ascii_name() {
-        let name = parse_character_encoding(1, b"UTF-8", 0).unwrap();
-        assert_eq!(name, "UTF-8");
-    }
-
-    #[test]
-    fn parse_character_encoding_trims_trailing_spaces_and_nuls() {
-        let name = parse_character_encoding(1, b"UTF-8 \0  ", 0).unwrap();
-        assert_eq!(name, "UTF-8");
-    }
-
-    #[test]
-    fn parse_character_encoding_accepts_empty_payload() {
-        let name = parse_character_encoding(1, &[], 0).unwrap();
-        assert!(name.is_empty());
-    }
-
-    #[test]
-    fn parse_character_encoding_lossy_on_non_ascii_bytes() {
-        // 0xFF is invalid UTF-8 and not a sensible encoding-name byte;
-        // the parser should emit U+FFFD rather than failing the read.
-        let name = parse_character_encoding(1, b"A\xFFB", 0).unwrap();
-        assert_eq!(name, "A\u{FFFD}B");
-    }
-
-    #[test]
-    fn parse_character_encoding_rejects_wrong_element_size() {
-        let err = parse_character_encoding(4, b"UTF-", 0).unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: Field::ExtensionElementSize
-                }
-            ),
             _ => panic!("expected Format error"),
         }
     }

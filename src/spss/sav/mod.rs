@@ -18,6 +18,8 @@ pub mod dictionary_record;
 pub mod document_record;
 /// Reader policy for choosing a text encoding.
 pub mod encoding_strategy;
+/// The decoded header of a type-7 extension record.
+mod extension_envelope;
 /// SAV extension records (subtypes 3, 4, 5, 6, 7, 7B, 8, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, ...).
 pub mod extensions;
 /// What the SAV file declared about its text encoding.
@@ -72,6 +74,10 @@ pub mod sav_variable;
 pub mod sav_variable_header;
 /// Recoverable issues raised during SAV reading or writing.
 pub mod sav_warning;
+/// Shared `#[cfg(test)]` helpers for building on-disk SAV byte
+/// streams.
+#[cfg(test)]
+mod test_support;
 /// Shared helpers for decoding fixed-width text fields.
 mod text_field;
 /// A single SAV cell value.
