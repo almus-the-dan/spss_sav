@@ -2,6 +2,7 @@
 
 use crate::spss::sav::extensions::data_entry::DataEntry;
 use crate::spss::sav::extensions::extended_number_of_cases::ExtendedNumberOfCases;
+use crate::spss::sav::extensions::extra_product_info::ExtraProductInfo;
 use crate::spss::sav::extensions::file_attribute::FileAttribute;
 use crate::spss::sav::extensions::float_sentinels::FloatSentinels;
 use crate::spss::sav::extensions::long_missing_value_record::LongMissingValueRecord;
@@ -21,9 +22,8 @@ use crate::spss::sav::extensions::very_long_string::VeryLongString;
 /// system file format and `ReadStat`'s implementation; the spec md
 /// in this repository's reference directory has known errors and is
 /// not authoritative. Subtypes that PSPP/`ReadStat` document but
-/// this enum doesn't yet carry (e.g., `ProductInfo` = 10, `Uuid` =
-/// 12, XML display info = 24) fall through to [`Unknown`](Self::Unknown)
-/// for now.
+/// this enum doesn't yet carry (e.g., `Uuid` = 12, XML display info =
+/// 24) fall through to [`Unknown`](Self::Unknown) for now.
 ///
 /// The reader preserves unrecognized subtypes verbatim via
 /// [`Unknown`](Self::Unknown) for round-trip fidelity and surfaces
@@ -40,13 +40,16 @@ pub enum ExtensionRecord {
     /// Subtype 4 — float sentinel values (system missing, highest,
     /// lowest).
     FloatInfo(FloatSentinels),
-    /// Subtype 5 — named variable groupings. Subtype assignment
-    /// confirmed against PSPP; parser not yet wired up.
+    /// Subtype 5 — named variable groupings.
     VariableSets(VariableSets),
     /// Subtype 7 — multiple response sets, pre-v14 format.
     /// Subtype 19 carries the post-v14 form (which adds
     /// `CATEGORYLABELS` support). Parser not yet wired up.
     MultipleResponseSets(Vec<MultipleResponseSet>),
+    /// Subtype 10 — extra product information (a free-form string
+    /// identifying the writing product, beyond the header's product
+    /// name).
+    ExtraProductInfo(ExtraProductInfo),
     /// Subtype 11 — per-variable display parameters (measurement
     /// level, display width, alignment) carried verbatim from the
     /// record's payload. Per-variable slicing into typed

@@ -22,7 +22,8 @@ use crate::spss::sav::dictionary_format::{
     DATA_FILE_ATTRIBUTES_ELEMENT_SIZE, DISPLAY_PARAMETERS_ELEMENT_SIZE,
     EXTENDED_NUMBER_OF_CASES_COUNT_OFFSET, EXTENDED_NUMBER_OF_CASES_ELEMENT_COUNT,
     EXTENDED_NUMBER_OF_CASES_ELEMENT_SIZE, EXTENDED_NUMBER_OF_CASES_VERSION_OFFSET,
-    FLOAT_SENTINELS_ELEMENT_COUNT, FLOAT_SENTINELS_ELEMENT_SIZE, FLOAT_SENTINELS_HIGHEST_OFFSET,
+    EXTRA_PRODUCT_INFO_ELEMENT_SIZE, FLOAT_SENTINELS_ELEMENT_COUNT, FLOAT_SENTINELS_ELEMENT_SIZE,
+    FLOAT_SENTINELS_HIGHEST_OFFSET,
     FLOAT_SENTINELS_LOWEST_OFFSET, FLOAT_SENTINELS_SYSTEM_MISSING_OFFSET,
     FORMAT_CODE_DECIMALS_BYTE, FORMAT_CODE_KIND_BYTE, FORMAT_CODE_WIDTH_BYTE,
     LONG_STRING_MISSING_VALUE_MAX_COUNT, LONG_STRING_MISSING_VALUES_ELEMENT_SIZE,
@@ -40,6 +41,7 @@ use crate::spss::sav::dictionary_format::{
     VERY_LONG_STRINGS_PAIR_PADDING, VERY_LONG_STRINGS_PAIR_SEPARATOR,
 };
 use crate::spss::sav::extensions::extended_number_of_cases::ExtendedNumberOfCases;
+use crate::spss::sav::extensions::extra_product_info::ExtraProductInfo;
 use crate::spss::sav::extensions::file_attribute::FileAttribute;
 use crate::spss::sav::extensions::float_sentinels::FloatSentinels;
 use crate::spss::sav::extensions::long_missing_value_record::LongMissingValueRecord;
@@ -563,6 +565,31 @@ pub(super) fn parse_character_encoding(
     let trimmed = trim_trailing_padding(payload);
     let name = String::from_utf8_lossy(trimmed).into_owned();
     Ok(name)
+}
+
+/// Parses an extension subtype-10 payload (extra product information)
+/// into an [`ExtraProductInfo`].
+///
+/// The payload is a free-form text string whose byte length is exact,
+/// so it is decoded through `encoding` verbatim — no trailing padding
+/// is trimmed.
+///
+/// # Errors
+///
+/// Returns [`FormatErrorKind::UnexpectedValue`] tagged
+/// [`Field::ExtensionElementSize`] when `actual_size != 1`.
+pub(super) fn parse_extra_product_info(
+    actual_size: u32,
+    payload: &[u8],
+    encoding: &'static Encoding,
+    position: u64,
+) -> Result<ExtraProductInfo> {
+    if actual_size != EXTRA_PRODUCT_INFO_ELEMENT_SIZE {
+        return Err(unexpected_value_error(position, Field::ExtensionElementSize));
+    }
+    let (text, _, _) = encoding.decode(payload);
+    let info = ExtraProductInfo::builder().text(text.into_owned()).build();
+    Ok(info)
 }
 
 /// Parses an extension subtype-13 payload (long-variable-name
@@ -1571,6 +1598,34 @@ mod tests {
             ),
             _ => panic!("expected Format error"),
         }
+    }
+
+    #[test]
+    fn parse_extra_product_info_keeps_text_verbatim() {
+        // Trailing spaces must be preserved (the length is exact).
+        let payload = b"Acme Stats 4.3  ";
+        let result = parse_extra_product_info(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result.text(), "Acme Stats 4.3  ");
+    }
+
+    #[test]
+    fn parse_extra_product_info_decodes_through_supplied_encoding() {
+        // 0xE9 = é in Windows-1252, invalid in standalone UTF-8.
+        let payload = b"Caf\xE9 Analytics";
+        let result = parse_extra_product_info(1, payload, encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result.text(), "Café Analytics");
+    }
+
+    #[test]
+    fn parse_extra_product_info_empty_payload_yields_empty_text() {
+        let result = parse_extra_product_info(1, &[], encoding_rs::WINDOWS_1252, 0).unwrap();
+        assert_eq!(result.text(), "");
+    }
+
+    #[test]
+    fn parse_extra_product_info_rejects_wrong_element_size() {
+        let err = parse_extra_product_info(4, b"prod", encoding_rs::WINDOWS_1252, 0).unwrap_err();
+        assert_unexpected_value_error(&err, Field::ExtensionElementSize);
     }
 
     #[test]

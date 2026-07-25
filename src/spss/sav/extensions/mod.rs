@@ -5,6 +5,8 @@ pub mod data_entry;
 pub mod extended_number_of_cases;
 /// Top-level extension record enum.
 pub mod extension_record;
+/// Extra product information (subtype 10).
+pub mod extra_product_info;
 /// File-level custom attributes (subtype 17).
 pub mod file_attribute;
 /// Float sentinel values (subtype 4).

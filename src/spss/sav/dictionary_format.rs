@@ -431,6 +431,17 @@ pub(super) const VARIABLE_SETS_NAME_TERMINATOR: u8 = b'=';
 #[allow(dead_code)] // exercised by the subtype-5 parser.
 pub(super) const VARIABLE_SETS_MEMBER_SEPARATOR: u8 = b' ';
 
+/// Extension subtype 10 — extra product information. The payload is a
+/// fixed-`element_size`-of-1, variable-`element_count` byte string of
+/// free-form text identifying the writing product, beyond the header's
+/// 60-byte product name. The byte length is exact (no padding).
+#[allow(dead_code)] // exercised by the subtype-10 parser.
+pub(super) const EXTENSION_SUBTYPE_EXTRA_PRODUCT_INFO: i32 = 10;
+
+/// `element_size` an extension subtype-10 record must declare.
+#[allow(dead_code)] // exercised by the subtype-10 parser.
+pub(super) const EXTRA_PRODUCT_INFO_ELEMENT_SIZE: u32 = 1;
+
 /// Extension subtype 17 — file-level custom attributes. The payload
 /// is a fixed-`element_size`-of-1, variable-`element_count` byte
 /// stream holding a single attribute set: one or more attributes
