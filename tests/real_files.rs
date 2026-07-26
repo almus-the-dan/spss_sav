@@ -34,6 +34,16 @@ const COMPREHENSIVE: &str = concat!(
     "/tests/fixtures/comprehensive.sav"
 );
 
+const ENCODING_UTF8: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/encoding_utf8.sav"
+);
+
+const ENCODING_WINDOWS_1252: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/encoding_windows1252.sav"
+);
+
 /// Reads every dictionary record from `path`, asserting the header
 /// along the way, and returns the records.
 fn read_dictionary(path: &str) -> Vec<DictionaryRecord> {
@@ -69,6 +79,71 @@ fn assert_header(dictionary_reader: &DictionaryReader<BufReader<File>>) {
         "unexpected header warnings: {:?}",
         dictionary_reader.warnings()
     );
+}
+
+/// Reads an encoding fixture, returning its decoded file label
+/// alongside the dictionary records.
+///
+/// Unlike [`read_dictionary`] this asserts nothing about the header:
+/// the encoding fixtures carry a different variable set than
+/// `comprehensive.sav`, and the file label is the point of interest.
+fn read_encoding_fixture(path: &str) -> (String, Vec<DictionaryRecord>) {
+    let header_reader = SavReader::new().from_path(path).expect("open fixture");
+    let mut dictionary_reader = header_reader.read_header().expect("read header");
+    let file_label = dictionary_reader.header().file_label().to_owned();
+
+    let mut records = Vec::new();
+    while let Some(record) = dictionary_reader
+        .read_record()
+        .expect("read dictionary record")
+    {
+        records.push(record);
+    }
+    (file_label, records)
+}
+
+/// Asserts that the accented text in an encoding fixture decoded
+/// correctly, covering each text-bearing record kind: the header file
+/// label, variable labels (type 2), value labels (type 3), document
+/// lines (type 6), and a file attribute value (subtype 17).
+///
+/// Both encoding fixtures carry identical text, so both must satisfy
+/// this regardless of the encoding they were written in.
+fn assert_accented_text_decoded(file_label: &str, records: &[DictionaryRecord]) {
+    assert_eq!(file_label, "Fichier de démonstration");
+
+    let variables = variables(records);
+    assert_eq!(variables[0].label(), Some("Identifiant"));
+    assert_eq!(variables[1].label(), Some("Prénom accentué"));
+
+    let sets = value_label_sets(records);
+    assert_eq!(sets.len(), 1);
+    let entries = sets[0].entries();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].label(), "Café crème");
+    assert_eq!(entries[1].label(), "Thé glacé");
+
+    let documents = documents(records);
+    let has_accented_line = documents.iter().any(|d| {
+        d.lines()
+            .iter()
+            .any(|l| l.contains("ligne documentaire accentuée"))
+    });
+    assert!(has_accented_line, "documents = {documents:?}");
+
+    let extensions = extensions(records);
+    let file_attributes = extensions
+        .iter()
+        .find_map(|e| match e {
+            ExtensionRecord::FileAttributes(a) => Some(a.attributes()),
+            _ => None,
+        })
+        .expect("file attributes");
+    let author = file_attributes
+        .iter()
+        .find(|a| a.name() == "Auteur")
+        .expect("Auteur attribute");
+    assert_eq!(author.values(), ["Ångström".to_string()]);
 }
 
 fn variables(records: &[DictionaryRecord]) -> Vec<&SavVariableHeader> {
@@ -364,4 +439,30 @@ fn comprehensive_multiple_response_sets() {
         *category_labels,
         CategoryLabelSource::CountedValues { label_source: 1 }
     );
+}
+
+/// The windows-1252 fixture declares an encoding that happens to match
+/// the reader's hard-coded fallback, so its text already decodes
+/// correctly. This locks in the agreeing path so that resolving the
+/// encoding from the file's own declaration cannot regress it.
+#[test]
+fn encoding_windows1252_decodes_accented_text() {
+    let (file_label, records) = read_encoding_fixture(ENCODING_WINDOWS_1252);
+    assert_accented_text_decoded(&file_label, &records);
+}
+
+/// The UTF-8 fixture declares `"UTF-8"` in a subtype-20 record that
+/// sits last in the dictionary, after every string it governs. The
+/// reader fixes its encoding before that record is reachable, so each
+/// multi-byte sequence is decoded through the windows-1252 fallback and
+/// arrives as mojibake — `Café crème` reads back as `CafÃ© crÃ¨me`.
+///
+/// This is the acceptance test for deferred string decoding: buffering
+/// the raw header fields and dictionary records, resolving the encoding
+/// from subtype 20 (then subtype 3), and only then decoding.
+#[test]
+#[ignore = "requires deferred string decoding; the encoding is declared at the end of the dictionary"]
+fn encoding_utf8_decodes_accented_text() {
+    let (file_label, records) = read_encoding_fixture(ENCODING_UTF8);
+    assert_accented_text_decoded(&file_label, &records);
 }
