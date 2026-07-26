@@ -16,9 +16,9 @@ use crate::spss::sav::sav_warning::SavWarning;
 /// them here lets each record's warnings be replayed as that record is
 /// handed to the caller.
 ///
-/// Warnings raised by *decoding* — which happens at hand-out time —
-/// are appended to the reader's vec directly and are not stored here.
-#[allow(dead_code)] // constructed when the header reader defers decoding.
+/// Warnings raised by *decoding* — which happens at hand-out time — are
+/// appended to the reader's vec directly and are not stored here.
+#[derive(Debug)]
 pub(crate) struct BufferedDictionaryRecord {
     /// The record's undecoded payload.
     pub(crate) payload: BufferedRecordPayload,

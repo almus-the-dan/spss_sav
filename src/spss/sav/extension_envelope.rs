@@ -13,6 +13,7 @@ use crate::spss::sav::byte_order::ByteOrder;
 /// the whole dictionary has been scanned, so an envelope that owned one
 /// could only ever hold a stale guess; the resolved encoding is passed
 /// to each `read` helper as an argument instead.
+#[derive(Debug)]
 pub(crate) struct ExtensionEnvelope {
     /// The 4-byte subtype code identifying the extension.
     pub(crate) subtype: i32,

@@ -15,7 +15,7 @@ use crate::spss::sav::extension_envelope::ExtensionEnvelope;
 /// already the undecoded form for all 15 subtypes, holding its payload
 /// verbatim, and every per-subtype `read` helper is a pure function of
 /// it plus an encoding.
-#[allow(dead_code)] // constructed when the header reader defers decoding.
+#[derive(Debug)]
 pub(crate) enum BufferedRecordPayload {
     /// A type-2 variable record, post-continuation-collapse.
     Variable(BufferedVariableRecord),

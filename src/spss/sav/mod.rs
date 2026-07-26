@@ -18,6 +18,8 @@ mod byte_cursor;
 pub mod byte_order;
 /// Compression scheme of a SAV file.
 pub mod compression;
+/// Buffering the dictionary section so its text can be decoded later.
+mod dictionary_buffer;
 /// On-disk byte layout of the SAV dictionary section.
 mod dictionary_format;
 /// Pure parse helpers for the SAV dictionary section.

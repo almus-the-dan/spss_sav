@@ -8,15 +8,18 @@
 
 use std::io::Read;
 
-use encoding_rs::Encoding;
-
+use crate::spss::sav::byte_order::ByteOrder;
+use crate::spss::sav::compression::Compression;
+use crate::spss::sav::dictionary_buffer::DictionaryBuffer;
 use crate::spss::sav::dictionary_reader::DictionaryReader;
+use crate::spss::sav::encoding_resolution::{declared_encoding, resolve};
 use crate::spss::sav::encoding_strategy::EncodingStrategy;
+use crate::spss::sav::float_format::FloatFormat;
 use crate::spss::sav::header_format::{
     BIAS_LEN, COMPRESSION_OFFSET, CREATION_DATE_LEN, CREATION_DATE_OFFSET, CREATION_TIME_LEN,
-    CREATION_TIME_OFFSET, FILE_LABEL_LEN, FILE_LABEL_OFFSET, LAYOUT_CODE_OFFSET, NCASES_OFFSET,
-    NOMINAL_CASE_SIZE_OFFSET, PRODUCT_NAME_LEN, PRODUCT_NAME_OFFSET, RECORD_TYPE_LEN,
-    RECORD_TYPE_OFFSET, TRAILING_PADDING_LEN, WEIGHT_INDEX_OFFSET,
+    CREATION_TIME_OFFSET, FILE_LABEL_LEN, FILE_LABEL_OFFSET, LAYOUT_CODE_LEN, LAYOUT_CODE_OFFSET,
+    NCASES_OFFSET, NOMINAL_CASE_SIZE_OFFSET, PRODUCT_NAME_LEN, PRODUCT_NAME_OFFSET,
+    RECORD_TYPE_LEN, RECORD_TYPE_OFFSET, TRAILING_PADDING_LEN, WEIGHT_INDEX_OFFSET,
 };
 use crate::spss::sav::header_parse::{
     parse_bias, parse_case_count, parse_file_label, parse_layout_code, parse_magic,
@@ -27,28 +30,6 @@ use crate::spss::sav::sav_creation_timestamp::SavCreationTimestamp;
 use crate::spss::sav::sav_error::{Result, Section};
 use crate::spss::sav::sav_header::SavHeader;
 use crate::spss::sav::sav_warning::SavWarning;
-
-/// Encoding used at header-read time, before any extension record
-/// declares the file's actual encoding.
-const HEADER_FALLBACK_ENCODING: &Encoding = encoding_rs::WINDOWS_1252;
-
-/// The encoding to decode with before the file's own declaration is
-/// reachable.
-///
-/// Interim behavior: both declaration sites (subtype 20 and subtype 3)
-/// live at the very end of the dictionary, so the reader cannot honor
-/// them while streaming and applies the strategy's best guess instead.
-/// Deferred decoding replaces every call site with real resolution;
-/// until then a `Declared` strategy with no `unspecified` fallback
-/// silently gets `windows-1252` rather than the error it asks for.
-fn interim_encoding(strategy: EncodingStrategy) -> &'static Encoding {
-    match strategy {
-        EncodingStrategy::Override(encoding) => encoding,
-        EncodingStrategy::Declared { unspecified, .. } => {
-            unspecified.unwrap_or(HEADER_FALLBACK_ENCODING)
-        }
-    }
-}
 
 /// Entry point for reading a SAV file.
 ///
@@ -69,14 +50,8 @@ impl<R> HeaderReader<R> {
     /// Constructs a new header reader, forwarding the encoding
     /// strategy from the upstream
     /// [`SavReader`](crate::spss::sav::sav_reader::SavReader).
-    ///
-    /// The initial encoding stored on `ReaderState` is the strategy's
-    /// interim guess — see [`interim_encoding`]. The dictionary phase
-    /// replaces it once the file's declared encoding becomes known
-    /// (subtype 20, then subtype 3).
     pub(crate) fn new(reader: R, encoding_strategy: EncodingStrategy) -> Self {
-        let encoding = interim_encoding(encoding_strategy);
-        let state = ReaderState::new(reader, encoding);
+        let state = ReaderState::new(reader);
         Self {
             state,
             encoding_strategy,
@@ -100,28 +75,36 @@ impl<R> HeaderReader<R> {
     }
 }
 
+/// The 176-byte fixed header as read, with the two text fields still
+/// raw.
+///
+/// Exists because the header cannot be finished in one pass: its product
+/// name and file label are decoded with the encoding the *dictionary*
+/// declares, so they have to be carried across the dictionary walk.
+struct RawHeader {
+    product_name: Vec<u8>,
+    file_label: Vec<u8>,
+    creation_timestamp: SavCreationTimestamp,
+    compression: Compression,
+    byte_order: ByteOrder,
+    float_format: FloatFormat,
+    bias: f64,
+    case_count: Option<u32>,
+    nominal_case_size: Option<u32>,
+    weight_variable_index: Option<usize>,
+}
+
 impl<R: Read> HeaderReader<R> {
-    /// Parses the 176-byte file header and transitions to the
-    /// dictionary phase.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SavError::Io`](crate::spss::sav::sav_error::SavError::Io)
-    /// on read failures and
-    /// [`SavError::Format`](crate::spss::sav::sav_error::SavError::Format)
-    /// when the header bytes do not match a recognized SAV layout
-    /// (bad magic, unreadable layout code, unknown float format).
+    /// Reads the 176-byte fixed header, holding the two text fields
+    /// raw because decoding them needs an encoding the file has not
+    /// declared yet.
     ///
     /// # Panics
     ///
-    /// Debug builds assert that each header field lands at its
-    /// spec-defined offset; a panic here would indicate a bug in
-    /// the reader rather than a malformed file. Release builds skip
-    /// these checks.
-    pub fn read_header(mut self) -> Result<DictionaryReader<R>> {
-        self.state.warnings_mut().clear();
-        let encoding = self.state.encoding();
-
+    /// Debug builds assert that each field lands at its spec-defined
+    /// offset; a panic here would indicate a bug in the reader rather
+    /// than a malformed file. Release builds skip these checks.
+    fn read_raw_header(&mut self) -> Result<RawHeader> {
         let record_type_position = self.state.position();
         debug_assert_eq!(
             usize::try_from(record_type_position).unwrap(),
@@ -135,17 +118,17 @@ impl<R: Read> HeaderReader<R> {
             usize::try_from(product_name_position).unwrap(),
             PRODUCT_NAME_OFFSET
         );
-        let product_name = {
-            let bytes = self.state.read_exact(PRODUCT_NAME_LEN, Section::Header)?;
-            parse_product_name(bytes, encoding)
-        };
+        let product_name_bytes = self
+            .state
+            .read_exact(PRODUCT_NAME_LEN, Section::Header)?
+            .to_vec();
 
         let layout_code_position = self.state.position();
         debug_assert_eq!(
             usize::try_from(layout_code_position).unwrap(),
             LAYOUT_CODE_OFFSET
         );
-        let layout_code_bytes = self.state.read_array::<4>(Section::Header)?;
+        let layout_code_bytes = self.state.read_array::<LAYOUT_CODE_LEN>(Section::Header)?;
         let byte_order = parse_layout_code(layout_code_bytes, layout_code_position)?;
         self.state.set_byte_order(byte_order);
 
@@ -208,26 +191,101 @@ impl<R: Read> HeaderReader<R> {
             usize::try_from(self.state.position()).unwrap(),
             FILE_LABEL_OFFSET
         );
-        let file_label = {
-            let bytes = self.state.read_exact(FILE_LABEL_LEN, Section::Header)?;
-            parse_file_label(bytes, encoding)
-        };
+        let file_label_bytes = self
+            .state
+            .read_exact(FILE_LABEL_LEN, Section::Header)?
+            .to_vec();
 
         self.state.skip(TRAILING_PADDING_LEN, Section::Header)?;
 
+        let raw_header = RawHeader {
+            product_name: product_name_bytes,
+            file_label: file_label_bytes,
+            creation_timestamp,
+            compression,
+            byte_order,
+            float_format,
+            bias,
+            case_count,
+            nominal_case_size,
+            weight_variable_index,
+        };
+        Ok(raw_header)
+    }
+
+    /// Parses the 176-byte file header and transitions to the
+    /// dictionary phase.
+    ///
+    /// Reads more than the header, as an implementation detail callers
+    /// do not see: a SAV file declares its text encoding in extension
+    /// records at the *end* of the dictionary, after every string they
+    /// govern, so this method walks the whole dictionary section before
+    /// it can decode even the header's own product name and file label.
+    /// The records are held undecoded and handed out one at a time by
+    /// [`DictionaryReader::read_record`](crate::spss::sav::dictionary_reader::DictionaryReader::read_record),
+    /// so the streaming API is unchanged; the consequence is that
+    /// structural errors anywhere in the dictionary surface from here
+    /// rather than from the `read_record` call that would have reached
+    /// them.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SavError::Io`](crate::spss::sav::sav_error::SavError::Io)
+    /// on read failures,
+    /// [`SavError::Format`](crate::spss::sav::sav_error::SavError::Format)
+    /// when the header bytes do not match a recognized SAV layout (bad
+    /// magic, unreadable layout code, unknown float format) or when any
+    /// dictionary record's structure does not parse, and
+    /// [`SavError::EncodingUnspecified`](crate::spss::sav::sav_error::SavError::EncodingUnspecified)
+    /// / [`SavError::EncodingUnrecognized`](crate::spss::sav::sav_error::SavError::EncodingUnrecognized)
+    /// when the encoding cannot be resolved and the
+    /// [`EncodingStrategy`] supplies no fallback for that case.
+    ///
+    /// # Panics
+    ///
+    /// Debug builds assert that each header field lands at its
+    /// spec-defined offset; a panic here would indicate a bug in
+    /// the reader rather than a malformed file. Release builds skip
+    /// these checks.
+    pub fn read_header(mut self) -> Result<DictionaryReader<R>> {
+        self.state.warnings_mut().clear();
+        let raw = self.read_raw_header()?;
+
+        // Walk the dictionary so the file's declared encoding becomes
+        // reachable, then resolve it before decoding any text at all —
+        // including the header's own two text fields.
+        let buffer = DictionaryBuffer::read(&mut self.state, raw.byte_order)?;
+        let file_encoding = resolve(
+            self.encoding_strategy,
+            buffer.declared_encoding_label(),
+            buffer.character_code(),
+            self.state.warnings_mut(),
+        )?;
+        let encoding = file_encoding.encoding();
+        // Recorded so an override can name what it displaced, reported
+        // when the declaring record reaches the caller.
+        let declared = declared_encoding(buffer.declared_encoding_label(), buffer.character_code());
+
         let header = SavHeader::builder()
-            .product_name(product_name)
-            .file_label(file_label)
-            .creation_timestamp(creation_timestamp)
-            .compression(compression)
-            .byte_order(byte_order)
-            .float_format(float_format)
-            .bias(bias)
-            .case_count(case_count)
-            .nominal_case_size(nominal_case_size)
+            .product_name(parse_product_name(&raw.product_name, encoding))
+            .file_label(parse_file_label(&raw.file_label, encoding))
+            .creation_timestamp(raw.creation_timestamp)
+            .compression(raw.compression)
+            .byte_order(raw.byte_order)
+            .float_format(raw.float_format)
+            .bias(raw.bias)
+            .case_count(raw.case_count)
+            .nominal_case_size(raw.nominal_case_size)
             .build();
 
-        let reader = DictionaryReader::new(self.state, header, weight_variable_index);
+        let reader = DictionaryReader::new(
+            self.state,
+            header,
+            file_encoding,
+            declared,
+            buffer,
+            raw.weight_variable_index,
+        );
         Ok(reader)
     }
 }
@@ -238,14 +296,22 @@ mod tests {
 
     use crate::spss::sav::byte_order::ByteOrder;
     use crate::spss::sav::compression::Compression;
+    use crate::spss::sav::dictionary_format::{
+        CHARACTER_ENCODING_ELEMENT_SIZE, DICTIONARY_TERMINATOR_FILLER_LEN,
+        EXTENSION_SUBTYPE_CHARACTER_ENCODING, RECORD_TYPE_DICTIONARY_TERMINATOR,
+        RECORD_TYPE_EXTENSION,
+    };
     use crate::spss::sav::encoding_strategy::EncodingStrategy;
+    use crate::spss::sav::file_encoding::FileEncoding;
     use crate::spss::sav::float_format::FloatFormat;
+    use crate::spss::sav::header_format::{
+        CREATION_DATE_LEN, CREATION_TIME_LEN, FILE_LABEL_LEN, HEADER_LEN, LAYOUT_CODE_LEN,
+        LAYOUT_CODE_OFFSET, PRODUCT_NAME_LEN, TRAILING_PADDING_LEN,
+    };
     use crate::spss::sav::sav_creation_timestamp::SavCreationTimestamp;
     use crate::spss::sav::sav_error::{FormatErrorKind, SavError};
     use crate::spss::sav::sav_reader::SavReader;
     use crate::spss::sav::sav_warning::SavWarning;
-
-    use super::interim_encoding;
 
     /// Builder for known-good SAV header byte sequences in tests.
     struct HeaderBytes {
@@ -257,9 +323,12 @@ mod tests {
         weight_index: i32,
         ncases: i32,
         bias: f64,
-        creation_date: [u8; 9],
-        creation_time: [u8; 8],
+        creation_date: [u8; CREATION_DATE_LEN],
+        creation_time: [u8; CREATION_TIME_LEN],
         file_label: String,
+        /// Encoding declared by a subtype-20 record. `None` omits the
+        /// record, so the reader has to fall back.
+        encoding_label: Option<&'static str>,
     }
 
     impl HeaderBytes {
@@ -276,16 +345,17 @@ mod tests {
                 creation_date: *b"01 Jan 24",
                 creation_time: *b"13:45:30",
                 file_label: "Test dataset".to_string(),
+                encoding_label: Some("UTF-8"),
             }
         }
 
         fn build(&self) -> Vec<u8> {
-            let mut buf = Vec::with_capacity(176);
+            let mut buf = Vec::with_capacity(HEADER_LEN);
             buf.extend_from_slice(&self.rec_type);
 
-            let mut prod = [b' '; 60];
+            let mut prod = [b' '; PRODUCT_NAME_LEN];
             let bytes = self.prod_name.as_bytes();
-            let len = bytes.len().min(60);
+            let len = bytes.len().min(PRODUCT_NAME_LEN);
             prod[..len].copy_from_slice(&bytes[..len]);
             buf.extend_from_slice(&prod);
 
@@ -298,14 +368,35 @@ mod tests {
             buf.extend_from_slice(&self.creation_date);
             buf.extend_from_slice(&self.creation_time);
 
-            let mut label = [b' '; 64];
+            let mut label = [b' '; FILE_LABEL_LEN];
             let bytes = self.file_label.as_bytes();
-            let len = bytes.len().min(64);
+            let len = bytes.len().min(FILE_LABEL_LEN);
             label[..len].copy_from_slice(&bytes[..len]);
             buf.extend_from_slice(&label);
 
-            buf.extend_from_slice(&[0u8; 3]);
-            assert_eq!(buf.len(), 176);
+            buf.extend_from_slice(&[0u8; TRAILING_PADDING_LEN]);
+            assert_eq!(buf.len(), HEADER_LEN);
+
+            // `read_header` walks the dictionary to find the declared
+            // encoding, so even a header-only fixture needs that
+            // declaration and a terminator to end the walk.
+            if let Some(label) = self.encoding_label {
+                buf.extend_from_slice(&self.write_i32(RECORD_TYPE_EXTENSION));
+                buf.extend_from_slice(&self.write_i32(EXTENSION_SUBTYPE_CHARACTER_ENCODING));
+                buf.extend_from_slice(
+                    &self.write_i32(
+                        i32::try_from(CHARACTER_ENCODING_ELEMENT_SIZE)
+                            .expect("element size fits in i32"),
+                    ),
+                );
+                buf.extend_from_slice(
+                    &self.write_i32(i32::try_from(label.len()).expect("test label fits in i32")),
+                );
+                buf.extend_from_slice(label.as_bytes());
+            }
+
+            buf.extend_from_slice(&self.write_i32(RECORD_TYPE_DICTIONARY_TERMINATOR));
+            buf.extend_from_slice(&[0u8; DICTIONARY_TERMINATOR_FILLER_LEN]);
             buf
         }
 
@@ -512,7 +603,8 @@ mod tests {
         let mut bytes = bytes;
         // Overwrite the layout-code field with garbage that decodes
         // to neither 2 nor 3 in either byte order.
-        bytes[64..68].copy_from_slice(&999_i32.to_le_bytes());
+        bytes[LAYOUT_CODE_OFFSET..LAYOUT_CODE_OFFSET + LAYOUT_CODE_LEN]
+            .copy_from_slice(&999_i32.to_le_bytes());
         let err = read(bytes).unwrap_err();
         assert!(matches!(
             err,
@@ -540,6 +632,60 @@ mod tests {
 
     // -- Encoding strategy --------------------------------------------------
 
+    /// A file declaring no encoding at all falls back to the strategy's
+    /// `unspecified` encoding and says so. PSPP warns in this case;
+    /// `ReadStat` is silent.
+    #[test]
+    fn undeclared_encoding_falls_back_and_warns() {
+        let mut bytes = HeaderBytes::new();
+        bytes.encoding_label = None;
+        let dict = read(bytes.build()).expect("read header");
+        assert_eq!(
+            dict.file_encoding(),
+            FileEncoding::Unspecified(encoding_rs::WINDOWS_1252)
+        );
+        assert!(
+            matches!(
+                dict.warnings(),
+                &[SavWarning::EncodingUnspecified {
+                    used: "windows-1252"
+                }]
+            ),
+            "warnings = {:?}",
+            dict.warnings()
+        );
+    }
+
+    /// With no fallback to guess from, an undeclared encoding fails the
+    /// read rather than silently picking something.
+    #[test]
+    fn undeclared_encoding_without_a_fallback_errors() {
+        let mut bytes = HeaderBytes::new();
+        bytes.encoding_label = None;
+        let strategy = EncodingStrategy::Declared {
+            unspecified: None,
+            unrecognized: None,
+        };
+        let err = read_with(bytes.build(), strategy).expect_err("no fallback");
+        assert!(
+            matches!(err, SavError::EncodingUnspecified),
+            "error = {err:?}"
+        );
+    }
+
+    /// The declared encoding is reported with its provenance, and is
+    /// known the moment the dictionary reader exists.
+    #[test]
+    fn declared_encoding_reports_its_provenance() {
+        let mut bytes = HeaderBytes::new();
+        bytes.encoding_label = Some("windows-1252");
+        let dict = read(bytes.build()).expect("read header");
+        assert_eq!(
+            dict.file_encoding(),
+            FileEncoding::Declared(encoding_rs::WINDOWS_1252)
+        );
+    }
+
     /// An override reaches the header decode immediately, because it
     /// needs nothing from the file. This holds both before and after
     /// string decoding is deferred.
@@ -553,34 +699,5 @@ mod tests {
         )
         .expect("read header");
         assert_eq!(dict.header().file_label(), "Fichier de démonstration");
-    }
-
-    #[test]
-    fn interim_encoding_prefers_the_override() {
-        assert_eq!(
-            interim_encoding(EncodingStrategy::Override(encoding_rs::UTF_8)),
-            encoding_rs::UTF_8
-        );
-    }
-
-    #[test]
-    fn interim_encoding_uses_the_unspecified_fallback() {
-        let strategy = EncodingStrategy::Declared {
-            unspecified: Some(encoding_rs::UTF_8),
-            unrecognized: None,
-        };
-        assert_eq!(interim_encoding(strategy), encoding_rs::UTF_8);
-    }
-
-    /// Interim only: a strategy that asks to fail on an undeclared
-    /// encoding cannot be honored until decoding is deferred, so it
-    /// silently guesses instead.
-    #[test]
-    fn interim_encoding_without_a_fallback_guesses_windows_1252() {
-        let strategy = EncodingStrategy::Declared {
-            unspecified: None,
-            unrecognized: None,
-        };
-        assert_eq!(interim_encoding(strategy), encoding_rs::WINDOWS_1252);
     }
 }

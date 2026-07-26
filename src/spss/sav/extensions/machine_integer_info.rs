@@ -15,6 +15,10 @@ use crate::spss::sav::sav_error::Result;
 use crate::spss::sav::sav_header::SavHeader;
 use crate::spss::sav::sav_warning::SavWarning;
 
+/// Byte offset of the `character_code` field within a subtype-3
+/// payload: the eighth and last of the record's `i32` slots.
+const CHARACTER_CODE_OFFSET: usize = 28;
+
 /// Integer-typed environment metadata from extension record subtype
 /// 3: version numbers, machine code, floating-point representation,
 /// compression code, endianness, and character encoding code.
@@ -289,6 +293,25 @@ pub(crate) fn read(
     Ok(extension)
 }
 
+/// Peeks at the `character_code` field of a subtype-3 envelope, for
+/// resolving the file's encoding during the dictionary scan.
+///
+/// Deliberately validates nothing and reports no warnings: the record's
+/// full parse and its header cross-checks happen in [`read`], when the
+/// record is handed to the caller. Returns `None` when the payload is
+/// too short to contain the field, leaving the malformed-record
+/// complaint to [`read`].
+#[inline]
+pub(crate) fn character_code(envelope: &ExtensionEnvelope) -> Option<i32> {
+    let end = CHARACTER_CODE_OFFSET + 4;
+    let slot: [u8; 4] = envelope
+        .payload
+        .get(CHARACTER_CODE_OFFSET..end)?
+        .try_into()
+        .ok()?;
+    Some(envelope.byte_order.read_i32(slot))
+}
+
 /// Parses a subtype-3 payload (machine integer info: 8 `i32` fields
 /// holding version numbers, machine code, floating-point
 /// representation, compression code, endianness, and character-set
@@ -340,7 +363,7 @@ fn parse(
         .floating_point_representation(i32_at(16))
         .compression_code(i32_at(20))
         .endianness(i32_at(24))
-        .character_code(i32_at(28))
+        .character_code(i32_at(CHARACTER_CODE_OFFSET))
         .build();
     Ok(info)
 }
@@ -519,6 +542,7 @@ mod tests {
         let byte_order = ByteOrder::LittleEndian;
         let mut bytes = build_header(byte_order);
         write_extension_record(&mut bytes, byte_order, 3, 8, 8, &[0; 64]);
+        write_terminator(&mut bytes, byte_order);
 
         let mut dict = open(bytes);
         let err = dict.read_record().unwrap_err();
@@ -538,6 +562,7 @@ mod tests {
         let byte_order = ByteOrder::LittleEndian;
         let mut bytes = build_header(byte_order);
         write_extension_record(&mut bytes, byte_order, 3, 4, 4, &[0; 16]);
+        write_terminator(&mut bytes, byte_order);
 
         let mut dict = open(bytes);
         let err = dict.read_record().unwrap_err();

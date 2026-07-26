@@ -1,9 +1,11 @@
 //! Shared per-reader state used by every SAV reader phase.
 //!
-//! `ReaderState<R>` owns the underlying reader, the active
-//! encoding, the scratch buffer, the running byte position, the
-//! detected byte order (filled in by the header reader), and the
-//! warnings vec. Pure parsing functions in `*_parse.rs` operate on
+//! `ReaderState<R>` owns the underlying reader, the scratch buffer,
+//! the running byte position, the detected byte order (filled in by
+//! the header reader), and the warnings vec. It deliberately does not
+//! own an encoding: the file's encoding is not resolvable until the
+//! whole dictionary has been walked, so state that held one would only
+//! ever hold a stale guess. Pure parsing functions in `*_parse.rs` operate on
 //! byte slices; the I/O primitives that fill those slices live here.
 //!
 //! Compression-related state (bytecode codes block, ZLIB decoder
@@ -13,8 +15,6 @@
 //! need it.
 
 use std::io::Read;
-
-use encoding_rs::Encoding;
 
 use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::sav_error::{Field, FormatErrorKind, Result, SavError, Section};
@@ -27,7 +27,6 @@ use crate::spss::sav::sav_warning::SavWarning;
 #[derive(Debug)]
 pub(crate) struct ReaderState<R> {
     reader: R,
-    encoding: &'static Encoding,
     buffer: Vec<u8>,
     position: u64,
     byte_order: Option<ByteOrder>,
@@ -35,10 +34,9 @@ pub(crate) struct ReaderState<R> {
 }
 
 impl<R> ReaderState<R> {
-    pub fn new(reader: R, encoding: &'static Encoding) -> Self {
+    pub fn new(reader: R) -> Self {
         Self {
             reader,
-            encoding,
             buffer: Vec::new(),
             position: 0,
             byte_order: None,
@@ -46,22 +44,9 @@ impl<R> ReaderState<R> {
         }
     }
 
-    /// Returns a new state with the given encoding, preserving the
-    /// reader, buffer allocation, position, byte order, and
-    /// warnings vec.
-    #[allow(dead_code)] // exercised once the dictionary reader lands.
-    pub fn with_encoding(self, encoding: &'static Encoding) -> Self {
-        Self { encoding, ..self }
-    }
-
     /// Byte offset in the file.
     pub fn position(&self) -> u64 {
         self.position
-    }
-
-    /// The active character encoding.
-    pub fn encoding(&self) -> &'static Encoding {
-        self.encoding
     }
 
     /// The detected byte order, or `None` before the header reader

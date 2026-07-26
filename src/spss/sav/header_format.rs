@@ -5,7 +5,7 @@
 //! and writers share these.
 
 /// Total size of the SAV header record, in bytes.
-#[allow(dead_code)] // exercised by the tile-coverage test and once the writer lands.
+#[allow(dead_code)] // asserted by the layout self-check test and by test fixtures.
 pub(super) const HEADER_LEN: usize = 176;
 
 /// Magic bytes for an uncompressed or bytecode-compressed SAV file.
@@ -26,6 +26,9 @@ pub(super) const PRODUCT_NAME_LEN: usize = 60;
 /// (used for byte-order detection: equals `2` or `3` in the file's
 /// native byte order).
 pub(super) const LAYOUT_CODE_OFFSET: usize = 64;
+
+/// Byte length of the `layout_code` field.
+pub(super) const LAYOUT_CODE_LEN: usize = 4;
 
 /// Expected `layout_code` values when interpreted in the file's
 /// byte order.
@@ -50,7 +53,8 @@ pub(super) const NCASES_OFFSET: usize = 80;
 
 /// Byte offset and length of the 8-byte `bias` field
 /// (compression bias, typically `100.0`).
-#[allow(dead_code)] // exercised by the tile-coverage test and once the writer lands.
+#[allow(dead_code)] // documents the layout; the reader walks the header
+// sequentially rather than seeking to offsets.
 pub(super) const BIAS_OFFSET: usize = 84;
 pub(super) const BIAS_LEN: usize = 8;
 
@@ -73,7 +77,8 @@ pub(super) const FILE_LABEL_OFFSET: usize = 109;
 pub(super) const FILE_LABEL_LEN: usize = 64;
 
 /// Byte offset and length of the 3-byte trailing padding.
-#[allow(dead_code)] // exercised by the tile-coverage test and once the writer lands.
+#[allow(dead_code)] // documents the layout; the reader walks the header
+// sequentially rather than seeking to offsets.
 pub(super) const TRAILING_PADDING_OFFSET: usize = 173;
 pub(super) const TRAILING_PADDING_LEN: usize = 3;
 

@@ -1,10 +1,8 @@
 //! A variable's missing-value specification.
 
+use crate::spss::sav::dictionary_format::MISSING_VALUE_COUNT_MAX;
 use crate::spss::sav::range_bound::RangeBound;
 use crate::spss::sav::sav_error::{Result, SavError};
-
-/// Maximum number of discrete missing values the SAV format permits.
-const MAX_DISCRETE: usize = 3;
 
 /// The missing-value specification carried by a numeric variable.
 ///
@@ -41,7 +39,7 @@ impl MissingValueSpecification {
     /// Returns [`SavError::TooManyMissingValues`] if `values`
     /// contains more than three entries.
     pub fn discrete(values: Vec<f64>) -> Result<Self> {
-        if values.len() > MAX_DISCRETE {
+        if values.len() > MISSING_VALUE_COUNT_MAX {
             return Err(SavError::TooManyMissingValues {
                 actual: values.len(),
             });

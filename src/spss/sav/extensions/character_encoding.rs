@@ -77,6 +77,25 @@ pub(crate) fn read(envelope: &ExtensionEnvelope) -> Result<DictionaryRecord> {
     Ok(extension)
 }
 
+/// Extracts the declared encoding label from a subtype-20 envelope, for
+/// resolving the file's encoding during the dictionary scan.
+///
+/// Separate from [`read`] because resolution happens before any record
+/// is handed to the caller: the label has to be known to decode every
+/// other record's text, including this one's own surrounding records.
+///
+/// # Errors
+///
+/// Same as [`parse`] — a `element_size` other than 1 is rejected.
+#[inline]
+pub(crate) fn declared_label(envelope: &ExtensionEnvelope) -> Result<String> {
+    parse(
+        envelope.element_size,
+        &envelope.payload,
+        envelope.element_size_position,
+    )
+}
+
 /// Parses a subtype-20 payload into the declared encoding label.
 ///
 /// The payload is the encoding name in ASCII; trailing spaces and NULs
@@ -237,6 +256,7 @@ mod tests {
         let byte_order = ByteOrder::LittleEndian;
         let mut bytes = build_header(byte_order);
         write_extension_record(&mut bytes, byte_order, 20, 4, 2, &[0; 8]);
+        write_terminator(&mut bytes, byte_order);
 
         let mut dict = open(bytes);
         let err = dict.read_record().unwrap_err();

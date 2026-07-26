@@ -1,5 +1,6 @@
 //! SAV-format-specific errors.
 
+use crate::spss::sav::dictionary_format::MISSING_VALUE_COUNT_MAX;
 use core::fmt;
 
 /// Section of a SAV file where an error occurred.
@@ -364,7 +365,7 @@ impl fmt::Display for SavError {
             ),
             Self::TooManyMissingValues { actual } => write!(
                 f,
-                "discrete missing-value list has {actual} entries; the SAV format caps it at 3",
+                "discrete missing-value list has {actual} entries; the SAV format caps it at {MISSING_VALUE_COUNT_MAX}",
             ),
             Self::EncodingUnspecified => f.write_str(
                 "file declares no character encoding and the reader has no fallback encoding",

@@ -43,7 +43,6 @@ enum CodepageResolution {
 /// nothing and the strategy has no `unspecified` fallback, and
 /// [`SavError::EncodingUnrecognized`] when the file declared something
 /// unresolvable and the strategy has no `unrecognized` fallback.
-#[allow(dead_code)] // wired up when the header reader defers decoding.
 pub(super) fn resolve(
     strategy: EncodingStrategy,
     label: Option<&str>,
@@ -122,6 +121,29 @@ pub(super) fn resolve(
         used: encoding.name(),
     });
     Ok(FileEncoding::Unspecified(encoding))
+}
+
+/// The encoding the file's own declarations name, ignoring the reader's
+/// strategy entirely. `None` when nothing resolvable was declared.
+///
+/// Delegates to [`resolve`] with a fallback-free strategy rather than
+/// re-implementing the subtype-20-then-subtype-3 precedence, so the two
+/// cannot drift apart. Warnings are discarded: the caller has already
+/// resolved for real, and this is only used to report what was
+/// overridden.
+pub(super) fn declared_encoding(
+    label: Option<&str>,
+    character_code: Option<i32>,
+) -> Option<FileEncoding> {
+    let strategy = EncodingStrategy::Declared {
+        unspecified: None,
+        unrecognized: None,
+    };
+    let mut discarded = Vec::new();
+    match resolve(strategy, label, character_code, &mut discarded) {
+        Ok(declared @ (FileEncoding::Declared(_) | FileEncoding::Codepage(_))) => Some(declared),
+        _ => None,
+    }
 }
 
 /// Resolves a subtype-20 encoding label.
@@ -323,6 +345,57 @@ mod tests {
         assert_eq!(resolve_codepage(437), CodepageResolution::Unsupported); // DOS
         assert_eq!(resolve_codepage(1200), CodepageResolution::Unsupported); // UTF-16LE
         assert_eq!(resolve_codepage(-7), CodepageResolution::Unsupported);
+    }
+
+    // -- declared_encoding --------------------------------------------------
+
+    #[test]
+    fn declared_encoding_prefers_the_label() {
+        assert_eq!(
+            declared_encoding(Some("UTF-8"), Some(1252)),
+            Some(FileEncoding::Declared(encoding_rs::UTF_8))
+        );
+    }
+
+    #[test]
+    fn declared_encoding_falls_through_to_the_codepage() {
+        assert_eq!(
+            declared_encoding(None, Some(1252)),
+            Some(FileEncoding::Codepage(encoding_rs::WINDOWS_1252))
+        );
+        assert_eq!(
+            declared_encoding(Some("UTF-9"), Some(1252)),
+            Some(FileEncoding::Codepage(encoding_rs::WINDOWS_1252))
+        );
+    }
+
+    #[test]
+    fn declared_encoding_is_none_when_nothing_resolves() {
+        assert_eq!(declared_encoding(None, None), None);
+        // Code 2 carries no information, so it declares nothing.
+        assert_eq!(declared_encoding(None, Some(2)), None);
+        assert_eq!(declared_encoding(Some("UTF-9"), Some(437)), None);
+    }
+
+    /// The precedence it reports must be the precedence actually
+    /// applied, since it is derived from the same resolver.
+    #[test]
+    fn declared_encoding_agrees_with_resolve() {
+        let cases = [
+            (Some("UTF-8"), Some(65001)),
+            (Some("UTF-8"), Some(1252)),
+            (None, Some(1252)),
+            (Some("UTF-9"), Some(1252)),
+        ];
+        for (label, code) in cases {
+            let mut warnings = Vec::new();
+            let resolved = resolve(STRICT, label, code, &mut warnings).expect("resolves");
+            assert_eq!(
+                declared_encoding(label, code),
+                Some(resolved),
+                "{label:?}/{code:?}"
+            );
+        }
     }
 
     // -- resolve: override --------------------------------------------------

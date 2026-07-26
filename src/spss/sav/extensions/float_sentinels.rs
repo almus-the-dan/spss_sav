@@ -264,6 +264,7 @@ mod tests {
         let byte_order = ByteOrder::LittleEndian;
         let mut bytes = build_header(byte_order);
         write_extension_record(&mut bytes, byte_order, 4, 4, 3, &[0; 12]);
+        write_terminator(&mut bytes, byte_order);
 
         let mut dict = open(bytes);
         let err = dict.read_record().unwrap_err();
@@ -283,6 +284,7 @@ mod tests {
         let byte_order = ByteOrder::LittleEndian;
         let mut bytes = build_header(byte_order);
         write_extension_record(&mut bytes, byte_order, 4, 8, 2, &[0; 16]);
+        write_terminator(&mut bytes, byte_order);
 
         let mut dict = open(bytes);
         let err = dict.read_record().unwrap_err();

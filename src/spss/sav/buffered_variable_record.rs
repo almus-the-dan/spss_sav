@@ -1,33 +1,30 @@
 //! A type-2 variable record held undecoded until the encoding is known.
 
-use crate::spss::sav::dictionary_format::VARIABLE_RECORD_BODY_LEN;
+use crate::spss::sav::dictionary_format::VARIABLE_SHORT_NAME_LEN;
+use crate::spss::sav::raw_missing_values::RawMissingValues;
+use crate::spss::sav::sav_format::SavFormat;
+use crate::spss::sav::variable_type::VariableType;
 
-/// A type-2 variable record, structurally delimited but neither
-/// validated nor decoded.
+/// A type-2 variable record, fully validated but not yet decoded.
 ///
-/// Buffering a record only requires knowing where it ends, which means
-/// reading `has_var_label` and `n_missing_values` to size the trailing
-/// blocks. Nothing is *checked*: the variable type code, the
-/// missing-value count, and the continuation run length are all
-/// validated when the record is decoded, so a semantically malformed
-/// record still fails from
-/// [`read_record`](crate::spss::sav::dictionary_reader::DictionaryReader::read_record)
-/// rather than from
-/// [`read_header`](crate::spss::sav::header_reader::HeaderReader::read_header).
+/// Only two fields in a variable record need the encoding: the 8-byte
+/// short name and the variable label. Everything else is numeric and is
+/// parsed and validated while the record is buffered, so this type holds
+/// those fields in their final form and keeps only the text raw.
+/// `missing_values` stays raw permanently — see
+/// [`RawMissingValues`].
 ///
-/// Only two fields need the encoding — the 8-byte short name inside
-/// `body` and the variable label. Everything else in the record is
-/// numeric, and `missing_values` stays raw permanently (see
-/// [`RawMissingValues`](crate::spss::sav::raw_missing_values::RawMissingValues)).
-#[allow(dead_code)] // populated when the header reader defers decoding.
+/// Continuation records are collapsed during buffering and never reach
+/// this type.
+#[derive(Debug)]
 pub(crate) struct BufferedVariableRecord {
-    /// The fixed-width record body, verbatim.
-    pub(crate) body: [u8; VARIABLE_RECORD_BODY_LEN],
-    /// Raw variable-label bytes, present when `has_var_label` was set.
-    /// Padding is trimmed at decode time, not here.
+    /// Raw short-name bytes, padding not yet trimmed.
+    pub(crate) short_name: [u8; VARIABLE_SHORT_NAME_LEN],
+    /// Raw variable-label bytes with the padding already removed,
+    /// present when `has_var_label` was set.
     pub(crate) label: Option<Vec<u8>>,
-    /// The raw missing-value slots, `n_missing_values.abs()` of them.
-    /// The signed count itself stays in `body`, since its sign selects
-    /// between a discrete list and a range.
-    pub(crate) missing_values: Vec<[u8; 8]>,
+    pub(crate) variable_type: VariableType,
+    pub(crate) missing_values: RawMissingValues,
+    pub(crate) print_format: SavFormat,
+    pub(crate) write_format: SavFormat,
 }

@@ -18,15 +18,18 @@ use spss_sav::spss::sav::compression::Compression;
 use spss_sav::spss::sav::dictionary_reader::DictionaryReader;
 use spss_sav::spss::sav::dictionary_record::DictionaryRecord;
 use spss_sav::spss::sav::document_record::DocumentRecord;
+use spss_sav::spss::sav::encoding_strategy::EncodingStrategy;
 use spss_sav::spss::sav::extensions::category_label_source::CategoryLabelSource;
 use spss_sav::spss::sav::extensions::extension_record::ExtensionRecord;
 use spss_sav::spss::sav::extensions::multiple_response_set::MultipleResponseSet;
 use spss_sav::spss::sav::extensions::multiple_response_set_kind::MultipleResponseSetKind;
+use spss_sav::spss::sav::file_encoding::FileEncoding;
 use spss_sav::spss::sav::float_format::FloatFormat;
 use spss_sav::spss::sav::raw_missing_values::RawMissingValues;
 use spss_sav::spss::sav::raw_value_label_set::RawValueLabelSet;
 use spss_sav::spss::sav::sav_reader::SavReader;
 use spss_sav::spss::sav::sav_variable_header::SavVariableHeader;
+use spss_sav::spss::sav::sav_warning::SavWarning;
 use spss_sav::spss::sav::variable_type::VariableType;
 
 const COMPREHENSIVE: &str = concat!(
@@ -452,17 +455,79 @@ fn encoding_windows1252_decodes_accented_text() {
 }
 
 /// The UTF-8 fixture declares `"UTF-8"` in a subtype-20 record that
-/// sits last in the dictionary, after every string it governs. The
-/// reader fixes its encoding before that record is reachable, so each
-/// multi-byte sequence is decoded through the windows-1252 fallback and
-/// arrives as mojibake — `Café crème` reads back as `CafÃ© crÃ¨me`.
+/// sits last in the dictionary, after every string it governs — and
+/// disagrees with the reader's default fallback, so nothing here decodes
+/// correctly unless the declaration is genuinely honored.
 ///
-/// This is the acceptance test for deferred string decoding: buffering
-/// the raw header fields and dictionary records, resolving the encoding
-/// from subtype 20 (then subtype 3), and only then decoding.
+/// This is the acceptance test for deferred decoding: the header fields
+/// and every dictionary record are held undecoded until the declaration
+/// is reached and resolved. Before that landed, `Café crème` read back
+/// as `CafÃ© crÃ¨me`.
 #[test]
-#[ignore = "requires deferred string decoding; the encoding is declared at the end of the dictionary"]
 fn encoding_utf8_decodes_accented_text() {
     let (file_label, records) = read_encoding_fixture(ENCODING_UTF8);
     assert_accented_text_decoded(&file_label, &records);
+}
+
+/// Both fixtures declare their encoding in a subtype-20 record, so the
+/// reader reports it as [`FileEncoding::Declared`] rather than falling
+/// back — and reports it before any record has been read, since
+/// resolving it is what `read_header` walked the dictionary for.
+#[test]
+fn encoding_fixtures_report_a_declared_provenance() {
+    let cases = [
+        (ENCODING_UTF8, encoding_rs::UTF_8),
+        (ENCODING_WINDOWS_1252, encoding_rs::WINDOWS_1252),
+    ];
+    for (path, expected) in cases {
+        let dictionary_reader = SavReader::new()
+            .from_path(path)
+            .expect("open fixture")
+            .read_header()
+            .expect("read header");
+        assert_eq!(
+            dictionary_reader.file_encoding(),
+            FileEncoding::Declared(expected),
+            "{path}"
+        );
+    }
+}
+
+/// An override wins over the file's own declaration, and the mismatch
+/// surfaces as a warning when the declaring subtype-20 record reaches
+/// the caller — not during resolution, so it arrives alongside the
+/// record it is about.
+#[test]
+fn override_wins_and_warns_when_the_file_disagrees() {
+    let mut dictionary_reader = SavReader::new()
+        .encoding_strategy(EncodingStrategy::Override(encoding_rs::WINDOWS_1252))
+        .from_path(ENCODING_UTF8)
+        .expect("open fixture")
+        .read_header()
+        .expect("read header");
+
+    assert_eq!(
+        dictionary_reader.file_encoding(),
+        FileEncoding::Overridden(encoding_rs::WINDOWS_1252)
+    );
+
+    let mut overridden = Vec::new();
+    while let Some(_record) = dictionary_reader
+        .read_record()
+        .expect("read dictionary record")
+    {
+        overridden.extend(
+            dictionary_reader
+                .warnings()
+                .iter()
+                .filter(|w| matches!(w, SavWarning::EncodingOverridden { .. }))
+                .map(|w| format!("{w:?}")),
+        );
+    }
+    assert_eq!(overridden.len(), 1, "warnings = {overridden:?}");
+    assert!(
+        overridden[0].contains("UTF-8") && overridden[0].contains("windows-1252"),
+        "warning = {}",
+        overridden[0]
+    );
 }

@@ -2,39 +2,44 @@
 //!
 //! Sits between [`HeaderReader`](crate::spss::sav::header_reader::HeaderReader)
 //! and the (future) record reader. Yields one
-//! [`DictionaryRecord`] at a time —
-//! variable records, value-label sets, document records, and
-//! extension records freely interleaved between the header and the
-//! `999` end-of-dictionary marker.
+//! [`DictionaryRecord`](crate::spss::sav::dictionary_record::DictionaryRecord)
+//! at a time — variable records, value-label sets,
+//! document records, and extension records freely interleaved between
+//! the header and the `999` end-of-dictionary marker.
+//!
+//! The records were already read off the wire by
+//! [`HeaderReader::read_header`](crate::spss::sav::header_reader::HeaderReader::read_header),
+//! which had to walk the whole dictionary to find the file's declared
+//! encoding (see
+//! [`DictionaryBuffer`](crate::spss::sav::dictionary_buffer::DictionaryBuffer)).
+//! This phase therefore decodes rather than reads: it turns each
+//! buffered record into a
+//! [`DictionaryRecord`](crate::spss::sav::dictionary_record::DictionaryRecord)
+//! using the resolved encoding. Structural errors have already surfaced from
+//! `read_header`; what can still fail here is per-subtype extension
+//! payload validation, which never had to run to find record
+//! boundaries.
 
-use std::collections::HashSet;
 use std::io::Read;
 
 use encoding_rs::Encoding;
 
-use crate::spss::sav::byte_order::ByteOrder;
+use crate::spss::sav::buffered_document_record::BufferedDocumentRecord;
+use crate::spss::sav::buffered_record_payload::BufferedRecordPayload;
+use crate::spss::sav::buffered_value_label_set::BufferedValueLabelSet;
+use crate::spss::sav::buffered_variable_record::BufferedVariableRecord;
+use crate::spss::sav::dictionary_buffer::DictionaryBuffer;
 use crate::spss::sav::dictionary_format::{
-    DICTIONARY_TERMINATOR_FILLER_LEN, DOCUMENT_LINE_LEN, EXTENSION_SUBTYPE_CHARACTER_ENCODING,
-    EXTENSION_SUBTYPE_DATA_FILE_ATTRIBUTES, EXTENSION_SUBTYPE_DISPLAY_PARAMETERS,
-    EXTENSION_SUBTYPE_EXTENDED_NUMBER_OF_CASES, EXTENSION_SUBTYPE_EXTRA_PRODUCT_INFO,
-    EXTENSION_SUBTYPE_FLOAT_INFO, EXTENSION_SUBTYPE_LONG_STRING_MISSING_VALUES,
-    EXTENSION_SUBTYPE_LONG_STRING_VALUE_LABELS, EXTENSION_SUBTYPE_LONG_VARIABLE_NAMES,
-    EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO, EXTENSION_SUBTYPE_MULTIPLE_RESPONSE_SETS,
-    EXTENSION_SUBTYPE_MULTIPLE_RESPONSE_SETS_EXTENDED, EXTENSION_SUBTYPE_UUID,
-    EXTENSION_SUBTYPE_VARIABLE_ATTRIBUTES, EXTENSION_SUBTYPE_VARIABLE_SETS,
-    EXTENSION_SUBTYPE_VERY_LONG_STRINGS, MISSING_VALUE_ENTRY_LEN,
-    RECORD_TYPE_DICTIONARY_TERMINATOR, RECORD_TYPE_DOCUMENT, RECORD_TYPE_EXTENSION,
-    RECORD_TYPE_VALUE_LABEL, RECORD_TYPE_VALUE_LABEL_VARIABLES, RECORD_TYPE_VARIABLE,
-    VALUE_LABEL_LABEL_LEN_FIELD_LEN, VALUE_LABEL_VALUE_LEN, VARIABLE_HAS_LABEL_OFFSET,
-    VARIABLE_LABEL_PADDING, VARIABLE_MISSING_VALUE_COUNT_OFFSET, VARIABLE_PRINT_FORMAT_OFFSET,
-    VARIABLE_RECORD_BODY_LEN, VARIABLE_SHORT_NAME_LEN, VARIABLE_SHORT_NAME_OFFSET,
-    VARIABLE_TYPE_OFFSET, VARIABLE_WRITE_FORMAT_OFFSET,
+    EXTENSION_SUBTYPE_CHARACTER_ENCODING, EXTENSION_SUBTYPE_DATA_FILE_ATTRIBUTES,
+    EXTENSION_SUBTYPE_DISPLAY_PARAMETERS, EXTENSION_SUBTYPE_EXTENDED_NUMBER_OF_CASES,
+    EXTENSION_SUBTYPE_EXTRA_PRODUCT_INFO, EXTENSION_SUBTYPE_FLOAT_INFO,
+    EXTENSION_SUBTYPE_LONG_STRING_MISSING_VALUES, EXTENSION_SUBTYPE_LONG_STRING_VALUE_LABELS,
+    EXTENSION_SUBTYPE_LONG_VARIABLE_NAMES, EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO,
+    EXTENSION_SUBTYPE_MULTIPLE_RESPONSE_SETS, EXTENSION_SUBTYPE_MULTIPLE_RESPONSE_SETS_EXTENDED,
+    EXTENSION_SUBTYPE_UUID, EXTENSION_SUBTYPE_VARIABLE_ATTRIBUTES, EXTENSION_SUBTYPE_VARIABLE_SETS,
+    EXTENSION_SUBTYPE_VERY_LONG_STRINGS,
 };
-use crate::spss::sav::dictionary_parse::{
-    VariableTypeCode, compose_raw_missing_values, normalize_value_label_variable_indices,
-    parse_has_label, parse_missing_value_count, parse_sav_format, parse_short_name,
-    parse_value_label_entry, parse_variable_type, value_label_entry_size,
-};
+use crate::spss::sav::dictionary_parse::{parse_short_name, parse_value_label_entry};
 use crate::spss::sav::dictionary_record::DictionaryRecord;
 use crate::spss::sav::document_record::DocumentRecord;
 use crate::spss::sav::extension_envelope::ExtensionEnvelope;
@@ -55,62 +60,52 @@ use crate::spss::sav::extensions::uuid;
 use crate::spss::sav::extensions::variable_attributes;
 use crate::spss::sav::extensions::variable_sets;
 use crate::spss::sav::extensions::very_long_strings;
-use crate::spss::sav::raw_value_label_entry::RawValueLabelEntry;
+use crate::spss::sav::file_encoding::FileEncoding;
 use crate::spss::sav::raw_value_label_set::RawValueLabelSet;
-use crate::spss::sav::reader_state::{ReaderState, u32_as_usize};
+use crate::spss::sav::reader_state::ReaderState;
 use crate::spss::sav::record_reader::RecordReader;
-use crate::spss::sav::sav_error::{Field, FormatErrorKind, Result, SavError, Section};
+use crate::spss::sav::sav_error::Result;
 use crate::spss::sav::sav_header::SavHeader;
 use crate::spss::sav::sav_variable_header::SavVariableHeader;
 use crate::spss::sav::sav_warning::SavWarning;
-use crate::spss::sav::variable_type::VariableType;
 
 /// Streaming reader for the SAV dictionary section.
 ///
 /// Created by
 /// [`HeaderReader::read_header`](crate::spss::sav::header_reader::HeaderReader::read_header).
 /// Pull individual records via [`read_record`](Self::read_record)
-/// until it returns `Ok(None)` (the `999` marker), or skip
-/// straight to record reading via
-/// [`into_record_reader`](Self::into_record_reader) which
-/// auto-consumes any remaining dictionary records.
+/// until it returns `Ok(None)`, or skip straight to record reading via
+/// [`into_record_reader`](Self::into_record_reader) which auto-consumes
+/// any remaining dictionary records.
 #[derive(Debug)]
 pub struct DictionaryReader<R> {
     state: ReaderState<R>,
     header: SavHeader,
+    file_encoding: FileEncoding,
+    /// What the file's own declarations named, regardless of what the
+    /// reader applied. Only consulted to report an override.
+    declared_encoding: Option<FileEncoding>,
+    buffer: DictionaryBuffer,
     #[allow(dead_code)] // exercised once the record reader phase lands.
     weight_variable_index: Option<usize>,
-    variable_count: usize,
-    /// Number of continuation records still expected for the most
-    /// recent string-variable primary. Decrements as each
-    /// continuation arrives; must reach `0` before any other record
-    /// kind (including the dictionary terminator) is accepted.
-    pending_continuations: u32,
-    /// 0-based physical record positions of each primary (non-
-    /// continuation) variable record observed so far, in declaration
-    /// order. Used to translate a type-4 record's 1-based physical
-    /// variable indices into 0-based logical positions.
-    primaries: Vec<u32>,
-    /// Count of all type-2 records observed so far, primaries and
-    /// continuations alike. The next primary's 0-based physical
-    /// position before this counter is incremented.
-    physical_variable_count: u32,
 }
 
 impl<R> DictionaryReader<R> {
     pub(crate) fn new(
         state: ReaderState<R>,
         header: SavHeader,
+        file_encoding: FileEncoding,
+        declared_encoding: Option<FileEncoding>,
+        buffer: DictionaryBuffer,
         weight_variable_index: Option<usize>,
     ) -> Self {
         Self {
             state,
             header,
+            file_encoding,
+            declared_encoding,
+            buffer,
             weight_variable_index,
-            variable_count: 0,
-            pending_continuations: 0,
-            primaries: Vec::new(),
-            physical_variable_count: 0,
         }
     }
 
@@ -127,19 +122,30 @@ impl<R> DictionaryReader<R> {
 
     /// The file header parsed by the upstream
     /// [`HeaderReader`](crate::spss::sav::header_reader::HeaderReader).
-    /// `weight_variable` and any other extension-derived fields
-    /// stay empty until the dictionary phase finalizes them.
+    /// `weight_variable` and any other extension-derived fields stay
+    /// empty until the dictionary phase finalizes them.
     #[must_use]
     #[inline]
     pub fn header(&self) -> &SavHeader {
         &self.header
     }
 
+    /// The encoding the reader applied, and where it came from.
+    ///
+    /// Known from the moment this reader exists: resolving it is what
+    /// [`HeaderReader::read_header`](crate::spss::sav::header_reader::HeaderReader::read_header)
+    /// walked the dictionary for.
+    #[must_use]
+    #[inline]
+    pub fn file_encoding(&self) -> FileEncoding {
+        self.file_encoding
+    }
+
     /// Warnings accumulated by the most recent
     /// [`read_record`](Self::read_record) call (or by
     /// [`HeaderReader::read_header`](crate::spss::sav::header_reader::HeaderReader::read_header)
-    /// for the first call). Cleared at the start of each
-    /// `read_record` invocation.
+    /// for the first call). Cleared at the start of each `read_record`
+    /// invocation.
     #[must_use]
     #[inline]
     pub fn warnings(&self) -> &[SavWarning] {
@@ -148,100 +154,46 @@ impl<R> DictionaryReader<R> {
 }
 
 impl<R: Read> DictionaryReader<R> {
-    /// Reads the next dictionary record. Returns `Ok(None)` once
-    /// the `999` end-of-dictionary marker has been consumed.
+    /// Decodes and returns the next dictionary record. Returns
+    /// `Ok(None)` once every record has been handed out.
     ///
-    /// String-variable continuation records (type-2 with `type ==
-    /// -1`) are consumed silently; the caller never sees them.
+    /// String-variable continuation records were collapsed into their
+    /// primaries while buffering; the caller never sees them.
     ///
     /// # Errors
     ///
-    /// Returns [`SavError::Io`] on read failures and
-    /// [`SavError::Format`] when the bytes do not match a recognized
-    /// record shape.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the upstream
-    /// [`HeaderReader`](crate::spss::sav::header_reader::HeaderReader)
-    /// did not record a byte order before transitioning. The reader
-    /// typestate chain guarantees this; a panic here would indicate
-    /// a bug in the library rather than a malformed file.
+    /// Returns [`SavError::Format`](crate::spss::sav::sav_error::SavError::Format)
+    /// when an extension record's payload does not match its subtype's
+    /// declared shape. Structural errors cannot occur here — they
+    /// surfaced from `read_header`.
     pub fn read_record(&mut self) -> Result<Option<DictionaryRecord>> {
         self.state.warnings_mut().clear();
-        let byte_order = self
-            .state
-            .byte_order()
-            .expect("byte order is set by the header reader");
-        let encoding = self.state.encoding();
+        let Some(buffered) = self.buffer.next_record() else {
+            return Ok(None);
+        };
+        // Replay the warnings this record raised while it was read, so
+        // `warnings()` still reports per-call results.
+        self.state.warnings_mut().extend(buffered.warnings);
 
-        loop {
-            let position = self.state.position();
-            let record_type = self.state.read_i32(byte_order, Section::Dictionary)?;
-
-            // Non-variable record kinds are not allowed while the
-            // previous string variable's continuation run is still
-            // pending. Variable records (type 2) need to read their
-            // body before we can tell if they're a continuation or a
-            // primary, so they validate themselves in
-            // `read_variable_record`.
-            if record_type != RECORD_TYPE_VARIABLE && self.pending_continuations > 0 {
-                let error = SavError::format(
-                    Section::Dictionary,
-                    position,
-                    FormatErrorKind::MissingContinuationRecord {
-                        expected_remaining: self.pending_continuations,
-                    },
-                );
-                return Err(error);
+        let encoding = self.file_encoding.encoding();
+        let record = match buffered.payload {
+            BufferedRecordPayload::Variable(variable) => {
+                let record = decode_variable_record(variable, encoding);
+                DictionaryRecord::Variable(record)
             }
-
-            match record_type {
-                RECORD_TYPE_VARIABLE => {
-                    if let Some(record) =
-                        self.read_variable_record(position, byte_order, encoding)?
-                    {
-                        return Ok(Some(record));
-                    }
-                    // Continuation record — loop to read the next.
-                }
-                RECORD_TYPE_DICTIONARY_TERMINATOR => {
-                    self.state
-                        .skip(DICTIONARY_TERMINATOR_FILLER_LEN, Section::Dictionary)?;
-                    return Ok(None);
-                }
-                RECORD_TYPE_VALUE_LABEL => {
-                    let record = self.read_value_label_record(byte_order, encoding)?;
-                    return Ok(Some(record));
-                }
-                RECORD_TYPE_VALUE_LABEL_VARIABLES => {
-                    let error = SavError::format(
-                        Section::Dictionary,
-                        position,
-                        FormatErrorKind::UnpairedValueLabelRecord {
-                            saw: RECORD_TYPE_VALUE_LABEL_VARIABLES,
-                        },
-                    );
-                    return Err(error);
-                }
-                RECORD_TYPE_DOCUMENT => {
-                    let record = self.read_document_record(byte_order, encoding)?;
-                    return Ok(Some(record));
-                }
-                RECORD_TYPE_EXTENSION => {
-                    let record = self.read_extension_record(byte_order, encoding)?;
-                    return Ok(Some(record));
-                }
-                value => {
-                    let error = SavError::format(
-                        Section::Dictionary,
-                        position,
-                        FormatErrorKind::UnknownRecordType { value },
-                    );
-                    return Err(error);
-                }
+            BufferedRecordPayload::ValueLabelSet(set) => {
+                let set = decode_value_label_set(set, encoding);
+                DictionaryRecord::ValueLabelSet(set)
             }
-        }
+            BufferedRecordPayload::Document(document) => {
+                let record = decode_document_record(document, encoding);
+                DictionaryRecord::Document(record)
+            }
+            BufferedRecordPayload::Extension(envelope) => {
+                self.decode_extension_record(envelope, encoding)?
+            }
+        };
+        Ok(Some(record))
     }
 
     /// Auto-consumes any remaining dictionary records, finalizes
@@ -255,183 +207,17 @@ impl<R: Read> DictionaryReader<R> {
         todo!("body lands with the record reader phase")
     }
 
-    /// Reads a type-2 variable record's body plus any trailing
-    /// label and missing-value blocks. Returns `Ok(None)` when the
-    /// record is a continuation (collapsed silently into the
-    /// previous logical variable).
-    fn read_variable_record(
-        &mut self,
-        position: u64,
-        byte_order: ByteOrder,
-        encoding: &'static Encoding,
-    ) -> Result<Option<DictionaryRecord>> {
-        let body: [u8; VARIABLE_RECORD_BODY_LEN] = self.state.read_array(Section::Dictionary)?;
-
-        let type_value = four_bytes(&body, VARIABLE_TYPE_OFFSET);
-        let type_value = byte_order.read_i32(type_value);
-        let type_code = parse_variable_type(type_value, position)?;
-
-        if matches!(type_code, VariableTypeCode::Continuation) {
-            if self.pending_continuations == 0 {
-                let error = SavError::format(
-                    Section::Dictionary,
-                    position,
-                    FormatErrorKind::UnexpectedContinuationRecord,
-                );
-                return Err(error);
-            }
-            self.pending_continuations -= 1;
-            self.physical_variable_count += 1;
-            return Ok(None);
-        }
-
-        // Non-continuation primary: the previous string variable's
-        // continuation run must already be complete.
-        if self.pending_continuations > 0 {
-            let error = SavError::format(
-                Section::Dictionary,
-                position,
-                FormatErrorKind::MissingContinuationRecord {
-                    expected_remaining: self.pending_continuations,
-                },
-            );
-            return Err(error);
-        }
-
-        let has_label = four_bytes(&body, VARIABLE_HAS_LABEL_OFFSET);
-        let has_label = byte_order.read_i32(has_label);
-        let has_label = parse_has_label(has_label);
-
-        let missing_count = four_bytes(&body, VARIABLE_MISSING_VALUE_COUNT_OFFSET);
-        let missing_count = byte_order.read_i32(missing_count);
-        if missing_count == -1 {
-            let variable_index = u32::try_from(self.variable_count).unwrap_or(u32::MAX);
-            let warning = SavWarning::InvalidMissingValueCount {
-                variable_index,
-                value: missing_count,
-            };
-            self.state.warnings_mut().push(warning);
-        }
-        let missing_count = parse_missing_value_count(missing_count, position)?;
-
-        let print_packed = four_bytes(&body, VARIABLE_PRINT_FORMAT_OFFSET);
-        let print_packed = byte_order.read_u32(print_packed);
-        let print_format = parse_sav_format(print_packed);
-
-        let write_packed = four_bytes(&body, VARIABLE_WRITE_FORMAT_OFFSET);
-        let write_packed = byte_order.read_u32(write_packed);
-        let write_format = parse_sav_format(write_packed);
-
-        let name_bytes: [u8; 8] = body
-            [VARIABLE_SHORT_NAME_OFFSET..VARIABLE_SHORT_NAME_OFFSET + VARIABLE_SHORT_NAME_LEN]
-            .try_into()
-            .expect("short-name slice is exactly 8 bytes");
-        let short_name = parse_short_name(name_bytes, encoding);
-
-        let label = if has_label {
-            let label = self.read_variable_label(byte_order, encoding)?;
-            Some(label)
-        } else {
-            None
-        };
-
-        let entry_count = missing_count.entry_count();
-        let mut entries: Vec<[u8; 8]> = Vec::with_capacity(entry_count);
-        for _ in 0..entry_count {
-            let entry: [u8; MISSING_VALUE_ENTRY_LEN] =
-                self.state.read_array(Section::Dictionary)?;
-            entries.push(entry);
-        }
-        let missing_values = compose_raw_missing_values(missing_count, entries);
-
-        let variable_type = match type_code {
-            VariableTypeCode::Numeric => VariableType::Numeric,
-            VariableTypeCode::String(width) => VariableType::String(u16::from(width)),
-            VariableTypeCode::Continuation => unreachable!("handled above"),
-        };
-
-        // Set the continuation expectation for the next records.
-        // A numeric primary owns no continuations; a string primary
-        // of width W needs `ceil(W/8) - 1` continuations on disk.
-        self.pending_continuations = match type_code {
-            VariableTypeCode::Numeric => 0,
-            VariableTypeCode::String(width) => u32::from(width).div_ceil(8) - 1,
-            VariableTypeCode::Continuation => unreachable!("handled above"),
-        };
-
-        let mut builder = SavVariableHeader::builder()
-            .short_name(short_name)
-            .variable_type(variable_type)
-            .missing_values(missing_values)
-            .print_format(print_format)
-            .write_format(write_format);
-        if let Some(label) = label {
-            builder = builder.label(label);
-        }
-        let header = builder.build();
-
-        self.primaries.push(self.physical_variable_count);
-        self.physical_variable_count += 1;
-        self.variable_count += 1;
-        let record = DictionaryRecord::Variable(header);
-        Ok(Some(record))
-    }
-
-    /// Reads the 4-byte `label_len` field followed by the padded
-    /// label bytes (rounded up to the next multiple of 4).
-    fn read_variable_label(
-        &mut self,
-        byte_order: ByteOrder,
-        encoding: &'static Encoding,
-    ) -> Result<String> {
-        let label_len =
-            self.state
-                .read_u32_as_usize(byte_order, Section::Dictionary, Field::VariableLabel)?;
-        let padded_len = label_len.div_ceil(VARIABLE_LABEL_PADDING) * VARIABLE_LABEL_PADDING;
-        let bytes = self.state.read_exact(padded_len, Section::Dictionary)?;
-        let (cow, _, _) = encoding.decode(&bytes[..label_len]);
-        Ok(cow.into_owned())
-    }
-
-    /// Reads a type-6 document record body — a `u32` line count
-    /// followed by that many fixed-width [`DOCUMENT_LINE_LEN`]-byte
-    /// lines, decoded through the file's active encoding.
-    fn read_document_record(
-        &mut self,
-        byte_order: ByteOrder,
-        encoding: &'static Encoding,
-    ) -> Result<DictionaryRecord> {
-        let line_count =
-            self.state
-                .read_u32_as_usize(byte_order, Section::Dictionary, Field::DocumentLine)?;
-
-        let mut lines: Vec<String> = Vec::with_capacity(line_count);
-        for _ in 0..line_count {
-            let bytes = self
-                .state
-                .read_exact(DOCUMENT_LINE_LEN, Section::Dictionary)?;
-            let (decoded, _, _) = encoding.decode(bytes);
-            lines.push(decoded.into_owned());
-        }
-
-        let record = DocumentRecord::builder().lines(lines).build();
-        let record = DictionaryRecord::Document(record);
-        Ok(record)
-    }
-
-    /// Reads a type-7 extension record envelope (`subtype`,
-    /// `element_size`, `element_count`) followed by its
-    /// `element_size * element_count`-byte payload, then dispatches
-    /// to the per-subtype helper. Unrecognized subtypes fall through
-    /// to [`read_unknown_extension`](Self::read_unknown_extension),
+    /// Dispatches an extension envelope to its per-subtype reader.
+    /// Unrecognized subtypes fall through to
+    /// [`decode_unknown_extension`](Self::decode_unknown_extension),
     /// which preserves the payload verbatim and pushes a
     /// [`SavWarning::UnknownExtensionSubtype`].
-    fn read_extension_record(
+    fn decode_extension_record(
         &mut self,
-        byte_order: ByteOrder,
+        envelope: ExtensionEnvelope,
         encoding: &'static Encoding,
     ) -> Result<DictionaryRecord> {
-        let envelope = self.read_extension_envelope(byte_order)?;
+        self.warn_if_override_disagrees(envelope.subtype);
         match envelope.subtype {
             EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO => {
                 machine_integer_info::read(&envelope, &self.header, self.state.warnings_mut())
@@ -457,44 +243,54 @@ impl<R: Read> DictionaryReader<R> {
             EXTENSION_SUBTYPE_LONG_STRING_MISSING_VALUES => {
                 long_missing_values::read(&envelope, encoding)
             }
-            _ => Ok(self.read_unknown_extension(envelope)),
+            _ => {
+                let unknown = self.decode_unknown_extension(envelope);
+                Ok(unknown)
+            }
         }
     }
 
-    /// Reads the type-7 envelope fields (`subtype`, `element_size`,
-    /// `element_count`) and the declared `element_size *
-    /// element_count`-byte payload into an [`ExtensionEnvelope`] for
-    /// the per-subtype helpers to consume.
-    fn read_extension_envelope(&mut self, byte_order: ByteOrder) -> Result<ExtensionEnvelope> {
-        let subtype = self.state.read_i32(byte_order, Section::Dictionary)?;
-        let element_size_position = self.state.position();
-        let element_size = self.state.read_u32(byte_order, Section::Dictionary)?;
-        let element_count_position = self.state.position();
-        let element_count = self.state.read_u32(byte_order, Section::Dictionary)?;
-        let element_size_usize = u32_as_usize(
-            element_size,
-            element_size_position,
-            Section::Dictionary,
-            Field::ExtensionElementSize,
-        )?;
-        let element_count_usize = u32_as_usize(
-            element_count,
-            element_count_position,
-            Section::Dictionary,
-            Field::ExtensionElementCount,
-        )?;
-        let payload = self.read_extension_payload(element_size_usize, element_count_usize)?;
-        let envelope = ExtensionEnvelope {
-            subtype,
-            element_size,
-            element_count,
-            element_size_usize,
-            element_count_usize,
-            element_size_position,
-            payload,
-            byte_order,
+    /// Raises [`SavWarning::EncodingOverridden`] when the reader is
+    /// applying an override and the file's own declaration named a
+    /// different encoding.
+    ///
+    /// Deliberately late: the warning fires as the declaring record
+    /// reaches the caller, not during resolution, so it appears
+    /// alongside the record it is about.
+    ///
+    /// Fires from whichever record *would have* determined the encoding
+    /// had the override not been in play — the character encoding record
+    /// (subtype 20) when it declared something resolvable, otherwise the
+    /// machine integer info record (subtype 3). That is the resolution
+    /// precedence, so a file declaring through both sites warns once
+    /// rather than twice, and a file declaring only through subtype 3
+    /// still warns. A declaration that resolves nowhere raises nothing:
+    /// there is no encoding to report as having been overridden.
+    fn warn_if_override_disagrees(&mut self, subtype: i32) {
+        let FileEncoding::Overridden(used) = self.file_encoding else {
+            return;
         };
-        Ok(envelope)
+        let declaring_subtype = match self.declared_encoding {
+            Some(FileEncoding::Declared(_)) => EXTENSION_SUBTYPE_CHARACTER_ENCODING,
+            Some(FileEncoding::Codepage(_)) => EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO,
+            _ => return,
+        };
+        if subtype != declaring_subtype {
+            return;
+        }
+        let declared = self
+            .declared_encoding
+            .expect("matched a declaring variant above")
+            .encoding();
+        if declared == used {
+            return;
+        }
+        self.state
+            .warnings_mut()
+            .push(SavWarning::EncodingOverridden {
+                declared: declared.name(),
+                used: used.name(),
+            });
     }
 
     /// Fallback for unrecognized subtypes. Owns the envelope so it can
@@ -502,12 +298,13 @@ impl<R: Read> DictionaryReader<R> {
     /// allocation, and pushes a
     /// [`SavWarning::UnknownExtensionSubtype`] so callers can
     /// distinguish "carried verbatim" from "interpreted".
-    fn read_unknown_extension(&mut self, envelope: ExtensionEnvelope) -> DictionaryRecord {
+    fn decode_unknown_extension(&mut self, envelope: ExtensionEnvelope) -> DictionaryRecord {
         let subtype_u32 = envelope.subtype.cast_unsigned();
-        let warning = SavWarning::UnknownExtensionSubtype {
-            subtype: subtype_u32,
-        };
-        self.state.warnings_mut().push(warning);
+        self.state
+            .warnings_mut()
+            .push(SavWarning::UnknownExtensionSubtype {
+                subtype: subtype_u32,
+            });
         let unknown = UnknownExtension::builder()
             .subtype(subtype_u32)
             .element_size(envelope.element_size_usize)
@@ -517,167 +314,80 @@ impl<R: Read> DictionaryReader<R> {
         let record = ExtensionRecord::Unknown(unknown);
         DictionaryRecord::Extension(record)
     }
-
-    fn read_extension_payload(
-        &mut self,
-        element_size_usize: usize,
-        element_count_usize: usize,
-    ) -> Result<Vec<u8>> {
-        let payload_position = self.state.position();
-        let payload_len = element_size_usize
-            .checked_mul(element_count_usize)
-            .ok_or_else(|| {
-                SavError::format(
-                    Section::Dictionary,
-                    payload_position,
-                    FormatErrorKind::FieldTooLarge {
-                        field: Field::ExtensionElementCount,
-                    },
-                )
-            })?;
-        let payload = self
-            .state
-            .read_exact(payload_len, Section::Dictionary)?
-            .to_vec();
-        Ok(payload)
-    }
-
-    /// Reads a type-3 value-label record body, the immediately
-    /// following type-4 record, and combines them into a single
-    /// [`DictionaryRecord::ValueLabelSet`].
-    ///
-    /// The type-3 record carries an unsigned `label_count` followed by
-    /// that many entries, each an 8-byte value, a `u8` `unpadded_len`,
-    /// and the padded label bytes. The type-4 record carries an
-    /// unsigned `variable_count` followed by that many 1-based
-    /// physical variable indices; the indices are normalized here
-    /// into 0-based logical positions via
-    /// [`normalize_value_label_variable_indices`].
-    fn read_value_label_record(
-        &mut self,
-        byte_order: ByteOrder,
-        encoding: &'static Encoding,
-    ) -> Result<DictionaryRecord> {
-        let label_count = self.state.read_u32_as_usize(
-            byte_order,
-            Section::Dictionary,
-            Field::ValueLabelEntry,
-        )?;
-
-        let entries = self.read_raw_value_label_entries(encoding, label_count)?;
-
-        // The very next record-type tag must be a type-4. Anything
-        // else — including EOF, the dictionary terminator, or any
-        // other dictionary record kind — is an unpaired-type-3
-        // violation.
-        let pair_position = self.state.position();
-        let next_record_type = self.state.read_i32(byte_order, Section::Dictionary)?;
-        if next_record_type != RECORD_TYPE_VALUE_LABEL_VARIABLES {
-            let error = SavError::format(
-                Section::Dictionary,
-                pair_position,
-                FormatErrorKind::UnpairedValueLabelRecord {
-                    saw: next_record_type,
-                },
-            );
-            return Err(error);
-        }
-
-        let variable_count =
-            self.state
-                .read_u32_as_usize(byte_order, Section::Dictionary, Field::VariableCount)?;
-        let indices_position = self.state.position();
-        let raw_indices = self.read_raw_variable_indexes(byte_order, variable_count)?;
-
-        if variable_count == 0 {
-            self.state
-                .warnings_mut()
-                .push(SavWarning::EmptyValueLabelVariables);
-        }
-
-        let variable_indices = normalize_value_label_variable_indices(
-            &raw_indices,
-            &self.primaries,
-            indices_position,
-        )?;
-
-        let set = RawValueLabelSet::builder()
-            .entries(entries)
-            .variable_indices(variable_indices)
-            .build();
-        let set = DictionaryRecord::ValueLabelSet(set);
-        Ok(set)
-    }
-
-    fn read_raw_value_label_entries(
-        &mut self,
-        encoding: &'static Encoding,
-        label_count: usize,
-    ) -> Result<Vec<RawValueLabelEntry>> {
-        let mut entries: Vec<RawValueLabelEntry> = Vec::with_capacity(label_count);
-        let mut seen_keys: HashSet<[u8; VALUE_LABEL_VALUE_LEN]> =
-            HashSet::with_capacity(label_count);
-        for _ in 0..label_count {
-            let value: [u8; VALUE_LABEL_VALUE_LEN] = self.state.read_array(Section::Dictionary)?;
-            let entry = self.read_raw_value_label_entry(encoding, value)?;
-            if !seen_keys.insert(value) {
-                self.state
-                    .warnings_mut()
-                    .push(SavWarning::DuplicateValueLabelKey { key: value });
-            }
-            entries.push(entry);
-        }
-        Ok(entries)
-    }
-
-    fn read_raw_value_label_entry(
-        &mut self,
-        encoding: &'static Encoding,
-        value: [u8; 8],
-    ) -> Result<RawValueLabelEntry> {
-        let unpadded_len = self.state.read_u8(Section::Dictionary)?;
-        let label_bytes_len = value_label_entry_size(unpadded_len)
-            - VALUE_LABEL_VALUE_LEN
-            - VALUE_LABEL_LABEL_LEN_FIELD_LEN;
-        let label_bytes = self
-            .state
-            .read_exact(label_bytes_len, Section::Dictionary)?;
-        let entry = parse_value_label_entry(value, unpadded_len, label_bytes, encoding);
-        Ok(entry)
-    }
-
-    fn read_raw_variable_indexes(
-        &mut self,
-        byte_order: ByteOrder,
-        variable_count: usize,
-    ) -> Result<Vec<u32>> {
-        let mut raw_indices: Vec<u32> = Vec::with_capacity(variable_count);
-        for _ in 0..variable_count {
-            let index = self.state.read_u32(byte_order, Section::Dictionary)?;
-            raw_indices.push(index);
-        }
-        Ok(raw_indices)
-    }
 }
 
-fn four_bytes(body: &[u8], offset: usize) -> [u8; 4] {
-    body[offset..offset + 4]
-        .try_into()
-        .expect("four-byte slice has the requested length")
+/// Decodes a buffered variable record's two text fields into a
+/// [`SavVariableHeader`]. Everything else was parsed and validated while
+/// the record was buffered.
+fn decode_variable_record(
+    variable: BufferedVariableRecord,
+    encoding: &'static Encoding,
+) -> SavVariableHeader {
+    let mut builder = SavVariableHeader::builder()
+        .short_name(parse_short_name(variable.short_name, encoding))
+        .variable_type(variable.variable_type)
+        .missing_values(variable.missing_values)
+        .print_format(variable.print_format)
+        .write_format(variable.write_format);
+    if let Some(label) = variable.label {
+        let (decoded, _, _) = encoding.decode(&label);
+        builder = builder.label(decoded.into_owned());
+    }
+    builder.build()
+}
+
+/// Decodes the entry labels of a buffered value-label set. The 8-byte
+/// values and the already-normalized variable indices pass through
+/// unchanged.
+fn decode_value_label_set(
+    set: BufferedValueLabelSet,
+    encoding: &'static Encoding,
+) -> RawValueLabelSet {
+    let entries = set
+        .entries
+        .into_iter()
+        .map(|entry| {
+            let unpadded_len = u8::try_from(entry.label.len()).unwrap_or(u8::MAX);
+            parse_value_label_entry(entry.value, unpadded_len, &entry.label, encoding)
+        })
+        .collect();
+    RawValueLabelSet::builder()
+        .entries(entries)
+        .variable_indices(set.variable_indices)
+        .build()
+}
+
+/// Decodes a buffered document record's fixed-width lines.
+fn decode_document_record(
+    document: BufferedDocumentRecord,
+    encoding: &'static Encoding,
+) -> DocumentRecord {
+    let lines = document
+        .lines
+        .into_iter()
+        .map(|line| {
+            let (decoded, _, _) = encoding.decode(&line);
+            decoded.into_owned()
+        })
+        .collect();
+    DocumentRecord::builder().lines(lines).build()
 }
 
 #[cfg(test)]
 mod tests {
 
     use crate::spss::sav::byte_order::ByteOrder;
+    use crate::spss::sav::dictionary_format::{DOCUMENT_LINE_LEN, VARIABLE_RECORD_BODY_LEN};
     use crate::spss::sav::dictionary_record::DictionaryRecord;
+    use crate::spss::sav::encoding_strategy::EncodingStrategy;
     use crate::spss::sav::extensions::extension_record::ExtensionRecord;
     use crate::spss::sav::raw_missing_values::RawMissingValues;
     use crate::spss::sav::sav_error::{FormatErrorKind, SavError};
     use crate::spss::sav::sav_format_kind::SavFormatKind;
     use crate::spss::sav::sav_warning::SavWarning;
     use crate::spss::sav::test_support::{
-        build_header, open, write_extension_record, write_rec_type, write_terminator, write_u32,
+        build_header, open, open_with, try_open, write_character_code_record,
+        write_extension_record, write_rec_type, write_terminator, write_u32,
     };
     use crate::spss::sav::variable_type::VariableType;
 
@@ -707,7 +417,7 @@ mod tests {
             ByteOrder::LittleEndian => v.to_le_bytes(),
             ByteOrder::BigEndian => v.to_be_bytes(),
         };
-        let mut buf = Vec::with_capacity(28);
+        let mut buf = Vec::with_capacity(VARIABLE_RECORD_BODY_LEN);
         buf.extend_from_slice(&i32_bytes(type_value));
         buf.extend_from_slice(&i32_bytes(has_label));
         buf.extend_from_slice(&i32_bytes(n_missing));
@@ -1119,8 +829,7 @@ mod tests {
         ));
         write_terminator(&mut bytes, byte_order);
 
-        let mut dict = open(bytes);
-        let err = dict.read_record().unwrap_err();
+        let err = try_open(bytes).unwrap_err();
         match err {
             SavError::Format(e) => {
                 assert_eq!(e.kind(), FormatErrorKind::UnexpectedContinuationRecord);
@@ -1135,8 +844,7 @@ mod tests {
         let mut bytes = build_header(byte_order);
         write_rec_type(&mut bytes, byte_order, 42);
 
-        let mut dict = open(bytes);
-        let err = dict.read_record().unwrap_err();
+        let err = try_open(bytes).unwrap_err();
         match err {
             SavError::Format(e) => {
                 assert_eq!(e.kind(), FormatErrorKind::UnknownRecordType { value: 42 });
@@ -1160,8 +868,7 @@ mod tests {
             *b"V1      ",
         ));
 
-        let mut dict = open(bytes);
-        let err = dict.read_record().unwrap_err();
+        let err = try_open(bytes).unwrap_err();
         match err {
             SavError::Format(e) => match e.kind() {
                 FormatErrorKind::UnexpectedValue { .. } => {}
@@ -1186,8 +893,7 @@ mod tests {
             *b"V1      ",
         ));
 
-        let mut dict = open(bytes);
-        let err = dict.read_record().unwrap_err();
+        let err = try_open(bytes).unwrap_err();
         match err {
             SavError::Format(e) => match e.kind() {
                 FormatErrorKind::UnexpectedValue { .. } => {}
@@ -1227,9 +933,7 @@ mod tests {
         bytes.extend(build_variable_body(byte_order, -1, 0, 0, 0, 0, [0; 8]));
         write_terminator(&mut bytes, byte_order);
 
-        let mut dict = open(bytes);
-        dict.read_record().unwrap();
-        let err = dict.read_record().unwrap_err();
+        let err = try_open(bytes).unwrap_err();
         match err {
             SavError::Format(e) => {
                 assert_eq!(e.kind(), FormatErrorKind::UnexpectedContinuationRecord);
@@ -1259,9 +963,7 @@ mod tests {
         }
         write_terminator(&mut bytes, byte_order);
 
-        let mut dict = open(bytes);
-        dict.read_record().unwrap();
-        let err = dict.read_record().unwrap_err();
+        let err = try_open(bytes).unwrap_err();
         match err {
             SavError::Format(e) => {
                 assert_eq!(
@@ -1296,9 +998,7 @@ mod tests {
         }
         write_terminator(&mut bytes, byte_order);
 
-        let mut dict = open(bytes);
-        dict.read_record().unwrap();
-        let err = dict.read_record().unwrap_err();
+        let err = try_open(bytes).unwrap_err();
         match err {
             SavError::Format(e) => {
                 assert_eq!(e.kind(), FormatErrorKind::UnexpectedContinuationRecord);
@@ -1325,9 +1025,7 @@ mod tests {
         ));
         write_terminator(&mut bytes, byte_order);
 
-        let mut dict = open(bytes);
-        dict.read_record().unwrap();
-        let err = dict.read_record().unwrap_err();
+        let err = try_open(bytes).unwrap_err();
         match err {
             SavError::Format(e) => {
                 assert_eq!(
@@ -1556,8 +1254,7 @@ mod tests {
         write_u32(&mut bytes, byte_order, 1);
         write_u32(&mut bytes, byte_order, 1);
 
-        let mut dict = open(bytes);
-        let err = dict.read_record().unwrap_err();
+        let err = try_open(bytes).unwrap_err();
         match err {
             SavError::Format(e) => {
                 assert_eq!(
@@ -1591,9 +1288,7 @@ mod tests {
         write_value_label_entry(&mut bytes, 1.0_f64.to_le_bytes(), b"one");
         write_terminator(&mut bytes, byte_order);
 
-        let mut dict = open(bytes);
-        dict.read_record().unwrap();
-        let err = dict.read_record().unwrap_err();
+        let err = try_open(bytes).unwrap_err();
         match err {
             SavError::Format(e) => {
                 assert_eq!(
@@ -1614,9 +1309,7 @@ mod tests {
             // 2 is past the only variable.
             &[2],
         );
-        let mut dict = open(bytes);
-        dict.read_record().unwrap();
-        let err = dict.read_record().unwrap_err();
+        let err = try_open(bytes).unwrap_err();
         match err {
             SavError::Format(e) => assert_eq!(e.kind(), FormatErrorKind::DanglingValueLabel),
             _ => panic!("expected Format error, got {err:?}"),
@@ -1632,9 +1325,7 @@ mod tests {
             // 0 is invalid (indices are 1-based).
             &[0],
         );
-        let mut dict = open(bytes);
-        dict.read_record().unwrap();
-        let err = dict.read_record().unwrap_err();
+        let err = try_open(bytes).unwrap_err();
         match err {
             SavError::Format(e) => assert_eq!(e.kind(), FormatErrorKind::DanglingValueLabel),
             _ => panic!("expected Format error, got {err:?}"),
@@ -1670,9 +1361,7 @@ mod tests {
         write_u32(&mut bytes, byte_order, 2);
         write_terminator(&mut bytes, byte_order);
 
-        let mut dict = open(bytes);
-        dict.read_record().unwrap();
-        let err = dict.read_record().unwrap_err();
+        let err = try_open(bytes).unwrap_err();
         match err {
             SavError::Format(e) => assert_eq!(e.kind(), FormatErrorKind::DanglingValueLabel),
             _ => panic!("expected Format error, got {err:?}"),
@@ -1757,9 +1446,12 @@ mod tests {
     /// Appends one 80-byte document line, space-padding `text` up
     /// to the on-disk width.
     fn write_document_line(buf: &mut Vec<u8>, text: &[u8]) {
-        assert!(text.len() <= 80, "test line exceeds 80 bytes");
+        assert!(
+            text.len() <= DOCUMENT_LINE_LEN,
+            "test line exceeds one document line"
+        );
         buf.extend_from_slice(text);
-        buf.extend_from_slice(&vec![b' '; 80 - text.len()]);
+        buf.extend_from_slice(&vec![b' '; DOCUMENT_LINE_LEN - text.len()]);
     }
 
     #[test]
@@ -1782,7 +1474,7 @@ mod tests {
             doc.lines()[0],
             "Hello, world!                                                                   ",
         );
-        assert_eq!(doc.lines()[0].len(), 80);
+        assert_eq!(doc.lines()[0].len(), DOCUMENT_LINE_LEN);
         assert!(dict.read_record().unwrap().is_none());
     }
 
@@ -1961,6 +1653,81 @@ mod tests {
         };
         assert_eq!(unknown.element_count(), 0);
         assert!(unknown.payload().is_empty());
+    }
+
+    /// A file that declares its encoding only through subtype 3 must
+    /// still report that an override displaced it. Subtype 20 is the
+    /// usual site, so this is the path that closes the gap.
+    #[test]
+    fn override_warns_from_the_codepage_record_when_no_label_is_declared() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_character_code_record(&mut bytes, byte_order, 65001);
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open_with(bytes, EncodingStrategy::Override(encoding_rs::WINDOWS_1252));
+        let mut overridden = Vec::new();
+        while dict.read_record().unwrap().is_some() {
+            overridden.extend(
+                dict.warnings()
+                    .iter()
+                    .filter(|w| matches!(w, SavWarning::EncodingOverridden { .. }))
+                    .cloned(),
+            );
+        }
+        assert!(
+            matches!(
+                overridden.as_slice(),
+                [SavWarning::EncodingOverridden {
+                    declared: "UTF-8",
+                    used: "windows-1252"
+                }]
+            ),
+            "warnings = {overridden:?}"
+        );
+    }
+
+    /// Declaring through both sites must warn once, from subtype 20 —
+    /// the record that actually determines the encoding.
+    #[test]
+    fn override_warns_once_when_both_declaring_records_are_present() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_character_code_record(&mut bytes, byte_order, 65001);
+        write_extension_record(&mut bytes, byte_order, 20, 1, 5, b"UTF-8");
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open_with(bytes, EncodingStrategy::Override(encoding_rs::WINDOWS_1252));
+        let mut count = 0;
+        while dict.read_record().unwrap().is_some() {
+            count += dict
+                .warnings()
+                .iter()
+                .filter(|w| matches!(w, SavWarning::EncodingOverridden { .. }))
+                .count();
+        }
+        assert_eq!(count, 1);
+    }
+
+    /// An override matching what the file declared is not a mismatch.
+    #[test]
+    fn override_matching_the_declaration_does_not_warn() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_character_code_record(&mut bytes, byte_order, 65001);
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open_with(bytes, EncodingStrategy::Override(encoding_rs::UTF_8));
+        while dict.read_record().unwrap().is_some() {
+            assert!(
+                !dict
+                    .warnings()
+                    .iter()
+                    .any(|w| matches!(w, SavWarning::EncodingOverridden { .. })),
+                "warnings = {:?}",
+                dict.warnings()
+            );
+        }
     }
 
     #[test]
