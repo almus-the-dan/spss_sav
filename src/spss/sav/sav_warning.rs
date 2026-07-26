@@ -32,7 +32,7 @@ pub enum SavWarning {
     },
     /// An extension subtype this library does not yet recognize was
     /// preserved verbatim in
-    /// [`ExtensionRecord::Unknown`](crate::spss::sav::extensions::Unknown).
+    /// [`ExtensionRecord::Unknown`](crate::spss::sav::extensions::extension_record::ExtensionRecord::Unknown).
     UnknownExtensionSubtype {
         /// The subtype number from the extension record header.
         subtype: u32,

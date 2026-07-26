@@ -51,7 +51,7 @@ impl<R> ReaderState<R> {
 
     /// The detected byte order, or `None` before the header reader
     /// has determined it.
-    #[allow(dead_code)] // exercised once the dictionary reader lands.
+    #[allow(dead_code)] // exercised once the record reader phase lands.
     pub fn byte_order(&self) -> Option<ByteOrder> {
         self.byte_order
     }
@@ -77,7 +77,7 @@ impl<R> ReaderState<R> {
 
     /// Internal scratch buffer, populated by the most recent
     /// `read_exact`-style call.
-    #[allow(dead_code)] // exercised once the dictionary reader lands.
+    #[allow(dead_code)] // exercised once the record reader phase lands.
     pub fn buffer(&self) -> &[u8] {
         &self.buffer
     }
@@ -113,14 +113,12 @@ impl<R: Read> ReaderState<R> {
     }
 
     /// Reads a single byte.
-    #[allow(dead_code)] // exercised once the dictionary reader lands.
     pub fn read_u8(&mut self, section: Section) -> Result<u8> {
         let [byte] = self.read_array::<1>(section)?;
         Ok(byte)
     }
 
     /// Reads a 4-byte unsigned integer in the file's byte order.
-    #[allow(dead_code)] // exercised once the dictionary reader lands.
     pub fn read_u32(&mut self, byte_order: ByteOrder, section: Section) -> Result<u32> {
         let bytes = self.read_array::<4>(section)?;
         let value = byte_order.read_u32(bytes);
@@ -152,7 +150,7 @@ impl<R: Read> ReaderState<R> {
     }
 
     /// Reads an 8-byte IEEE 754 double in the file's byte order.
-    #[allow(dead_code)] // exercised once the bias decoder lands.
+    #[allow(dead_code)] // exercised once the record reader phase lands.
     pub fn read_f64(&mut self, byte_order: ByteOrder, section: Section) -> Result<f64> {
         let bytes = self.read_array::<8>(section)?;
         let value = byte_order.read_f64(bytes);

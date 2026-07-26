@@ -203,7 +203,6 @@ pub(super) fn compose_raw_missing_values(
 /// Matches `ReadStat`'s `padded_len = (unpadded_len + 8) / 8 * 8 - 1`,
 /// rewritten here as the full entry size including the leading
 /// 8-byte value.
-#[allow(dead_code)] // exercised once the value-label reader implementation lands.
 pub(super) fn value_label_entry_size(unpadded_len: u8) -> usize {
     let with_length_byte = usize::from(unpadded_len) + VALUE_LABEL_LABEL_LEN_FIELD_LEN;
     let aligned = with_length_byte.div_ceil(VALUE_LABEL_ENTRY_ALIGNMENT);

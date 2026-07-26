@@ -16,7 +16,6 @@ pub enum ByteOrder {
 
 impl ByteOrder {
     /// Decodes a `u32` from a 4-byte array.
-    #[allow(dead_code)] // exercised once the dictionary reader lands.
     #[must_use]
     pub(crate) fn read_u32(self, bytes: [u8; 4]) -> u32 {
         match self {

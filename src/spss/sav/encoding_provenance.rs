@@ -16,31 +16,41 @@ use encoding_rs::Encoding;
 /// Every variant carries the encoding actually applied; use
 /// [`encoding`](Self::encoding) when the provenance does not matter.
 ///
-/// There is deliberately no "unrecognized" variant. A declaration that
-/// cannot be resolved either falls back per the reader's
+/// A declaration that cannot be resolved either falls back per the
+/// reader's
 /// [`EncodingStrategy`](crate::spss::sav::encoding_strategy::EncodingStrategy)
-/// or fails the read outright, so a `FileEncoding` never describes a
-/// failure.
+/// — reported as [`Unrecognized`](Self::Unrecognized) — or fails the read
+/// outright, so an `EncodingProvenance` never describes a failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
-pub enum FileEncoding {
+pub enum EncodingProvenance {
     /// Resolved from the character encoding record (record type 7,
     /// subtype 20).
     Declared(&'static Encoding),
     /// Resolved from the `character_code` field of the machine integer
     /// info record (record type 7, subtype 3).
     Codepage(&'static Encoding),
-    /// The file declared no usable encoding, so the reader applied the
+    /// The file declared no encoding at all, so the reader applied the
     /// [`EncodingStrategy`](crate::spss::sav::encoding_strategy::EncodingStrategy)'s
     /// `unspecified` fallback.
     Unspecified(&'static Encoding),
+    /// The file declared an encoding that could not be resolved, so the
+    /// reader applied the
+    /// [`EncodingStrategy`](crate::spss::sav::encoding_strategy::EncodingStrategy)'s
+    /// `unrecognized` fallback.
+    ///
+    /// Distinct from [`Unspecified`](Self::Unspecified): the file did
+    /// name an encoding, it just named one this library cannot provide.
+    /// Which declaration failed is reported by
+    /// [`SavWarning::EncodingDeclarationUnrecognized`](crate::spss::sav::sav_warning::SavWarning::EncodingDeclarationUnrecognized).
+    Unrecognized(&'static Encoding),
     /// The reader applied
     /// [`EncodingStrategy::Override`](crate::spss::sav::encoding_strategy::EncodingStrategy::Override),
     /// ignoring whatever the file declared.
     Overridden(&'static Encoding),
 }
 
-impl FileEncoding {
+impl EncodingProvenance {
     /// The encoding the reader applied, whatever its provenance.
     #[must_use]
     #[inline]
@@ -49,6 +59,7 @@ impl FileEncoding {
             Self::Declared(encoding)
             | Self::Codepage(encoding)
             | Self::Unspecified(encoding)
+            | Self::Unrecognized(encoding)
             | Self::Overridden(encoding) => encoding,
         }
     }
@@ -61,19 +72,23 @@ mod tests {
     #[test]
     fn every_variant_yields_its_encoding() {
         let utf8 = encoding_rs::UTF_8;
-        assert_eq!(FileEncoding::Declared(utf8).encoding(), utf8);
-        assert_eq!(FileEncoding::Codepage(utf8).encoding(), utf8);
-        assert_eq!(FileEncoding::Unspecified(utf8).encoding(), utf8);
-        assert_eq!(FileEncoding::Overridden(utf8).encoding(), utf8);
+        assert_eq!(EncodingProvenance::Declared(utf8).encoding(), utf8);
+        assert_eq!(EncodingProvenance::Codepage(utf8).encoding(), utf8);
+        assert_eq!(EncodingProvenance::Unspecified(utf8).encoding(), utf8);
+        assert_eq!(EncodingProvenance::Unrecognized(utf8).encoding(), utf8);
+        assert_eq!(EncodingProvenance::Overridden(utf8).encoding(), utf8);
     }
 
     #[test]
     fn provenance_distinguishes_equal_encodings() {
         let utf8 = encoding_rs::UTF_8;
-        assert_ne!(FileEncoding::Declared(utf8), FileEncoding::Codepage(utf8));
         assert_ne!(
-            FileEncoding::Unspecified(utf8),
-            FileEncoding::Overridden(utf8)
+            EncodingProvenance::Declared(utf8),
+            EncodingProvenance::Codepage(utf8)
+        );
+        assert_ne!(
+            EncodingProvenance::Unspecified(utf8),
+            EncodingProvenance::Overridden(utf8)
         );
     }
 }

@@ -3,7 +3,8 @@
 //! First phase of the SAV reader typestate chain. Created via
 //! [`SavReader::from_path`](crate::spss::sav::sav_reader::SavReader::from_path)
 //! (or the other `from_*` entry points). Call
-//! [`read_header`](HeaderReader::read_header) to parse the header
+//! [`read_header`](crate::spss::sav::header_reader::HeaderReader::read_header)
+//! to parse the header
 //! and advance to the dictionary phase.
 
 use std::io::Read;
@@ -301,8 +302,8 @@ mod tests {
         EXTENSION_SUBTYPE_CHARACTER_ENCODING, RECORD_TYPE_DICTIONARY_TERMINATOR,
         RECORD_TYPE_EXTENSION,
     };
+    use crate::spss::sav::encoding_provenance::EncodingProvenance;
     use crate::spss::sav::encoding_strategy::EncodingStrategy;
-    use crate::spss::sav::file_encoding::FileEncoding;
     use crate::spss::sav::float_format::FloatFormat;
     use crate::spss::sav::header_format::{
         CREATION_DATE_LEN, CREATION_TIME_LEN, FILE_LABEL_LEN, HEADER_LEN, LAYOUT_CODE_LEN,
@@ -641,8 +642,8 @@ mod tests {
         bytes.encoding_label = None;
         let dict = read(bytes.build()).expect("read header");
         assert_eq!(
-            dict.file_encoding(),
-            FileEncoding::Unspecified(encoding_rs::WINDOWS_1252)
+            dict.encoding_provenance(),
+            EncodingProvenance::Unspecified(encoding_rs::WINDOWS_1252)
         );
         assert!(
             matches!(
@@ -681,8 +682,8 @@ mod tests {
         bytes.encoding_label = Some("windows-1252");
         let dict = read(bytes.build()).expect("read header");
         assert_eq!(
-            dict.file_encoding(),
-            FileEncoding::Declared(encoding_rs::WINDOWS_1252)
+            dict.encoding_provenance(),
+            EncodingProvenance::Declared(encoding_rs::WINDOWS_1252)
         );
     }
 

@@ -12,8 +12,8 @@
 
 use encoding_rs::Encoding;
 
+use crate::spss::sav::encoding_provenance::EncodingProvenance;
 use crate::spss::sav::encoding_strategy::EncodingStrategy;
-use crate::spss::sav::file_encoding::FileEncoding;
 use crate::spss::sav::sav_error::{Result, SavError};
 use crate::spss::sav::sav_warning::SavWarning;
 
@@ -48,7 +48,7 @@ pub(super) fn resolve(
     label: Option<&str>,
     character_code: Option<i32>,
     warnings: &mut Vec<SavWarning>,
-) -> Result<FileEncoding> {
+) -> Result<EncodingProvenance> {
     let (unspecified, unrecognized) = match strategy {
         // An override needs nothing from the file, so the declarations
         // are not consulted at all — not even to compare them against
@@ -56,7 +56,9 @@ pub(super) fn resolve(
         // The override-mismatch warning is raised later, by the
         // dictionary reader, as each declaring record is handed to the
         // caller.
-        EncodingStrategy::Override(encoding) => return Ok(FileEncoding::Overridden(encoding)),
+        EncodingStrategy::Override(encoding) => {
+            return Ok(EncodingProvenance::Overridden(encoding));
+        }
         EncodingStrategy::Declared {
             unspecified,
             unrecognized,
@@ -82,7 +84,7 @@ pub(super) fn resolve(
                     character_code: code,
                 });
             }
-            return Ok(FileEncoding::Declared(encoding));
+            return Ok(EncodingProvenance::Declared(encoding));
         }
         warnings.push(SavWarning::EncodingDeclarationUnrecognized {
             declaration: label.to_owned(),
@@ -95,7 +97,7 @@ pub(super) fn resolve(
     // label may still carry a perfectly ordinary codepage.
     match codepage {
         Some((_, CodepageResolution::Supported(encoding))) => {
-            return Ok(FileEncoding::Codepage(encoding));
+            return Ok(EncodingProvenance::Codepage(encoding));
         }
         Some((code, CodepageResolution::Unsupported)) => {
             let declaration = format!("character_code {code}");
@@ -112,7 +114,7 @@ pub(super) fn resolve(
     // honor, otherwise to `unspecified`.
     if let Some(declaration) = unresolvable {
         return unrecognized
-            .map(FileEncoding::Unspecified)
+            .map(EncodingProvenance::Unrecognized)
             .ok_or(SavError::EncodingUnrecognized { declaration });
     }
 
@@ -120,7 +122,7 @@ pub(super) fn resolve(
     warnings.push(SavWarning::EncodingUnspecified {
         used: encoding.name(),
     });
-    Ok(FileEncoding::Unspecified(encoding))
+    Ok(EncodingProvenance::Unspecified(encoding))
 }
 
 /// The encoding the file's own declarations name, ignoring the reader's
@@ -134,14 +136,16 @@ pub(super) fn resolve(
 pub(super) fn declared_encoding(
     label: Option<&str>,
     character_code: Option<i32>,
-) -> Option<FileEncoding> {
+) -> Option<EncodingProvenance> {
     let strategy = EncodingStrategy::Declared {
         unspecified: None,
         unrecognized: None,
     };
     let mut discarded = Vec::new();
     match resolve(strategy, label, character_code, &mut discarded) {
-        Ok(declared @ (FileEncoding::Declared(_) | FileEncoding::Codepage(_))) => Some(declared),
+        Ok(declared @ (EncodingProvenance::Declared(_) | EncodingProvenance::Codepage(_))) => {
+            Some(declared)
+        }
         _ => None,
     }
 }
@@ -353,7 +357,7 @@ mod tests {
     fn declared_encoding_prefers_the_label() {
         assert_eq!(
             declared_encoding(Some("UTF-8"), Some(1252)),
-            Some(FileEncoding::Declared(encoding_rs::UTF_8))
+            Some(EncodingProvenance::Declared(encoding_rs::UTF_8))
         );
     }
 
@@ -361,11 +365,11 @@ mod tests {
     fn declared_encoding_falls_through_to_the_codepage() {
         assert_eq!(
             declared_encoding(None, Some(1252)),
-            Some(FileEncoding::Codepage(encoding_rs::WINDOWS_1252))
+            Some(EncodingProvenance::Codepage(encoding_rs::WINDOWS_1252))
         );
         assert_eq!(
             declared_encoding(Some("UTF-9"), Some(1252)),
-            Some(FileEncoding::Codepage(encoding_rs::WINDOWS_1252))
+            Some(EncodingProvenance::Codepage(encoding_rs::WINDOWS_1252))
         );
     }
 
@@ -410,7 +414,7 @@ mod tests {
             &mut warnings,
         )
         .expect("override always resolves");
-        assert_eq!(resolved, FileEncoding::Overridden(encoding_rs::UTF_8));
+        assert_eq!(resolved, EncodingProvenance::Overridden(encoding_rs::UTF_8));
         assert!(warnings.is_empty(), "warnings = {warnings:?}");
     }
 
@@ -421,7 +425,7 @@ mod tests {
         let mut warnings = Vec::new();
         let resolved =
             resolve(STRICT, Some("UTF-8"), Some(65001), &mut warnings).expect("resolves");
-        assert_eq!(resolved, FileEncoding::Declared(encoding_rs::UTF_8));
+        assert_eq!(resolved, EncodingProvenance::Declared(encoding_rs::UTF_8));
         assert!(warnings.is_empty(), "warnings = {warnings:?}");
     }
 
@@ -429,7 +433,7 @@ mod tests {
     fn disagreeing_declarations_warn_and_the_label_wins() {
         let mut warnings = Vec::new();
         let resolved = resolve(STRICT, Some("UTF-8"), Some(1252), &mut warnings).expect("resolves");
-        assert_eq!(resolved, FileEncoding::Declared(encoding_rs::UTF_8));
+        assert_eq!(resolved, EncodingProvenance::Declared(encoding_rs::UTF_8));
         assert!(
             matches!(
                 warnings.as_slice(),
@@ -448,7 +452,10 @@ mod tests {
         let mut warnings = Vec::new();
         let resolved =
             resolve(STRICT, Some("us-ascii"), Some(28591), &mut warnings).expect("resolves");
-        assert_eq!(resolved, FileEncoding::Declared(encoding_rs::WINDOWS_1252));
+        assert_eq!(
+            resolved,
+            EncodingProvenance::Declared(encoding_rs::WINDOWS_1252)
+        );
         assert!(warnings.is_empty(), "warnings = {warnings:?}");
     }
 
@@ -458,7 +465,7 @@ mod tests {
     fn codepage_is_used_when_no_label_is_present() {
         let mut warnings = Vec::new();
         let resolved = resolve(STRICT, None, Some(65001), &mut warnings).expect("resolves");
-        assert_eq!(resolved, FileEncoding::Codepage(encoding_rs::UTF_8));
+        assert_eq!(resolved, EncodingProvenance::Codepage(encoding_rs::UTF_8));
         assert!(warnings.is_empty(), "warnings = {warnings:?}");
     }
 
@@ -466,7 +473,10 @@ mod tests {
     fn unresolvable_label_falls_through_to_the_codepage() {
         let mut warnings = Vec::new();
         let resolved = resolve(STRICT, Some("UTF-9"), Some(1252), &mut warnings).expect("resolves");
-        assert_eq!(resolved, FileEncoding::Codepage(encoding_rs::WINDOWS_1252));
+        assert_eq!(
+            resolved,
+            EncodingProvenance::Codepage(encoding_rs::WINDOWS_1252)
+        );
         assert!(
             matches!(
                 warnings.as_slice(),
@@ -480,7 +490,7 @@ mod tests {
     fn empty_label_is_treated_as_absent() {
         let mut warnings = Vec::new();
         let resolved = resolve(STRICT, Some("   "), Some(65001), &mut warnings).expect("resolves");
-        assert_eq!(resolved, FileEncoding::Codepage(encoding_rs::UTF_8));
+        assert_eq!(resolved, EncodingProvenance::Codepage(encoding_rs::UTF_8));
         assert!(warnings.is_empty(), "warnings = {warnings:?}");
     }
 
@@ -493,7 +503,7 @@ mod tests {
         let resolved = resolve(strategy, None, None, &mut warnings).expect("resolves");
         assert_eq!(
             resolved,
-            FileEncoding::Unspecified(encoding_rs::WINDOWS_1252)
+            EncodingProvenance::Unspecified(encoding_rs::WINDOWS_1252)
         );
         assert!(
             matches!(
@@ -513,7 +523,7 @@ mod tests {
         let resolved = resolve(strategy, None, Some(2), &mut warnings).expect("resolves");
         assert_eq!(
             resolved,
-            FileEncoding::Unspecified(encoding_rs::WINDOWS_1252)
+            EncodingProvenance::Unspecified(encoding_rs::WINDOWS_1252)
         );
     }
 
@@ -534,9 +544,34 @@ mod tests {
         let mut warnings = Vec::new();
         let strategy = lenient(encoding_rs::WINDOWS_1252, encoding_rs::UTF_8);
         let resolved = resolve(strategy, Some("UTF-9"), Some(1), &mut warnings).expect("resolves");
-        // The `unrecognized` fallback, not the `unspecified` one.
-        assert_eq!(resolved, FileEncoding::Unspecified(encoding_rs::UTF_8));
+        // The `unrecognized` fallback, and reported as such.
+        assert_eq!(
+            resolved,
+            EncodingProvenance::Unrecognized(encoding_rs::UTF_8)
+        );
         assert_eq!(warnings.len(), 2, "warnings = {warnings:?}");
+    }
+
+    /// The two fallback paths are distinguishable from the provenance
+    /// alone, without inspecting the warnings.
+    #[test]
+    fn the_two_fallbacks_report_different_provenances() {
+        let strategy = lenient(encoding_rs::WINDOWS_1252, encoding_rs::UTF_8);
+
+        let mut warnings = Vec::new();
+        let nothing_declared = resolve(strategy, None, None, &mut warnings).expect("resolves");
+        assert_eq!(
+            nothing_declared,
+            EncodingProvenance::Unspecified(encoding_rs::WINDOWS_1252)
+        );
+
+        let mut warnings = Vec::new();
+        let declared_but_unusable =
+            resolve(strategy, Some("UTF-9"), None, &mut warnings).expect("resolves");
+        assert_eq!(
+            declared_but_unusable,
+            EncodingProvenance::Unrecognized(encoding_rs::UTF_8)
+        );
     }
 
     #[test]

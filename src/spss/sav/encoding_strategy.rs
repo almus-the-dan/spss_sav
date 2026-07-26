@@ -10,7 +10,7 @@ const DEFAULT_UNSPECIFIED_ENCODING: &Encoding = encoding_rs::WINDOWS_1252;
 ///
 /// A SAV file can declare its own encoding in two places, both of which
 /// sit near the end of the dictionary — see
-/// [`FileEncoding`](crate::spss::sav::file_encoding::FileEncoding). This
+/// [`EncodingProvenance`](crate::spss::sav::encoding_provenance::EncodingProvenance). This
 /// type decides whether those declarations are honored, and what
 /// happens when they are absent or cannot be resolved.
 ///

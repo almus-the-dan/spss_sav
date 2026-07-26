@@ -18,12 +18,12 @@ use spss_sav::spss::sav::compression::Compression;
 use spss_sav::spss::sav::dictionary_reader::DictionaryReader;
 use spss_sav::spss::sav::dictionary_record::DictionaryRecord;
 use spss_sav::spss::sav::document_record::DocumentRecord;
+use spss_sav::spss::sav::encoding_provenance::EncodingProvenance;
 use spss_sav::spss::sav::encoding_strategy::EncodingStrategy;
 use spss_sav::spss::sav::extensions::category_label_source::CategoryLabelSource;
 use spss_sav::spss::sav::extensions::extension_record::ExtensionRecord;
 use spss_sav::spss::sav::extensions::multiple_response_set::MultipleResponseSet;
 use spss_sav::spss::sav::extensions::multiple_response_set_kind::MultipleResponseSetKind;
-use spss_sav::spss::sav::file_encoding::FileEncoding;
 use spss_sav::spss::sav::float_format::FloatFormat;
 use spss_sav::spss::sav::raw_missing_values::RawMissingValues;
 use spss_sav::spss::sav::raw_value_label_set::RawValueLabelSet;
@@ -470,7 +470,7 @@ fn encoding_utf8_decodes_accented_text() {
 }
 
 /// Both fixtures declare their encoding in a subtype-20 record, so the
-/// reader reports it as [`FileEncoding::Declared`] rather than falling
+/// reader reports it as [`EncodingProvenance::Declared`] rather than falling
 /// back — and reports it before any record has been read, since
 /// resolving it is what `read_header` walked the dictionary for.
 #[test]
@@ -486,8 +486,8 @@ fn encoding_fixtures_report_a_declared_provenance() {
             .read_header()
             .expect("read header");
         assert_eq!(
-            dictionary_reader.file_encoding(),
-            FileEncoding::Declared(expected),
+            dictionary_reader.encoding_provenance(),
+            EncodingProvenance::Declared(expected),
             "{path}"
         );
     }
@@ -507,8 +507,8 @@ fn override_wins_and_warns_when_the_file_disagrees() {
         .expect("read header");
 
     assert_eq!(
-        dictionary_reader.file_encoding(),
-        FileEncoding::Overridden(encoding_rs::WINDOWS_1252)
+        dictionary_reader.encoding_provenance(),
+        EncodingProvenance::Overridden(encoding_rs::WINDOWS_1252)
     );
 
     let mut overridden = Vec::new();

@@ -28,7 +28,7 @@ const CHARACTER_CODE_OFFSET: usize = 28;
 /// [`endianness`]) duplicate information the dictionary reader
 /// already derived from the file header; the reader exposes both
 /// and emits a
-/// [`SavWarning`](crate::spss::sav::sav_warning::SavWarning) when
+/// [`SavWarning`] when
 /// the two disagree, leaving final reconciliation to consumers.
 ///
 /// Convenience methods like [`floating_point_representation_kind`]

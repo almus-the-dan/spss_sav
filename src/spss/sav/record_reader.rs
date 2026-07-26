@@ -11,7 +11,6 @@
 ///
 /// This is currently a placeholder; the real surface lands in Phase 6.
 #[derive(Debug)]
-#[allow(dead_code)] // exercised once the record reader phase lands.
 pub struct RecordReader<R> {
     _placeholder: core::marker::PhantomData<R>,
 }

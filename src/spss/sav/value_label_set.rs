@@ -15,7 +15,7 @@ pub struct ValueLabelSet {
 }
 
 impl ValueLabelSet {
-    #[allow(dead_code)] // exercised once the value-label reader lands.
+    #[allow(dead_code)] // exercised once the record reader phase lands.
     pub(crate) fn new(name: String, entries: Vec<ValueLabelEntry>) -> Self {
         Self { name, entries }
     }

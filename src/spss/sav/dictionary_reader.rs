@@ -10,8 +10,7 @@
 //! The records were already read off the wire by
 //! [`HeaderReader::read_header`](crate::spss::sav::header_reader::HeaderReader::read_header),
 //! which had to walk the whole dictionary to find the file's declared
-//! encoding (see
-//! [`DictionaryBuffer`](crate::spss::sav::dictionary_buffer::DictionaryBuffer)).
+//! encoding (see the crate-internal `DictionaryBuffer`).
 //! This phase therefore decodes rather than reads: it turns each
 //! buffered record into a
 //! [`DictionaryRecord`](crate::spss::sav::dictionary_record::DictionaryRecord)
@@ -42,6 +41,7 @@ use crate::spss::sav::dictionary_format::{
 use crate::spss::sav::dictionary_parse::{parse_short_name, parse_value_label_entry};
 use crate::spss::sav::dictionary_record::DictionaryRecord;
 use crate::spss::sav::document_record::DocumentRecord;
+use crate::spss::sav::encoding_provenance::EncodingProvenance;
 use crate::spss::sav::extension_envelope::ExtensionEnvelope;
 use crate::spss::sav::extensions::character_encoding;
 use crate::spss::sav::extensions::extended_number_of_cases;
@@ -60,7 +60,6 @@ use crate::spss::sav::extensions::uuid;
 use crate::spss::sav::extensions::variable_attributes;
 use crate::spss::sav::extensions::variable_sets;
 use crate::spss::sav::extensions::very_long_strings;
-use crate::spss::sav::file_encoding::FileEncoding;
 use crate::spss::sav::raw_value_label_set::RawValueLabelSet;
 use crate::spss::sav::reader_state::ReaderState;
 use crate::spss::sav::record_reader::RecordReader;
@@ -81,10 +80,10 @@ use crate::spss::sav::sav_warning::SavWarning;
 pub struct DictionaryReader<R> {
     state: ReaderState<R>,
     header: SavHeader,
-    file_encoding: FileEncoding,
+    encoding_provenance: EncodingProvenance,
     /// What the file's own declarations named, regardless of what the
     /// reader applied. Only consulted to report an override.
-    declared_encoding: Option<FileEncoding>,
+    declared_encoding: Option<EncodingProvenance>,
     buffer: DictionaryBuffer,
     #[allow(dead_code)] // exercised once the record reader phase lands.
     weight_variable_index: Option<usize>,
@@ -94,15 +93,15 @@ impl<R> DictionaryReader<R> {
     pub(crate) fn new(
         state: ReaderState<R>,
         header: SavHeader,
-        file_encoding: FileEncoding,
-        declared_encoding: Option<FileEncoding>,
+        encoding_provenance: EncodingProvenance,
+        declared_encoding: Option<EncodingProvenance>,
         buffer: DictionaryBuffer,
         weight_variable_index: Option<usize>,
     ) -> Self {
         Self {
             state,
             header,
-            file_encoding,
+            encoding_provenance,
             declared_encoding,
             buffer,
             weight_variable_index,
@@ -113,9 +112,9 @@ impl<R> DictionaryReader<R> {
     /// Surfaced via [`SavHeader::weight_variable`] (the long name)
     /// only after the dictionary phase finalizes; before then,
     /// callers can inspect the raw index here.
-    #[allow(dead_code)] // exercised once the record reader phase lands.
     #[must_use]
     #[inline]
+    #[allow(dead_code)] // exercised once the record reader phase lands.
     pub(crate) fn weight_variable_index(&self) -> Option<usize> {
         self.weight_variable_index
     }
@@ -137,8 +136,8 @@ impl<R> DictionaryReader<R> {
     /// walked the dictionary for.
     #[must_use]
     #[inline]
-    pub fn file_encoding(&self) -> FileEncoding {
-        self.file_encoding
+    pub fn encoding_provenance(&self) -> EncodingProvenance {
+        self.encoding_provenance
     }
 
     /// Warnings accumulated by the most recent
@@ -175,7 +174,7 @@ impl<R: Read> DictionaryReader<R> {
         // `warnings()` still reports per-call results.
         self.state.warnings_mut().extend(buffered.warnings);
 
-        let encoding = self.file_encoding.encoding();
+        let encoding = self.encoding_provenance.encoding();
         let record = match buffered.payload {
             BufferedRecordPayload::Variable(variable) => {
                 let record = decode_variable_record(variable, encoding);
@@ -203,6 +202,25 @@ impl<R: Read> DictionaryReader<R> {
     ///
     /// Returns whatever [`read_record`](Self::read_record) would
     /// return for any record consumed during finalization.
+    ///
+    /// # Implementation note
+    ///
+    /// The [`SavSchema`](crate::spss::sav::sav_schema::SavSchema) must be
+    /// accumulated **in [`read_record`](Self::read_record), as each
+    /// record is handed out** — not rebuilt here.
+    ///
+    /// Records are buffered by
+    /// [`read_header`](crate::spss::sav::header_reader::HeaderReader::read_header)
+    /// and drained one at a time, and draining *moves* each record out of
+    /// the buffer so its bytes are released. By the time this runs, every
+    /// record the caller already pulled is gone, so there is nothing left
+    /// here to rebuild a schema from. Only the records the caller never
+    /// pulled are still available, which is why this method has to
+    /// auto-consume them through the same path.
+    ///
+    /// Still open when this lands: whether the schema copies content out
+    /// of the dictionary records or borrows it somehow. That question is
+    /// what deferred the design, not the mechanism above.
     pub fn into_record_reader(self) -> Result<RecordReader<R>> {
         todo!("body lands with the record reader phase")
     }
@@ -267,12 +285,12 @@ impl<R: Read> DictionaryReader<R> {
     /// still warns. A declaration that resolves nowhere raises nothing:
     /// there is no encoding to report as having been overridden.
     fn warn_if_override_disagrees(&mut self, subtype: i32) {
-        let FileEncoding::Overridden(used) = self.file_encoding else {
+        let EncodingProvenance::Overridden(used) = self.encoding_provenance else {
             return;
         };
         let declaring_subtype = match self.declared_encoding {
-            Some(FileEncoding::Declared(_)) => EXTENSION_SUBTYPE_CHARACTER_ENCODING,
-            Some(FileEncoding::Codepage(_)) => EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO,
+            Some(EncodingProvenance::Declared(_)) => EXTENSION_SUBTYPE_CHARACTER_ENCODING,
+            Some(EncodingProvenance::Codepage(_)) => EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO,
             _ => return,
         };
         if subtype != declaring_subtype {

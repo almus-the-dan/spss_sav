@@ -1,12 +1,14 @@
 //! Entry point for reading a SAV file.
 //!
-//! [`SavReader`] is a builder for configuring how a SAV file is
-//! read. Set options with chained methods, then call a terminal
-//! method ([`from_path`](SavReader::from_path),
-//! [`from_file`](SavReader::from_file), or
-//! [`from_reader`](SavReader::from_reader)) to obtain a
-//! [`HeaderReader`] — the first phase of the reader typestate
-//! chain.
+//! [`SavReader`](crate::spss::sav::sav_reader::SavReader) is a builder
+//! for configuring how a SAV file is read. Set options with chained
+//! methods, then call a terminal method
+//! ([`from_path`](crate::spss::sav::sav_reader::SavReader::from_path),
+//! [`from_file`](crate::spss::sav::sav_reader::SavReader::from_file), or
+//! [`from_reader`](crate::spss::sav::sav_reader::SavReader::from_reader))
+//! to obtain a
+//! [`HeaderReader`](crate::spss::sav::header_reader::HeaderReader) — the
+//! first phase of the reader typestate chain.
 
 use std::fs::File;
 use std::io::BufReader;

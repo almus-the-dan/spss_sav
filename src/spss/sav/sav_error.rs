@@ -11,9 +11,9 @@ use core::fmt;
 /// records (variables, value-label sets, documents, extensions) are
 /// not separable subsections of the file — their kind is captured
 /// instead by the specific
-/// [`FormatErrorKind`](FormatErrorKind)
+/// [`FormatErrorKind`]
 /// variant or the relevant
-/// [`Field`](Field).
+/// [`Field`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Section {

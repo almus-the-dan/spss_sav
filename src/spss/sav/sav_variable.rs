@@ -274,8 +274,8 @@ impl SavVariableBuilder {
     ///
     /// Crate-internal — set by the dictionary reader / writer when
     /// the variable's position in the schema becomes known.
-    #[allow(dead_code)] // exercised once the dictionary reader/writer lands.
     #[inline]
+    #[allow(dead_code)] // exercised once the record reader phase lands.
     pub(crate) fn index(mut self, index: usize) -> Self {
         self.index = index;
         self

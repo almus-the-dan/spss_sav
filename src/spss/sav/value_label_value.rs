@@ -96,7 +96,7 @@ mod tests {
     #[test]
     fn from_str_short_pads_with_spaces() {
         let v = ValueLabelValue::from_str("ab", UTF_8).unwrap();
-        let expected = [b'a', b'b', b' ', b' ', b' ', b' ', b' ', b' '];
+        let expected = *b"ab      ";
         assert_eq!(v, ValueLabelValue::String(expected));
     }
 

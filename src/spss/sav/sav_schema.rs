@@ -12,11 +12,12 @@ use crate::spss::sav::sav_variable::SavVariable;
 #[derive(Debug, Clone)]
 pub struct SavSchema {
     variables: Vec<SavVariable>,
+    #[allow(dead_code)] // exercised once the record reader phase lands.
     row_len: usize,
 }
 
 impl SavSchema {
-    #[allow(dead_code)] // exercised once the dictionary reader lands.
+    #[allow(dead_code)] // exercised once the record reader phase lands.
     pub(crate) fn new(variables: Vec<SavVariable>, row_len: usize) -> Self {
         Self { variables, row_len }
     }
@@ -30,7 +31,7 @@ impl SavSchema {
 
     /// Per-row on-disk byte length used by the record reader to size
     /// its row buffer.
-    #[allow(dead_code)] // exercised once the record reader lands.
+    #[allow(dead_code)] // exercised once the record reader phase lands.
     #[inline]
     pub(crate) fn row_len(&self) -> usize {
         self.row_len

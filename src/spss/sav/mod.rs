@@ -30,6 +30,8 @@ pub mod dictionary_reader;
 pub mod dictionary_record;
 /// Free-text document lines from a SAV file.
 pub mod document_record;
+/// Where the text encoding the reader applied came from.
+pub mod encoding_provenance;
 /// Resolving a SAV file's declared encoding to a concrete encoding.
 mod encoding_resolution;
 /// Reader policy for choosing a text encoding.
@@ -38,8 +40,6 @@ pub mod encoding_strategy;
 mod extension_envelope;
 /// SAV extension records (subtypes 3, 4, 5, 7, 10, 11, 12, 13, 14, 16, 17, 18, 19, 20, 21, 22).
 pub mod extensions;
-/// What the SAV file declared about its text encoding.
-pub mod file_encoding;
 /// On-disk floating-point representation of `f64` values.
 pub mod float_format;
 /// On-disk byte layout of the 176-byte SAV file header.
