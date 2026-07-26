@@ -1,5 +1,17 @@
 /// Display alignment of a SAV variable.
 pub mod alignment;
+/// One buffered dictionary record, paired with the warnings it raised.
+mod buffered_dictionary_record;
+/// An undecoded type-6 document record.
+mod buffered_document_record;
+/// The undecoded payload of one buffered dictionary record.
+mod buffered_record_payload;
+/// One undecoded entry from a type-3 value-label record.
+mod buffered_value_label_entry;
+/// An undecoded type-3 / type-4 value-label record pair.
+mod buffered_value_label_set;
+/// A type-2 variable record held undecoded until the encoding is known.
+mod buffered_variable_record;
 /// Shared low-level reads over an in-memory byte slice.
 mod byte_cursor;
 /// Byte order of multibyte values in a SAV file.
