@@ -12,7 +12,6 @@ use encoding_rs::Encoding;
 
 use crate::spss::sav::dictionary_reader::DictionaryReader;
 use crate::spss::sav::encoding_strategy::EncodingStrategy;
-use crate::spss::sav::file_encoding::FileEncoding;
 use crate::spss::sav::header_format::{
     BIAS_LEN, COMPRESSION_OFFSET, CREATION_DATE_LEN, CREATION_DATE_OFFSET, CREATION_TIME_LEN,
     CREATION_TIME_OFFSET, FILE_LABEL_LEN, FILE_LABEL_OFFSET, LAYOUT_CODE_OFFSET, NCASES_OFFSET,
@@ -33,6 +32,24 @@ use crate::spss::sav::sav_warning::SavWarning;
 /// declares the file's actual encoding.
 const HEADER_FALLBACK_ENCODING: &Encoding = encoding_rs::WINDOWS_1252;
 
+/// The encoding to decode with before the file's own declaration is
+/// reachable.
+///
+/// Interim behavior: both declaration sites (subtype 20 and subtype 3)
+/// live at the very end of the dictionary, so the reader cannot honor
+/// them while streaming and applies the strategy's best guess instead.
+/// Deferred decoding replaces every call site with real resolution;
+/// until then a `Declared` strategy with no `unspecified` fallback
+/// silently gets `windows-1252` rather than the error it asks for.
+fn interim_encoding(strategy: EncodingStrategy) -> &'static Encoding {
+    match strategy {
+        EncodingStrategy::Override(encoding) => encoding,
+        EncodingStrategy::Declared { unspecified, .. } => {
+            unspecified.unwrap_or(HEADER_FALLBACK_ENCODING)
+        }
+    }
+}
+
 /// Entry point for reading a SAV file.
 ///
 /// Created via
@@ -45,41 +62,25 @@ const HEADER_FALLBACK_ENCODING: &Encoding = encoding_rs::WINDOWS_1252;
 #[derive(Debug)]
 pub struct HeaderReader<R> {
     state: ReaderState<R>,
-    encoding_override: Option<&'static Encoding>,
     encoding_strategy: EncodingStrategy,
 }
 
 impl<R> HeaderReader<R> {
-    /// Constructs a new header reader. The encoding override (if
-    /// any) and encoding strategy are forwarded from the upstream
+    /// Constructs a new header reader, forwarding the encoding
+    /// strategy from the upstream
     /// [`SavReader`](crate::spss::sav::sav_reader::SavReader).
     ///
-    /// The initial encoding stored on `ReaderState` is the override
-    /// when one was supplied, otherwise a Windows-1252 placeholder.
-    /// The dictionary phase replaces it once the file's declared
-    /// encoding becomes known (subtype 20 / subtype 3), respecting
-    /// the [`EncodingStrategy`].
-    pub(crate) fn new(
-        reader: R,
-        encoding_override: Option<&'static Encoding>,
-        encoding_strategy: EncodingStrategy,
-    ) -> Self {
-        let initial_encoding = encoding_override.unwrap_or(HEADER_FALLBACK_ENCODING);
-        let state = ReaderState::new(reader, initial_encoding);
+    /// The initial encoding stored on `ReaderState` is the strategy's
+    /// interim guess — see [`interim_encoding`]. The dictionary phase
+    /// replaces it once the file's declared encoding becomes known
+    /// (subtype 20, then subtype 3).
+    pub(crate) fn new(reader: R, encoding_strategy: EncodingStrategy) -> Self {
+        let encoding = interim_encoding(encoding_strategy);
+        let state = ReaderState::new(reader, encoding);
         Self {
             state,
-            encoding_override,
             encoding_strategy,
         }
-    }
-
-    /// The encoding override supplied via
-    /// [`SavReader::encoding`](crate::spss::sav::sav_reader::SavReader::encoding),
-    /// if any.
-    #[must_use]
-    #[inline]
-    pub fn encoding_override(&self) -> Option<&'static Encoding> {
-        self.encoding_override
     }
 
     /// The encoding strategy supplied via
@@ -221,7 +222,6 @@ impl<R: Read> HeaderReader<R> {
             .compression(compression)
             .byte_order(byte_order)
             .float_format(float_format)
-            .file_encoding(FileEncoding::Unknown)
             .bias(bias)
             .case_count(case_count)
             .nominal_case_size(nominal_case_size)
@@ -238,12 +238,14 @@ mod tests {
 
     use crate::spss::sav::byte_order::ByteOrder;
     use crate::spss::sav::compression::Compression;
-    use crate::spss::sav::file_encoding::FileEncoding;
+    use crate::spss::sav::encoding_strategy::EncodingStrategy;
     use crate::spss::sav::float_format::FloatFormat;
     use crate::spss::sav::sav_creation_timestamp::SavCreationTimestamp;
     use crate::spss::sav::sav_error::{FormatErrorKind, SavError};
     use crate::spss::sav::sav_reader::SavReader;
     use crate::spss::sav::sav_warning::SavWarning;
+
+    use super::interim_encoding;
 
     /// Builder for known-good SAV header byte sequences in tests.
     struct HeaderBytes {
@@ -331,6 +333,17 @@ mod tests {
             .read_header()
     }
 
+    fn read_with(
+        bytes: Vec<u8>,
+        strategy: EncodingStrategy,
+    ) -> Result<crate::spss::sav::dictionary_reader::DictionaryReader<Cursor<Vec<u8>>>, SavError>
+    {
+        SavReader::new()
+            .encoding_strategy(strategy)
+            .from_reader(Cursor::new(bytes))
+            .read_header()
+    }
+
     // -- Happy paths --------------------------------------------------------
 
     #[test]
@@ -345,7 +358,6 @@ mod tests {
         assert_eq!(header.nominal_case_size(), Some(5));
         assert_eq!(header.file_label(), "Test dataset");
         assert!(header.product_name().starts_with("@(#) SPSS DATA FILE"));
-        assert!(matches!(header.file_encoding(), FileEncoding::Unknown));
         assert!(dict.warnings().is_empty());
     }
 
@@ -524,5 +536,51 @@ mod tests {
         let bytes: Vec<u8> = b"$FL2".to_vec();
         let err = read(bytes).unwrap_err();
         assert!(matches!(err, SavError::Io { .. }));
+    }
+
+    // -- Encoding strategy --------------------------------------------------
+
+    /// An override reaches the header decode immediately, because it
+    /// needs nothing from the file. This holds both before and after
+    /// string decoding is deferred.
+    #[test]
+    fn override_decodes_the_file_label_with_the_supplied_encoding() {
+        let mut bytes = HeaderBytes::new();
+        bytes.file_label = "Fichier de démonstration".to_string();
+        let dict = read_with(
+            bytes.build(),
+            EncodingStrategy::Override(encoding_rs::UTF_8),
+        )
+        .expect("read header");
+        assert_eq!(dict.header().file_label(), "Fichier de démonstration");
+    }
+
+    #[test]
+    fn interim_encoding_prefers_the_override() {
+        assert_eq!(
+            interim_encoding(EncodingStrategy::Override(encoding_rs::UTF_8)),
+            encoding_rs::UTF_8
+        );
+    }
+
+    #[test]
+    fn interim_encoding_uses_the_unspecified_fallback() {
+        let strategy = EncodingStrategy::Declared {
+            unspecified: Some(encoding_rs::UTF_8),
+            unrecognized: None,
+        };
+        assert_eq!(interim_encoding(strategy), encoding_rs::UTF_8);
+    }
+
+    /// Interim only: a strategy that asks to fail on an undeclared
+    /// encoding cannot be honored until decoding is deferred, so it
+    /// silently guesses instead.
+    #[test]
+    fn interim_encoding_without_a_fallback_guesses_windows_1252() {
+        let strategy = EncodingStrategy::Declared {
+            unspecified: None,
+            unrecognized: None,
+        };
+        assert_eq!(interim_encoding(strategy), encoding_rs::WINDOWS_1252);
     }
 }

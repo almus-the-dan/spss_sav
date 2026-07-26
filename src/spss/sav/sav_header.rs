@@ -2,7 +2,6 @@
 
 use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::compression::Compression;
-use crate::spss::sav::file_encoding::FileEncoding;
 use crate::spss::sav::float_format::FloatFormat;
 use crate::spss::sav::sav_creation_timestamp::SavCreationTimestamp;
 
@@ -23,7 +22,6 @@ pub struct SavHeader {
     compression: Compression,
     byte_order: ByteOrder,
     float_format: FloatFormat,
-    file_encoding: FileEncoding,
     bias: f64,
     weight_variable: Option<String>,
     case_count: Option<u32>,
@@ -83,13 +81,6 @@ impl SavHeader {
         self.float_format
     }
 
-    /// What the file declared about its text encoding.
-    #[must_use]
-    #[inline]
-    pub fn file_encoding(&self) -> FileEncoding {
-        self.file_encoding
-    }
-
     /// Bytecode-compression bias (typically `100.0`).
     #[must_use]
     #[inline]
@@ -133,7 +124,6 @@ pub struct SavHeaderBuilder {
     compression: Option<Compression>,
     byte_order: Option<ByteOrder>,
     float_format: Option<FloatFormat>,
-    file_encoding: Option<FileEncoding>,
     bias: Option<f64>,
     weight_variable: Option<String>,
     case_count: Option<u32>,
@@ -190,14 +180,6 @@ impl SavHeaderBuilder {
         self
     }
 
-    /// Sets the declared file encoding.
-    #[must_use]
-    #[inline]
-    pub fn file_encoding(mut self, file_encoding: FileEncoding) -> Self {
-        self.file_encoding = Some(file_encoding);
-        self
-    }
-
     /// Sets the bytecode-compression bias.
     #[must_use]
     #[inline]
@@ -251,7 +233,7 @@ impl SavHeaderBuilder {
     /// `product_name` and `file_label`; an empty
     /// [`SavCreationTimestamp::Unparsed`] for the timestamp;
     /// [`Compression::None`], [`FloatFormat::Ieee754`],
-    /// [`FileEncoding::Unknown`], `bias = 100.0`. Byte order
+    /// `bias = 100.0`. Byte order
     /// defaults to little-endian — the dominant choice in
     /// SPSS-authored files since the late 1990s. Required-vs-
     /// optional checks live at write time, not here.
@@ -269,7 +251,6 @@ impl SavHeaderBuilder {
             compression: self.compression.unwrap_or(Compression::None),
             byte_order: self.byte_order.unwrap_or(ByteOrder::LittleEndian),
             float_format: self.float_format.unwrap_or(FloatFormat::Ieee754),
-            file_encoding: self.file_encoding.unwrap_or(FileEncoding::Unknown),
             bias: self.bias.unwrap_or(100.0),
             weight_variable: self.weight_variable,
             case_count: self.case_count,

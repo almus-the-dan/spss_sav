@@ -320,6 +320,20 @@ pub enum SavError {
         /// Number of values supplied by the caller.
         actual: usize,
     },
+    /// The file declared no character encoding, and the reader's
+    /// [`EncodingStrategy`](crate::spss::sav::encoding_strategy::EncodingStrategy)
+    /// supplied no `unspecified` fallback to guess with.
+    EncodingUnspecified,
+    /// The file declared a character encoding that does not resolve to
+    /// a supported encoding, and the reader's
+    /// [`EncodingStrategy`](crate::spss::sav::encoding_strategy::EncodingStrategy)
+    /// supplied no `unrecognized` fallback.
+    EncodingUnrecognized {
+        /// The declaration as the file wrote it — a subtype-20 label
+        /// such as `"UTF-9"`, or a subtype-3 `character_code` rendered
+        /// as `"character_code 437"`.
+        declaration: String,
+    },
 }
 
 impl SavError {
@@ -352,6 +366,13 @@ impl fmt::Display for SavError {
                 f,
                 "discrete missing-value list has {actual} entries; the SAV format caps it at 3",
             ),
+            Self::EncodingUnspecified => f.write_str(
+                "file declares no character encoding and the reader has no fallback encoding",
+            ),
+            Self::EncodingUnrecognized { declaration } => write!(
+                f,
+                "file declares character encoding {declaration}, which is not supported",
+            ),
         }
     }
 }
@@ -363,7 +384,9 @@ impl std::error::Error for SavError {
             Self::Format(err) => Some(err),
             Self::InvalidEncoding
             | Self::StringTooLong { .. }
-            | Self::TooManyMissingValues { .. } => None,
+            | Self::TooManyMissingValues { .. }
+            | Self::EncodingUnspecified
+            | Self::EncodingUnrecognized { .. } => None,
         }
     }
 }

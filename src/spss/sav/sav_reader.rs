@@ -12,8 +12,6 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 
-use encoding_rs::Encoding;
-
 use crate::spss::sav::encoding_strategy::EncodingStrategy;
 use crate::spss::sav::header_reader::HeaderReader;
 use crate::spss::sav::sav_error::{Result, SavError, Section};
@@ -34,7 +32,6 @@ use crate::spss::sav::sav_error::{Result, SavError, Section};
 /// ```
 #[derive(Debug, Clone)]
 pub struct SavReader {
-    encoding: Option<&'static Encoding>,
     encoding_strategy: EncodingStrategy,
 }
 
@@ -44,34 +41,15 @@ impl SavReader {
     #[inline]
     pub fn new() -> Self {
         Self {
-            encoding: None,
             encoding_strategy: EncodingStrategy::default(),
         }
     }
 
-    /// Sets an explicit encoding. Combined with
-    /// [`encoding_strategy`](Self::encoding_strategy), this controls
-    /// whether the file's declared encoding wins
-    /// ([`EncodingStrategy::Fallback`], default — the supplied
-    /// encoding is used only when the file declares no encoding) or
-    /// the supplied encoding wins ([`EncodingStrategy::Override`]).
-    #[must_use]
-    #[inline]
-    pub fn encoding(mut self, encoding: &'static Encoding) -> Self {
-        self.encoding = Some(encoding);
-        self
-    }
-
-    /// Clears any previously-set encoding.
-    #[must_use]
-    #[inline]
-    pub fn clear_encoding(mut self) -> Self {
-        self.encoding = None;
-        self
-    }
-
-    /// Sets the encoding strategy. Default is
-    /// [`EncodingStrategy::Fallback`].
+    /// Sets how the text encoding is chosen — whether the encoding the
+    /// file declares is honored
+    /// ([`EncodingStrategy::Declared`], the default) or a caller-
+    /// supplied encoding wins regardless
+    /// ([`EncodingStrategy::Override`]).
     #[must_use]
     #[inline]
     pub fn encoding_strategy(mut self, strategy: EncodingStrategy) -> Self {
@@ -107,7 +85,7 @@ impl SavReader {
     #[must_use]
     #[inline]
     pub fn from_reader<R>(self, reader: R) -> HeaderReader<R> {
-        HeaderReader::new(reader, self.encoding, self.encoding_strategy)
+        HeaderReader::new(reader, self.encoding_strategy)
     }
 }
 
