@@ -16,6 +16,8 @@ pub mod dictionary_reader;
 pub mod dictionary_record;
 /// Free-text document lines from a SAV file.
 pub mod document_record;
+/// Resolving a SAV file's declared encoding to a concrete encoding.
+mod encoding_resolution;
 /// Reader policy for choosing a text encoding.
 pub mod encoding_strategy;
 /// The decoded header of a type-7 extension record.

@@ -92,23 +92,51 @@ pub enum SavWarning {
         /// Raw 8-byte key that was repeated.
         key: [u8; 8],
     },
-    /// The byte-order code in an extension subtype-5
+    /// The byte-order code in an extension subtype-3
     /// (`MachineIntegerInfo`) record disagreed with the byte order
     /// the header reader detected from the layout-code field. The
     /// header-detected byte order is taken as authoritative; the
     /// record is still surfaced verbatim.
     HeaderByteOrderMismatch {
-        /// Raw `endianness` field value from the subtype-5 record.
+        /// Raw `endianness` field value from the subtype-3 record.
         record_value: i32,
     },
     /// The floating-point-representation code in an extension
-    /// subtype-5 (`MachineIntegerInfo`) record disagreed with the
+    /// subtype-3 (`MachineIntegerInfo`) record disagreed with the
     /// float format the header reader detected from the bias field.
     /// The header-detected format is taken as authoritative; the
     /// record is still surfaced verbatim.
     HeaderFloatFormatMismatch {
         /// Raw `floating_point_representation` field value from the
-        /// subtype-5 record.
+        /// subtype-3 record.
         record_value: i32,
+    },
+    /// The character encoding record (subtype 20) and the machine
+    /// integer info record's `character_code` (subtype 3) both resolved
+    /// to an encoding, but not to the same one. The subtype-20 label is
+    /// taken as authoritative, matching PSPP.
+    EncodingDeclarationMismatch {
+        /// Encoding label declared by the subtype-20 record.
+        label: String,
+        /// Raw `character_code` value from the subtype-3 record.
+        character_code: i32,
+    },
+    /// The file declared a character encoding that does not resolve to
+    /// a supported encoding. The reader falls through to the other
+    /// declaration site, then to its `unrecognized` fallback; without
+    /// one, the read fails with
+    /// [`SavError::EncodingUnrecognized`](crate::spss::sav::sav_error::SavError::EncodingUnrecognized)
+    /// instead. One warning is emitted per unresolvable declaration.
+    EncodingDeclarationUnrecognized {
+        /// The declaration as the file wrote it — a subtype-20 label
+        /// such as `"UTF-9"`, or a subtype-3 `character_code` rendered
+        /// as `"character_code 437"`.
+        declaration: String,
+    },
+    /// The file declared no character encoding, so the reader applied
+    /// its `unspecified` fallback.
+    EncodingUnspecified {
+        /// Name of the encoding the reader fell back to.
+        used: &'static str,
     },
 }
