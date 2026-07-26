@@ -14,14 +14,17 @@ use crate::spss::sav::extensions::long_value_label_record::LongValueLabelRecord;
 use crate::spss::sav::sav_error::{Field, Result, Section};
 
 /// Reads a subtype-21 record from `envelope`, yielding the
-/// [`LongValueLabels`]. Forwards the envelope's fields to [`parse`].
+/// [`LongValueLabels`]. Forwards the envelope's fields and `encoding` to [`parse`].
 #[inline]
-pub(crate) fn read(envelope: &ExtensionEnvelope) -> Result<DictionaryRecord> {
+pub(crate) fn read(
+    envelope: &ExtensionEnvelope,
+    encoding: &'static Encoding,
+) -> Result<DictionaryRecord> {
     let records = parse(
         envelope.element_size,
         &envelope.payload,
         envelope.byte_order,
-        envelope.encoding,
+        encoding,
         envelope.element_size_position,
     )?;
     let labels = LongValueLabels::builder().records(records).build();

@@ -66,13 +66,16 @@ impl UuidBuilder {
 }
 
 /// Reads a subtype-12 record from `envelope`, yielding the file
-/// [`Uuid`]. Forwards the envelope's fields to [`parse`].
+/// [`Uuid`]. Forwards the envelope's fields and `encoding` to [`parse`].
 #[inline]
-pub(crate) fn read(envelope: &ExtensionEnvelope) -> Result<DictionaryRecord> {
+pub(crate) fn read(
+    envelope: &ExtensionEnvelope,
+    encoding: &'static Encoding,
+) -> Result<DictionaryRecord> {
     let uuid = parse(
         envelope.element_size,
         &envelope.payload,
-        envelope.encoding,
+        encoding,
         envelope.element_size_position,
     )?;
     let record = ExtensionRecord::Uuid(uuid);

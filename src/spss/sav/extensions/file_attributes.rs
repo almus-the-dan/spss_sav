@@ -11,13 +11,16 @@ use crate::spss::sav::extensions::file_attribute::FileAttribute;
 use crate::spss::sav::sav_error::{Field, Result};
 
 /// Reads a subtype-17 record from `envelope`, yielding the
-/// [`FileAttributes`]. Forwards the envelope's fields to [`parse`].
+/// [`FileAttributes`]. Forwards the envelope's fields and `encoding` to [`parse`].
 #[inline]
-pub(crate) fn read(envelope: &ExtensionEnvelope) -> Result<DictionaryRecord> {
+pub(crate) fn read(
+    envelope: &ExtensionEnvelope,
+    encoding: &'static Encoding,
+) -> Result<DictionaryRecord> {
     let attributes = parse(
         envelope.element_size,
         &envelope.payload,
-        envelope.encoding,
+        encoding,
         envelope.element_size_position,
     )?;
     let attributes = FileAttributes::builder().attributes(attributes).build();

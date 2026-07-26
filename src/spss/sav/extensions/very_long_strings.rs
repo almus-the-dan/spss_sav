@@ -16,11 +16,14 @@ use crate::spss::sav::sav_error::{Field, FormatErrorKind, Result, SavError, Sect
 /// [`VeryLongStrings`] declarations. Forwards the envelope's fields to
 /// [`parse`].
 #[inline]
-pub(crate) fn read(envelope: &ExtensionEnvelope) -> Result<DictionaryRecord> {
+pub(crate) fn read(
+    envelope: &ExtensionEnvelope,
+    encoding: &'static Encoding,
+) -> Result<DictionaryRecord> {
     let declarations = parse(
         envelope.element_size,
         &envelope.payload,
-        envelope.encoding,
+        encoding,
         envelope.element_size_position,
     )?;
     let strings = VeryLongStrings::builder().strings(declarations).build();

@@ -431,7 +431,7 @@ impl<R: Read> DictionaryReader<R> {
         byte_order: ByteOrder,
         encoding: &'static Encoding,
     ) -> Result<DictionaryRecord> {
-        let envelope = self.read_extension_envelope(byte_order, encoding)?;
+        let envelope = self.read_extension_envelope(byte_order)?;
         match envelope.subtype {
             EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO => {
                 machine_integer_info::read(&envelope, &self.header, self.state.warnings_mut())
@@ -439,20 +439,24 @@ impl<R: Read> DictionaryReader<R> {
             EXTENSION_SUBTYPE_FLOAT_INFO => float_sentinels::read(&envelope),
             EXTENSION_SUBTYPE_EXTENDED_NUMBER_OF_CASES => extended_number_of_cases::read(&envelope),
             EXTENSION_SUBTYPE_CHARACTER_ENCODING => character_encoding::read(&envelope),
-            EXTENSION_SUBTYPE_LONG_VARIABLE_NAMES => long_variable_names::read(&envelope),
-            EXTENSION_SUBTYPE_VERY_LONG_STRINGS => very_long_strings::read(&envelope),
+            EXTENSION_SUBTYPE_LONG_VARIABLE_NAMES => long_variable_names::read(&envelope, encoding),
+            EXTENSION_SUBTYPE_VERY_LONG_STRINGS => very_long_strings::read(&envelope, encoding),
             EXTENSION_SUBTYPE_DISPLAY_PARAMETERS => raw_display_parameters::read(&envelope),
-            EXTENSION_SUBTYPE_VARIABLE_SETS => variable_sets::read(&envelope),
+            EXTENSION_SUBTYPE_VARIABLE_SETS => variable_sets::read(&envelope, encoding),
             EXTENSION_SUBTYPE_MULTIPLE_RESPONSE_SETS
             | EXTENSION_SUBTYPE_MULTIPLE_RESPONSE_SETS_EXTENDED => {
-                multiple_response_sets::read(&envelope)
+                multiple_response_sets::read(&envelope, encoding)
             }
-            EXTENSION_SUBTYPE_EXTRA_PRODUCT_INFO => extra_product_info::read(&envelope),
-            EXTENSION_SUBTYPE_UUID => uuid::read(&envelope),
-            EXTENSION_SUBTYPE_DATA_FILE_ATTRIBUTES => file_attributes::read(&envelope),
-            EXTENSION_SUBTYPE_VARIABLE_ATTRIBUTES => variable_attributes::read(&envelope),
-            EXTENSION_SUBTYPE_LONG_STRING_VALUE_LABELS => long_value_labels::read(&envelope),
-            EXTENSION_SUBTYPE_LONG_STRING_MISSING_VALUES => long_missing_values::read(&envelope),
+            EXTENSION_SUBTYPE_EXTRA_PRODUCT_INFO => extra_product_info::read(&envelope, encoding),
+            EXTENSION_SUBTYPE_UUID => uuid::read(&envelope, encoding),
+            EXTENSION_SUBTYPE_DATA_FILE_ATTRIBUTES => file_attributes::read(&envelope, encoding),
+            EXTENSION_SUBTYPE_VARIABLE_ATTRIBUTES => variable_attributes::read(&envelope, encoding),
+            EXTENSION_SUBTYPE_LONG_STRING_VALUE_LABELS => {
+                long_value_labels::read(&envelope, encoding)
+            }
+            EXTENSION_SUBTYPE_LONG_STRING_MISSING_VALUES => {
+                long_missing_values::read(&envelope, encoding)
+            }
             _ => Ok(self.read_unknown_extension(envelope)),
         }
     }
@@ -461,11 +465,7 @@ impl<R: Read> DictionaryReader<R> {
     /// `element_count`) and the declared `element_size *
     /// element_count`-byte payload into an [`ExtensionEnvelope`] for
     /// the per-subtype helpers to consume.
-    fn read_extension_envelope(
-        &mut self,
-        byte_order: ByteOrder,
-        encoding: &'static Encoding,
-    ) -> Result<ExtensionEnvelope> {
+    fn read_extension_envelope(&mut self, byte_order: ByteOrder) -> Result<ExtensionEnvelope> {
         let subtype = self.state.read_i32(byte_order, Section::Dictionary)?;
         let element_size_position = self.state.position();
         let element_size = self.state.read_u32(byte_order, Section::Dictionary)?;
@@ -493,7 +493,6 @@ impl<R: Read> DictionaryReader<R> {
             element_size_position,
             payload,
             byte_order,
-            encoding,
         };
         Ok(envelope)
     }

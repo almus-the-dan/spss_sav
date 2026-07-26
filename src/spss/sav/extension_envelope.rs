@@ -1,7 +1,5 @@
 //! The decoded header of a type-7 extension record.
 
-use encoding_rs::Encoding;
-
 use crate::spss::sav::byte_order::ByteOrder;
 
 /// The fixed header fields of a type-7 extension record plus its
@@ -10,6 +8,11 @@ use crate::spss::sav::byte_order::ByteOrder;
 /// and consumed by the per-subtype `read` helper co-located with each
 /// extension type, which extracts whichever fields its subtype
 /// requires.
+///
+/// Deliberately carries no encoding. The encoding is not known until
+/// the whole dictionary has been scanned, so an envelope that owned one
+/// could only ever hold a stale guess; the resolved encoding is passed
+/// to each `read` helper as an argument instead.
 pub(crate) struct ExtensionEnvelope {
     /// The 4-byte subtype code identifying the extension.
     pub(crate) subtype: i32,
@@ -28,6 +31,4 @@ pub(crate) struct ExtensionEnvelope {
     pub(crate) payload: Vec<u8>,
     /// The file's byte order, for decoding multi-byte payload fields.
     pub(crate) byte_order: ByteOrder,
-    /// The file's active encoding, for decoding text payload fields.
-    pub(crate) encoding: &'static Encoding,
 }

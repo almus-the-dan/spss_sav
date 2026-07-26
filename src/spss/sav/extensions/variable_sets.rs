@@ -14,13 +14,16 @@ use crate::spss::sav::extensions::variable_set::VariableSet;
 use crate::spss::sav::sav_error::{Field, Result};
 
 /// Reads a subtype-5 record from `envelope`, yielding the
-/// [`VariableSets`]. Forwards the envelope's fields to [`parse`].
+/// [`VariableSets`]. Forwards the envelope's fields and `encoding` to [`parse`].
 #[inline]
-pub(crate) fn read(envelope: &ExtensionEnvelope) -> Result<DictionaryRecord> {
+pub(crate) fn read(
+    envelope: &ExtensionEnvelope,
+    encoding: &'static Encoding,
+) -> Result<DictionaryRecord> {
     let sets = parse(
         envelope.element_size,
         &envelope.payload,
-        envelope.encoding,
+        encoding,
         envelope.element_size_position,
     )?;
     let record = ExtensionRecord::VariableSets(sets);
