@@ -24,11 +24,15 @@ use encoding_rs::Encoding;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum EncodingProvenance {
-    /// Resolved from the character encoding record (record type 7,
-    /// subtype 20).
-    Declared(&'static Encoding),
-    /// Resolved from the `character_code` field of the machine integer
-    /// info record (record type 7, subtype 3).
+    /// Resolved from the label in the character encoding record (record
+    /// type 7, subtype 20) — an IANA-style name such as `"UTF-8"`.
+    Label(&'static Encoding),
+    /// Resolved from the numeric `character_code` field of the machine
+    /// integer info record (record type 7, subtype 3).
+    ///
+    /// The counterpart to [`Label`](Self::Label): these are the two forms
+    /// in which a SAV file can name its own encoding, by name or by
+    /// number, and [`Label`](Self::Label) wins when both are present.
     Codepage(&'static Encoding),
     /// The file declared no encoding at all, so the reader applied the
     /// [`EncodingStrategy`](crate::spss::sav::encoding_strategy::EncodingStrategy)'s
@@ -56,7 +60,7 @@ impl EncodingProvenance {
     #[inline]
     pub fn encoding(self) -> &'static Encoding {
         match self {
-            Self::Declared(encoding)
+            Self::Label(encoding)
             | Self::Codepage(encoding)
             | Self::Unspecified(encoding)
             | Self::Unrecognized(encoding)
@@ -72,7 +76,7 @@ mod tests {
     #[test]
     fn every_variant_yields_its_encoding() {
         let utf8 = encoding_rs::UTF_8;
-        assert_eq!(EncodingProvenance::Declared(utf8).encoding(), utf8);
+        assert_eq!(EncodingProvenance::Label(utf8).encoding(), utf8);
         assert_eq!(EncodingProvenance::Codepage(utf8).encoding(), utf8);
         assert_eq!(EncodingProvenance::Unspecified(utf8).encoding(), utf8);
         assert_eq!(EncodingProvenance::Unrecognized(utf8).encoding(), utf8);
@@ -83,7 +87,7 @@ mod tests {
     fn provenance_distinguishes_equal_encodings() {
         let utf8 = encoding_rs::UTF_8;
         assert_ne!(
-            EncodingProvenance::Declared(utf8),
+            EncodingProvenance::Label(utf8),
             EncodingProvenance::Codepage(utf8)
         );
         assert_ne!(

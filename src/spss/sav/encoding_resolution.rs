@@ -84,7 +84,7 @@ pub(super) fn resolve(
                     character_code: code,
                 });
             }
-            return Ok(EncodingProvenance::Declared(encoding));
+            return Ok(EncodingProvenance::Label(encoding));
         }
         warnings.push(SavWarning::EncodingDeclarationUnrecognized {
             declaration: label.to_owned(),
@@ -143,7 +143,7 @@ pub(super) fn declared_encoding(
     };
     let mut discarded = Vec::new();
     match resolve(strategy, label, character_code, &mut discarded) {
-        Ok(declared @ (EncodingProvenance::Declared(_) | EncodingProvenance::Codepage(_))) => {
+        Ok(declared @ (EncodingProvenance::Label(_) | EncodingProvenance::Codepage(_))) => {
             Some(declared)
         }
         _ => None,
@@ -357,7 +357,7 @@ mod tests {
     fn declared_encoding_prefers_the_label() {
         assert_eq!(
             declared_encoding(Some("UTF-8"), Some(1252)),
-            Some(EncodingProvenance::Declared(encoding_rs::UTF_8))
+            Some(EncodingProvenance::Label(encoding_rs::UTF_8))
         );
     }
 
@@ -425,7 +425,7 @@ mod tests {
         let mut warnings = Vec::new();
         let resolved =
             resolve(STRICT, Some("UTF-8"), Some(65001), &mut warnings).expect("resolves");
-        assert_eq!(resolved, EncodingProvenance::Declared(encoding_rs::UTF_8));
+        assert_eq!(resolved, EncodingProvenance::Label(encoding_rs::UTF_8));
         assert!(warnings.is_empty(), "warnings = {warnings:?}");
     }
 
@@ -433,7 +433,7 @@ mod tests {
     fn disagreeing_declarations_warn_and_the_label_wins() {
         let mut warnings = Vec::new();
         let resolved = resolve(STRICT, Some("UTF-8"), Some(1252), &mut warnings).expect("resolves");
-        assert_eq!(resolved, EncodingProvenance::Declared(encoding_rs::UTF_8));
+        assert_eq!(resolved, EncodingProvenance::Label(encoding_rs::UTF_8));
         assert!(
             matches!(
                 warnings.as_slice(),
@@ -454,7 +454,7 @@ mod tests {
             resolve(STRICT, Some("us-ascii"), Some(28591), &mut warnings).expect("resolves");
         assert_eq!(
             resolved,
-            EncodingProvenance::Declared(encoding_rs::WINDOWS_1252)
+            EncodingProvenance::Label(encoding_rs::WINDOWS_1252)
         );
         assert!(warnings.is_empty(), "warnings = {warnings:?}");
     }

@@ -677,13 +677,13 @@ mod tests {
     /// The declared encoding is reported with its provenance, and is
     /// known the moment the dictionary reader exists.
     #[test]
-    fn declared_encoding_reports_its_provenance() {
+    fn declared_encoding_reports_a_label_provenance() {
         let mut bytes = HeaderBytes::new();
         bytes.encoding_label = Some("windows-1252");
         let dict = read(bytes.build()).expect("read header");
         assert_eq!(
             dict.encoding_provenance(),
-            EncodingProvenance::Declared(encoding_rs::WINDOWS_1252)
+            EncodingProvenance::Label(encoding_rs::WINDOWS_1252)
         );
     }
 

@@ -289,7 +289,7 @@ impl<R: Read> DictionaryReader<R> {
             return;
         };
         let declaring_subtype = match self.declared_encoding {
-            Some(EncodingProvenance::Declared(_)) => EXTENSION_SUBTYPE_CHARACTER_ENCODING,
+            Some(EncodingProvenance::Label(_)) => EXTENSION_SUBTYPE_CHARACTER_ENCODING,
             Some(EncodingProvenance::Codepage(_)) => EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO,
             _ => return,
         };
@@ -397,15 +397,17 @@ mod tests {
     use crate::spss::sav::byte_order::ByteOrder;
     use crate::spss::sav::dictionary_format::{DOCUMENT_LINE_LEN, VARIABLE_RECORD_BODY_LEN};
     use crate::spss::sav::dictionary_record::DictionaryRecord;
+    use crate::spss::sav::encoding_provenance::EncodingProvenance;
     use crate::spss::sav::encoding_strategy::EncodingStrategy;
     use crate::spss::sav::extensions::extension_record::ExtensionRecord;
     use crate::spss::sav::raw_missing_values::RawMissingValues;
-    use crate::spss::sav::sav_error::{FormatErrorKind, SavError};
+    use crate::spss::sav::sav_error::{Field, FormatErrorKind, SavError};
     use crate::spss::sav::sav_format_kind::SavFormatKind;
     use crate::spss::sav::sav_warning::SavWarning;
     use crate::spss::sav::test_support::{
-        build_header, open, open_with, try_open, write_character_code_record,
-        write_extension_record, write_rec_type, write_terminator, write_u32,
+        assert_unexpected_value_error, build_header, open, open_with, try_open,
+        write_character_code_record, write_extension_record, write_rec_type, write_terminator,
+        write_u32,
     };
     use crate::spss::sav::variable_type::VariableType;
 
@@ -1671,6 +1673,40 @@ mod tests {
         };
         assert_eq!(unknown.element_count(), 0);
         assert!(unknown.payload().is_empty());
+    }
+
+    /// A subtype-3 record whose declared `element_size` is not 4 must not
+    /// steer encoding resolution.
+    ///
+    /// `character_code` sits at payload offset 28 only when the elements
+    /// are four bytes wide. With `element_size = 8` the field is at offset
+    /// 56, so reading offset 28 yields the middle of an unrelated field.
+    /// Before the shape check, that garbage resolved the encoding and the
+    /// whole file was decoded with it, and the record was only rejected
+    /// later when it reached the caller.
+    #[test]
+    fn misshapen_codepage_record_does_not_steer_resolution() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        let mut payload = vec![0u8; 64];
+        // A plausible codepage where a 4-byte-field layout would put
+        // character_code, and a different one where it actually is.
+        payload[28..32].copy_from_slice(&65001_i32.to_le_bytes());
+        payload[56..60].copy_from_slice(&1252_i32.to_le_bytes());
+        write_extension_record(&mut bytes, byte_order, 3, 8, 8, &payload);
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        // Neither of the two candidate codepages: the record declared a
+        // shape that makes its payload uninterpretable, so it contributes
+        // nothing and the strategy's fallback applies.
+        assert_eq!(
+            dict.encoding_provenance(),
+            EncodingProvenance::Unspecified(encoding_rs::WINDOWS_1252)
+        );
+        // The record itself is still rejected when handed to the caller.
+        let err = dict.read_record().unwrap_err();
+        assert_unexpected_value_error(&err, Field::ExtensionElementSize);
     }
 
     /// A file that declares its encoding only through subtype 3 must

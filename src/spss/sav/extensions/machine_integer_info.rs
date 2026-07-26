@@ -296,20 +296,35 @@ pub(crate) fn read(
 /// Peeks at the `character_code` field of a subtype-3 envelope, for
 /// resolving the file's encoding during the dictionary scan.
 ///
-/// Deliberately validates nothing and reports no warnings: the record's
-/// full parse and its header cross-checks happen in [`read`], when the
-/// record is handed to the caller. Returns `None` when the payload is
-/// too short to contain the field, leaving the malformed-record
-/// complaint to [`read`].
+/// Reports no warnings and raises no errors — the record's full parse and
+/// its header cross-checks happen in [`read`], when the record is handed
+/// to the caller. But it does check the envelope's declared shape before
+/// trusting the offset, and returns `None` otherwise.
+///
+/// That check is not redundant with [`read`]'s. `CHARACTER_CODE_OFFSET`
+/// is only where the field sits when the elements are the declared four
+/// bytes wide. A record declaring `element_size = 8` puts
+/// `character_code` at offset 56 instead, so reading offset 28 would
+/// return the middle of an unrelated field — and resolution would then
+/// pick an encoding from that garbage, decode the whole file with it, and
+/// only reject the record later when it reached the caller. Declining to
+/// contribute leaves the encoding to the strategy's fallback, which is
+/// the same thing an unreadable subtype-20 label does.
 #[inline]
 pub(crate) fn character_code(envelope: &ExtensionEnvelope) -> Option<i32> {
-    let end = CHARACTER_CODE_OFFSET + 4;
+    if envelope.element_size != MACHINE_INTEGER_INFO_ELEMENT_SIZE
+        || envelope.element_count != MACHINE_INTEGER_INFO_ELEMENT_COUNT
+    {
+        return None;
+    }
+    let end = CHARACTER_CODE_OFFSET + size_of::<i32>();
     let slot: [u8; 4] = envelope
         .payload
         .get(CHARACTER_CODE_OFFSET..end)?
         .try_into()
         .ok()?;
-    Some(envelope.byte_order.read_i32(slot))
+    let code = envelope.byte_order.read_i32(slot);
+    Some(code)
 }
 
 /// Parses a subtype-3 payload (machine integer info: 8 `i32` fields

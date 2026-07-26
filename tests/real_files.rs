@@ -470,11 +470,11 @@ fn encoding_utf8_decodes_accented_text() {
 }
 
 /// Both fixtures declare their encoding in a subtype-20 record, so the
-/// reader reports it as [`EncodingProvenance::Declared`] rather than falling
+/// reader reports it as [`EncodingProvenance::Label`] rather than falling
 /// back — and reports it before any record has been read, since
 /// resolving it is what `read_header` walked the dictionary for.
 #[test]
-fn encoding_fixtures_report_a_declared_provenance() {
+fn encoding_fixtures_report_a_label_provenance() {
     let cases = [
         (ENCODING_UTF8, encoding_rs::UTF_8),
         (ENCODING_WINDOWS_1252, encoding_rs::WINDOWS_1252),
@@ -487,7 +487,7 @@ fn encoding_fixtures_report_a_declared_provenance() {
             .expect("read header");
         assert_eq!(
             dictionary_reader.encoding_provenance(),
-            EncodingProvenance::Declared(expected),
+            EncodingProvenance::Label(expected),
             "{path}"
         );
     }
