@@ -57,7 +57,7 @@ impl<R> HeaderReader<R> {
     /// The initial encoding stored on `ReaderState` is the override
     /// when one was supplied, otherwise a Windows-1252 placeholder.
     /// The dictionary phase replaces it once the file's declared
-    /// encoding becomes known (subtype 20 / subtype 7B), respecting
+    /// encoding becomes known (subtype 20 / subtype 3), respecting
     /// the [`EncodingStrategy`].
     pub(crate) fn new(
         reader: R,

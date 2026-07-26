@@ -20,7 +20,7 @@ pub mod document_record;
 pub mod encoding_strategy;
 /// The decoded header of a type-7 extension record.
 mod extension_envelope;
-/// SAV extension records (subtypes 3, 4, 5, 6, 7, 7B, 8, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, ...).
+/// SAV extension records (subtypes 3, 4, 5, 7, 10, 11, 12, 13, 14, 16, 17, 18, 19, 20, 21, 22).
 pub mod extensions;
 /// What the SAV file declared about its text encoding.
 pub mod file_encoding;

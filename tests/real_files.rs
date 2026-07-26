@@ -10,8 +10,12 @@
 //! DOCUMENT "(Entered ...)" line), so these tests deliberately avoid
 //! asserting on those volatile values.
 
+use std::fs::File;
+use std::io::BufReader;
+
 use spss_sav::spss::sav::byte_order::ByteOrder;
 use spss_sav::spss::sav::compression::Compression;
+use spss_sav::spss::sav::dictionary_reader::DictionaryReader;
 use spss_sav::spss::sav::dictionary_record::DictionaryRecord;
 use spss_sav::spss::sav::document_record::DocumentRecord;
 use spss_sav::spss::sav::extensions::category_label_source::CategoryLabelSource;
@@ -34,31 +38,37 @@ const COMPREHENSIVE: &str = concat!(
 /// along the way, and returns the records.
 fn read_dictionary(path: &str) -> Vec<DictionaryRecord> {
     let header_reader = SavReader::new().from_path(path).expect("open fixture");
-    let mut dict = header_reader.read_header().expect("read header");
+    let mut dictionary_reader = header_reader.read_header().expect("read header");
 
-    {
-        let header = dict.header();
-        assert!(
-            header.product_name().contains("pspp"),
-            "product_name = {:?}",
-            header.product_name()
-        );
-        assert_eq!(header.compression(), Compression::Bytecode);
-        assert_eq!(header.byte_order(), ByteOrder::LittleEndian);
-        assert_eq!(header.float_format(), FloatFormat::Ieee754);
-        assert_eq!(header.case_count(), Some(2));
-    }
-    assert!(
-        dict.warnings().is_empty(),
-        "unexpected header warnings: {:?}",
-        dict.warnings()
-    );
+    assert_header(&dictionary_reader);
 
     let mut records = Vec::new();
-    while let Some(record) = dict.read_record().expect("read dictionary record") {
+    while let Some(record) = dictionary_reader
+        .read_record()
+        .expect("read dictionary record")
+    {
         records.push(record);
     }
     records
+}
+
+fn assert_header(dictionary_reader: &DictionaryReader<BufReader<File>>) {
+    let header = dictionary_reader.header();
+    assert!(
+        header.product_name().contains("pspp"),
+        "product_name = {:?}",
+        header.product_name()
+    );
+    assert_eq!(header.compression(), Compression::Bytecode);
+    assert_eq!(header.byte_order(), ByteOrder::LittleEndian);
+    assert_eq!(header.float_format(), FloatFormat::Ieee754);
+    assert_eq!(header.case_count(), Some(2));
+
+    assert!(
+        dictionary_reader.warnings().is_empty(),
+        "unexpected header warnings: {:?}",
+        dictionary_reader.warnings()
+    );
 }
 
 fn variables(records: &[DictionaryRecord]) -> Vec<&SavVariableHeader> {
@@ -225,13 +235,15 @@ fn comprehensive_attribute_and_long_string_extensions() {
         })
         .expect("long value labels");
     assert_eq!(long_labels.len(), 1);
-    assert_eq!(long_labels[0].variable_name(), "longstr");
-    assert_eq!(long_labels[0].width(), 300);
-    assert_eq!(long_labels[0].labels().len(), 2);
-    assert_eq!(long_labels[0].labels()[0].label(), "First value");
-    assert_eq!(long_labels[0].labels()[1].label(), "Second value");
+    let first_long_label = &long_labels[0];
+    assert_eq!(first_long_label.variable_name(), "longstr");
+    assert_eq!(first_long_label.width(), 300);
+    let first_long_label_labels = first_long_label.labels();
+    assert_eq!(first_long_label_labels.len(), 2);
+    assert_eq!(first_long_label_labels[0].label(), "First value");
+    assert_eq!(first_long_label_labels[1].label(), "Second value");
     // The value bytes are the padded string key.
-    assert!(long_labels[0].labels()[0].value().starts_with(b"alpha"));
+    assert!(first_long_label_labels[0].value().starts_with(b"alpha"));
 
     // Subtype 22 — long string missing values.
     let long_missing = extensions
@@ -242,9 +254,11 @@ fn comprehensive_attribute_and_long_string_extensions() {
         })
         .expect("long missing values");
     assert_eq!(long_missing.len(), 1);
-    assert_eq!(long_missing[0].variable_name(), "longstr");
-    assert_eq!(long_missing[0].values().len(), 1);
-    assert!(long_missing[0].values()[0].starts_with(b"alpha"));
+    let first_long_missing = &long_missing[0];
+    assert_eq!(first_long_missing.variable_name(), "longstr");
+    let first_long_missing_values = first_long_missing.values();
+    assert_eq!(first_long_missing_values.len(), 1);
+    assert!(first_long_missing_values[0].starts_with(b"alpha"));
 
     // Subtype 17 — file attributes.
     let file_attributes = extensions

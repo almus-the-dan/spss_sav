@@ -6,9 +6,11 @@ use encoding_rs::Encoding;
 ///
 /// SAV files can declare their encoding in two places:
 ///
-/// - The character encoding extension record (subtype 20) — preferred.
-/// - The legacy `character_code` field of the integer info record
-///   (subtype 7B) — used as a fallback when subtype 20 is absent.
+/// - The character encoding record (record type 7, subtype 20) — an
+///   IANA-style label such as `"UTF-8"`. Preferred.
+/// - The `character_code` field of the machine integer info record
+///   (record type 7, subtype 3) — a numeric Windows codepage. Used
+///   as a fallback when subtype 20 is absent.
 ///
 /// `FileEncoding` records what the file *said*; the encoding the
 /// reader actually applied is governed by the reader's
