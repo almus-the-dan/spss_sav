@@ -245,6 +245,22 @@ pub(super) const FLOAT_SENTINELS_HIGHEST_OFFSET: usize = 8;
 /// Byte offset of the `LOWEST` sentinel within a subtype-4 payload.
 pub(super) const FLOAT_SENTINELS_LOWEST_OFFSET: usize = 16;
 
+/// Canonical IEEE 754 system-missing sentinel, as a bit pattern:
+/// `-DBL_MAX` (`-1.7976931348623157e308`).
+pub(super) const FLOAT_SENTINELS_IEEE_SYSTEM_MISSING_BITS: u64 = 0xFFEF_FFFF_FFFF_FFFF;
+
+/// Canonical IEEE 754 `HIGHEST` sentinel, as a bit pattern: `DBL_MAX`.
+pub(super) const FLOAT_SENTINELS_IEEE_HIGHEST_BITS: u64 = 0x7FEF_FFFF_FFFF_FFFF;
+
+/// Canonical IEEE 754 `LOWEST` sentinel, as a bit pattern: the
+/// second-lowest double, one ULP above `-DBL_MAX`.
+///
+/// Deliberately *not* equal to
+/// [`FLOAT_SENTINELS_IEEE_SYSTEM_MISSING_BITS`] — the one-bit gap is
+/// what keeps an open lower bound in a missing-value range from being
+/// mistaken for a system-missing cell.
+pub(super) const FLOAT_SENTINELS_IEEE_LOWEST_BITS: u64 = 0xFFEF_FFFF_FFFF_FFFE;
+
 /// Extension subtype 16 — extended number of cases. Authoritative
 /// when the header's `case_count` field is `-1` (used for files
 /// with more than `i32::MAX` cases). The payload is two `i64`

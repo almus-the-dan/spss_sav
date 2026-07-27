@@ -2,6 +2,7 @@
 
 use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::compression::Compression;
+use crate::spss::sav::float_encoding::FloatEncoding;
 use crate::spss::sav::float_format::FloatFormat;
 use crate::spss::sav::sav_creation_timestamp::SavCreationTimestamp;
 
@@ -79,6 +80,33 @@ impl SavHeader {
     #[inline]
     pub fn float_format(&self) -> FloatFormat {
         self.float_format
+    }
+
+    /// How this file encodes an `f64` on disk — its
+    /// [`float_format`](Self::float_format) paired with its
+    /// [`byte_order`](Self::byte_order).
+    ///
+    /// Derived from the two header fields rather than stored, so there
+    /// is exactly one source of truth and no reachable state where the
+    /// encoding disagrees with the header it came from. This is also
+    /// the only way to obtain a [`FloatEncoding`], which is what makes
+    /// the float conversions on
+    /// [`FloatSentinels`](crate::spss::sav::extensions::float_sentinels::FloatSentinels)
+    /// reachable.
+    ///
+    /// Both inputs come from the 176-byte preamble, so the encoding is
+    /// available the moment
+    /// [`HeaderReader::read_header`](crate::spss::sav::header_reader::HeaderReader::read_header)
+    /// returns — no dictionary record is needed. Extension subtype 3
+    /// declares a floating-point representation too, but the header
+    /// stays authoritative: a disagreement raises
+    /// [`SavWarning::HeaderFloatFormatMismatch`](crate::spss::sav::sav_warning::SavWarning::HeaderFloatFormatMismatch)
+    /// rather than re-binding the encoding, so a consumer that reads it
+    /// early and one that reads it late can never disagree.
+    #[must_use]
+    #[inline]
+    pub fn float_encoding(&self) -> FloatEncoding {
+        FloatEncoding::new(self.float_format, self.byte_order)
     }
 
     /// Bytecode-compression bias (typically `100.0`).
@@ -256,5 +284,28 @@ impl SavHeaderBuilder {
             case_count: self.case_count,
             nominal_case_size: self.nominal_case_size,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn float_encoding_pairs_the_two_header_fields() {
+        let header = SavHeader::builder()
+            .byte_order(ByteOrder::BigEndian)
+            .float_format(FloatFormat::IbmHfp)
+            .build();
+        let encoding = header.float_encoding();
+        assert_eq!(encoding.format(), FloatFormat::IbmHfp);
+        assert_eq!(encoding.byte_order(), ByteOrder::BigEndian);
+    }
+
+    #[test]
+    fn float_encoding_follows_the_builder_defaults() {
+        let encoding = SavHeader::builder().build().float_encoding();
+        assert_eq!(encoding.format(), FloatFormat::Ieee754);
+        assert_eq!(encoding.byte_order(), ByteOrder::LittleEndian);
     }
 }

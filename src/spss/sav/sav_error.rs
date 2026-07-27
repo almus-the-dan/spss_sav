@@ -1,6 +1,7 @@
 //! SAV-format-specific errors.
 
 use crate::spss::sav::dictionary_format::MISSING_VALUE_COUNT_MAX;
+use crate::spss::sav::float_format::FloatFormat;
 use core::fmt;
 
 /// Section of a SAV file where an error occurred.
@@ -325,6 +326,28 @@ pub enum SavError {
     /// [`EncodingStrategy`](crate::spss::sav::encoding_strategy::EncodingStrategy)
     /// supplied no `unspecified` fallback to guess with.
     EncodingUnspecified,
+    /// An operation was requested for a floating-point format it does
+    /// not cover. Raised by
+    /// [`FloatSentinels::spss_defaults`](crate::spss::sav::extensions::float_sentinels::FloatSentinels::spss_defaults),
+    /// which knows the canonical sentinel triple for IEEE 754 only.
+    ///
+    /// Conversion itself supports every [`FloatFormat`], so this is not
+    /// about an unimplemented format. Distinct from
+    /// [`FormatErrorKind::UnknownFloatFormat`], which means the file's
+    /// `bias` field matched no recognized format at all.
+    UnsupportedFloatFormat {
+        /// Format whose conversion is unimplemented.
+        format: FloatFormat,
+    },
+    /// A user-supplied `f64` has no encoding in the file's declared
+    /// floating-point format — for instance a NaN, an infinity, or an
+    /// out-of-range magnitude written to an IBM HFP file.
+    FloatNotRepresentable {
+        /// Value that could not be encoded.
+        value: f64,
+        /// Format it could not be encoded in.
+        format: FloatFormat,
+    },
     /// The file declared a character encoding that does not resolve to
     /// a supported encoding, and the reader's
     /// [`EncodingStrategy`](crate::spss::sav::encoding_strategy::EncodingStrategy)
@@ -367,6 +390,14 @@ impl fmt::Display for SavError {
                 f,
                 "discrete missing-value list has {actual} entries; the SAV format caps it at {MISSING_VALUE_COUNT_MAX}",
             ),
+            Self::UnsupportedFloatFormat { format } => write!(
+                f,
+                "the {format} floating-point format is recognized but conversion is not implemented",
+            ),
+            Self::FloatNotRepresentable { value, format } => write!(
+                f,
+                "value {value} has no encoding in the {format} floating-point format",
+            ),
             Self::EncodingUnspecified => f.write_str(
                 "file declares no character encoding and the reader has no fallback encoding",
             ),
@@ -386,6 +417,8 @@ impl std::error::Error for SavError {
             Self::InvalidEncoding
             | Self::StringTooLong { .. }
             | Self::TooManyMissingValues { .. }
+            | Self::UnsupportedFloatFormat { .. }
+            | Self::FloatNotRepresentable { .. }
             | Self::EncodingUnspecified
             | Self::EncodingUnrecognized { .. } => None,
         }

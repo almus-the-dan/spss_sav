@@ -31,14 +31,15 @@ const CHARACTER_CODE_OFFSET: usize = 28;
 /// [`SavWarning`] when
 /// the two disagree, leaving final reconciliation to consumers.
 ///
-/// Convenience methods like [`floating_point_representation_kind`]
-/// and [`endianness_kind`] map the well-known tagged codes onto the
-/// crate's existing [`FloatFormat`] / [`ByteOrder`] enums; they
-/// return `None` for codes not in the recognized set.
+/// [`endianness_kind`] maps the well-known tagged endianness code onto
+/// [`ByteOrder`], returning `None` for codes outside the recognized
+/// set. The floating-point code gets [`declares_float_format`] instead
+/// of a `_kind` accessor, because code `3` covers both VAX encodings
+/// and so maps onto no single [`FloatFormat`].
 ///
 /// [`floating_point_representation`]: Self::floating_point_representation
 /// [`endianness`]: Self::endianness
-/// [`floating_point_representation_kind`]: Self::floating_point_representation_kind
+/// [`declares_float_format`]: Self::declares_float_format
 /// [`endianness_kind`]: Self::endianness_kind
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MachineIntegerInfo {
@@ -91,31 +92,56 @@ impl MachineIntegerInfo {
     }
 
     /// Tagged code identifying the file's floating-point
-    /// representation (`1` = IEEE 754, `2` = IBM HFP, `3` = VAX).
-    /// Use [`floating_point_representation_kind`] for the typed
-    /// form.
+    /// representation (`1` = IEEE 754, `2` = IBM HFP, `3` = VAX, either
+    /// `D_float` or `G_float`). Use [`declares_float_format`] to test
+    /// it against a [`FloatFormat`].
     ///
-    /// [`floating_point_representation_kind`]: Self::floating_point_representation_kind
+    /// [`declares_float_format`]: Self::declares_float_format
     #[must_use]
     #[inline]
     pub fn floating_point_representation(&self) -> i32 {
         self.floating_point_representation
     }
 
-    /// Maps [`floating_point_representation`] onto the typed
-    /// [`FloatFormat`] enum. Returns `None` for codes outside the
-    /// documented set; the raw value is still available via
+    /// Whether this record's `floating_point_representation` code
+    /// agrees with `format`.
+    ///
+    /// A predicate rather than a `FloatFormat` accessor because the
+    /// mapping is many-to-one: code `3` covers both
+    /// [`FloatFormat::VaxDFloat`] and [`FloatFormat::VaxGFloat`],
+    /// so the record alone cannot say which a file uses — only the
+    /// header's `bias` field distinguishes them. PSPP compares in this
+    /// same direction, deriving one expected code from the format it
+    /// already detected.
+    ///
+    /// Codes outside the documented set agree with nothing and yield
+    /// `false`; the raw value stays available via
     /// [`floating_point_representation`].
     ///
     /// [`floating_point_representation`]: Self::floating_point_representation
     #[must_use]
-    pub fn floating_point_representation_kind(&self) -> Option<FloatFormat> {
-        match self.floating_point_representation {
-            FLOATING_POINT_REPRESENTATION_IEEE => Some(FloatFormat::Ieee754),
-            FLOATING_POINT_REPRESENTATION_IBM_HFP => Some(FloatFormat::IbmHfp),
-            FLOATING_POINT_REPRESENTATION_VAX => Some(FloatFormat::Vax),
-            _ => None,
-        }
+    pub fn declares_float_format(&self, format: FloatFormat) -> bool {
+        let expected = match format {
+            FloatFormat::Ieee754 => FLOATING_POINT_REPRESENTATION_IEEE,
+            FloatFormat::IbmHfp => FLOATING_POINT_REPRESENTATION_IBM_HFP,
+            FloatFormat::VaxDFloat | FloatFormat::VaxGFloat => {
+                FLOATING_POINT_REPRESENTATION_VAX
+            }
+        };
+        self.floating_point_representation == expected
+    }
+
+    /// Whether this record's `floating_point_representation` code is
+    /// one this crate recognizes (`1`, `2`, or `3`). Unrecognized codes
+    /// are tolerated rather than treated as a disagreement.
+    #[must_use]
+    fn declares_a_known_float_format(&self) -> bool {
+        matches!(
+            self.floating_point_representation,
+            FLOATING_POINT_REPRESENTATION_IEEE
+                | FLOATING_POINT_REPRESENTATION_IBM_HFP
+                | FLOATING_POINT_REPRESENTATION_VAX
+        )
     }
 
     /// Tagged compression code. SPSS writes `1` for bytecode
@@ -403,9 +429,7 @@ fn cross_check(
             record_value: info.endianness(),
         });
     }
-    if let Some(record_format) = info.floating_point_representation_kind()
-        && record_format != header_float_format
-    {
+    if info.declares_a_known_float_format() && !info.declares_float_format(header_float_format) {
         warnings.push(SavWarning::HeaderFloatFormatMismatch {
             record_value: info.floating_point_representation(),
         });
@@ -459,10 +483,8 @@ mod tests {
         assert_eq!(info.compression_code(), 1);
         assert_eq!(info.endianness(), 2);
         assert_eq!(info.character_code(), 1252);
-        assert_eq!(
-            info.floating_point_representation_kind(),
-            Some(FloatFormat::Ieee754),
-        );
+        assert!(info.declares_float_format(FloatFormat::Ieee754));
+        assert!(!info.declares_float_format(FloatFormat::IbmHfp));
         assert_eq!(info.endianness_kind(), Some(ByteOrder::LittleEndian));
         // Header byte order (LE) matches record (2 → LE), float format
         // matches (IEEE), so no cross-check warnings.
@@ -507,7 +529,7 @@ mod tests {
         };
         assert_eq!(info.floating_point_representation(), 99);
         assert_eq!(info.endianness(), 99);
-        assert!(info.floating_point_representation_kind().is_none());
+        assert!(!info.declares_float_format(FloatFormat::Ieee754));
         assert!(info.endianness_kind().is_none());
         // Unknown codes don't trigger the cross-check warnings — there's
         // nothing to compare against.

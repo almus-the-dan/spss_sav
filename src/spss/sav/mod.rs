@@ -40,6 +40,8 @@ pub mod encoding_strategy;
 mod extension_envelope;
 /// SAV extension records (subtypes 3, 4, 5, 7, 10, 11, 12, 13, 14, 16, 17, 18, 19, 20, 21, 22).
 pub mod extensions;
+/// How a SAV file encodes an `f64` on disk.
+pub mod float_encoding;
 /// On-disk floating-point representation of `f64` values.
 pub mod float_format;
 /// On-disk byte layout of the 176-byte SAV file header.

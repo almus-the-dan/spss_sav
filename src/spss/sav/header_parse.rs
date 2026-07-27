@@ -11,6 +11,7 @@ use encoding_rs::Encoding;
 
 use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::compression::Compression;
+use crate::spss::sav::float_encoding::FloatEncoding;
 use crate::spss::sav::float_format::FloatFormat;
 use crate::spss::sav::header_format::{CANONICAL_BIAS, LAYOUT_CODE_VALUES, MAGIC_FL2, MAGIC_FL3};
 use crate::spss::sav::sav_error::{FormatErrorKind, Result, SavError, Section};
@@ -139,29 +140,35 @@ pub(super) fn parse_nominal_case_size(value: i32) -> Option<u32> {
     u32::try_from(value).ok()
 }
 
-/// Decodes the 8-byte `bias` field by trying IEEE 754, IBM HFP,
-/// and VAX `D_float` in turn. Returns the recognized
-/// [`FloatFormat`] alongside the decoded bias. Errors with
-/// [`FormatErrorKind::UnknownFloatFormat`] when none of the three
-/// decodes to the canonical value (`100.0`).
+/// Identifies the file's float format from its 8-byte `bias` field,
+/// which every writer sets to the canonical `100.0`. Returns the
+/// recognized [`FloatFormat`] alongside the decoded bias, or
+/// [`FormatErrorKind::UnknownFloatFormat`] when no candidate decodes to
+/// `100.0`.
+///
+/// This is the only thing that distinguishes VAX `D_float` from
+/// `G_float`: subtype 3 declares a single "VAX" code for both.
 #[allow(clippy::float_cmp)] // canonical bias compares against the spec's exact `100.0` sentinel
 pub(super) fn parse_bias(
     bytes: [u8; 8],
     byte_order: ByteOrder,
     position: u64,
 ) -> Result<(FloatFormat, f64)> {
-    let ieee = byte_order.read_f64(bytes);
-    if ieee == CANONICAL_BIAS {
-        return Ok((FloatFormat::Ieee754, ieee));
-    }
-    let ibm = decode_ibm_hfp_bias(bytes, byte_order);
-    if ibm == CANONICAL_BIAS {
-        return Ok((FloatFormat::IbmHfp, ibm));
-    }
-    if let Some(value) = decode_vax_bias(bytes, byte_order)
-        && value == CANONICAL_BIAS
-    {
-        return Ok((FloatFormat::Vax, value));
+    // Probe each format's encoding of the canonical bias, the way
+    // PSPP's `float_identify` does. The encodings of `100.0` are
+    // pairwise distinct (asserted by float_encoding's
+    // `every_format_encodes_the_canonical_bias_differently`), so at
+    // most one can match and the probe order carries no meaning.
+    let formats = [
+        FloatFormat::Ieee754,
+        FloatFormat::IbmHfp,
+        FloatFormat::VaxDFloat,
+        FloatFormat::VaxGFloat,
+    ];
+    for format in formats {
+        if FloatEncoding::new(format, byte_order).decode(bytes) == CANONICAL_BIAS {
+            return Ok((format, CANONICAL_BIAS));
+        }
     }
     let error = SavError::format(
         Section::Header,
@@ -177,25 +184,89 @@ pub(super) fn parse_file_label(bytes: &[u8], encoding: &'static Encoding) -> Str
     decode_trimmed(bytes, encoding)
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-fn decode_ibm_hfp_bias(bytes: [u8; 8], byte_order: ByteOrder) -> f64 {
-    let ibm = match byte_order {
-        ByteOrder::BigEndian => ibm_hfp::IbmFloat64::from_be_bytes(bytes),
-        ByteOrder::LittleEndian => ibm_hfp::IbmFloat64::from_le_bytes(bytes),
-    };
-    f64::from(ibm)
-}
+    /// `100.0` as each format lays it out on disk. Derived from the
+    /// format definitions, not from our own encoder, so these double as
+    /// a check on the conversion path.
+    const IEEE_LITTLE: [u8; 8] = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x59, 0x40];
+    const IEEE_BIG: [u8; 8] = [0x40, 0x59, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+    const IBM_HFP: [u8; 8] = [0x42, 0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+    const VAX_D: [u8; 8] = [0xC8, 0x43, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+    const VAX_G: [u8; 8] = [0x79, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
 
-fn decode_vax_bias(_bytes: [u8; 8], _byte_order: ByteOrder) -> Option<f64> {
-    // VAX D_float decoding is deferred — the wire-to-bit-pattern
-    // mapping needs care around 16-bit word swapping that the
-    // `vax-floating` crate does internally only when the bytes are
-    // already in VAX-native order. Until we have a known-good VAX
-    // SAV fixture to test against, returning `None` is preferable
-    // to silently misidentifying. Files with VAX-encoded biases
-    // will surface as `FormatErrorKind::UnknownFloatFormat`.
-    None
+    fn identify(bytes: [u8; 8], byte_order: ByteOrder) -> FloatFormat {
+        let (format, bias) = parse_bias(bytes, byte_order, 0).expect("recognized bias");
+        assert_eq!(bias.to_bits(), CANONICAL_BIAS.to_bits());
+        format
+    }
+
+    #[test]
+    fn identifies_ieee_in_the_declared_byte_order() {
+        assert_eq!(
+            identify(IEEE_LITTLE, ByteOrder::LittleEndian),
+            FloatFormat::Ieee754,
+        );
+        assert_eq!(
+            identify(IEEE_BIG, ByteOrder::BigEndian),
+            FloatFormat::Ieee754,
+        );
+    }
+
+    #[test]
+    fn identifies_the_legacy_formats() {
+        assert_eq!(identify(IBM_HFP, ByteOrder::BigEndian), FloatFormat::IbmHfp,);
+        assert_eq!(
+            identify(VAX_D, ByteOrder::LittleEndian),
+            FloatFormat::VaxDFloat,
+        );
+        assert_eq!(
+            identify(VAX_G, ByteOrder::LittleEndian),
+            FloatFormat::VaxGFloat,
+        );
+    }
+
+    #[test]
+    fn distinguishes_the_two_vax_encodings() {
+        // The whole reason `FloatFormat` splits them: swapping the two
+        // byte strings must not still say "VAX".
+        assert_ne!(
+            identify(VAX_D, ByteOrder::LittleEndian),
+            identify(VAX_G, ByteOrder::LittleEndian),
+        );
+    }
+
+    #[test]
+    fn legacy_formats_ignore_the_declared_byte_order() {
+        // IBM HFP and VAX layouts are fixed by the format, so a file
+        // whose integer fields are little-endian still identifies.
+        assert_eq!(
+            identify(IBM_HFP, ByteOrder::LittleEndian),
+            FloatFormat::IbmHfp,
+        );
+        assert_eq!(
+            identify(VAX_D, ByteOrder::BigEndian),
+            FloatFormat::VaxDFloat,
+        );
+    }
+
+    #[test]
+    fn ieee_in_the_wrong_byte_order_is_not_recognized() {
+        let err = parse_bias(IEEE_LITTLE, ByteOrder::BigEndian, 0).unwrap_err();
+        assert!(matches!(
+            err,
+            SavError::Format(ref e) if e.kind() == FormatErrorKind::UnknownFloatFormat
+        ));
+    }
+
+    #[test]
+    fn an_unrecognizable_bias_errors() {
+        let err = parse_bias([0xAB; 8], ByteOrder::LittleEndian, 0).unwrap_err();
+        assert!(matches!(
+            err,
+            SavError::Format(ref e) if e.kind() == FormatErrorKind::UnknownFloatFormat
+        ));
+    }
 }

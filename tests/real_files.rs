@@ -22,6 +22,7 @@ use spss_sav::spss::sav::encoding_provenance::EncodingProvenance;
 use spss_sav::spss::sav::encoding_strategy::EncodingStrategy;
 use spss_sav::spss::sav::extensions::category_label_source::CategoryLabelSource;
 use spss_sav::spss::sav::extensions::extension_record::ExtensionRecord;
+use spss_sav::spss::sav::extensions::float_sentinels::FloatSentinels;
 use spss_sav::spss::sav::extensions::multiple_response_set::MultipleResponseSet;
 use spss_sav::spss::sav::extensions::multiple_response_set_kind::MultipleResponseSetKind;
 use spss_sav::spss::sav::float_format::FloatFormat;
@@ -243,6 +244,48 @@ fn comprehensive_value_labels_and_documents() {
             .any(|l| l.contains("documentary line for testing"))
     });
     assert!(contains, "documents = {documents:?}");
+}
+
+/// The subtype-4 sentinels PSPP wrote must be exactly what
+/// [`FloatSentinels::spss_defaults`] produces for this file's
+/// encoding. This is the ground-truth check that our idea of the
+/// canonical triple matches what a real writer emits — including the
+/// one-ULP gap between `LOWEST` and system-missing.
+#[test]
+fn comprehensive_float_sentinels_match_our_defaults() {
+    let header_reader = SavReader::new()
+        .from_path(COMPREHENSIVE)
+        .expect("open fixture");
+    let mut dictionary_reader = header_reader.read_header().expect("read header");
+    let encoding = dictionary_reader.header().float_encoding();
+
+    let mut sentinels = None;
+    while let Some(record) = dictionary_reader
+        .read_record()
+        .expect("read dictionary record")
+    {
+        if let DictionaryRecord::Extension(ExtensionRecord::FloatInfo(found)) = record {
+            sentinels = Some(found);
+        }
+    }
+    let sentinels = sentinels.expect("float sentinels");
+
+    assert_eq!(
+        sentinels,
+        FloatSentinels::spss_defaults(encoding).expect("ieee defaults"),
+    );
+    assert_eq!(
+        sentinels.system_missing_as_f64(encoding).to_bits(),
+        (-f64::MAX).to_bits(),
+    );
+    assert_eq!(
+        sentinels.highest_as_f64(encoding).to_bits(),
+        f64::MAX.to_bits(),
+    );
+    assert_eq!(
+        sentinels.lowest_as_f64(encoding).to_bits(),
+        (-f64::MAX).next_up().to_bits(),
+    );
 }
 
 #[test]

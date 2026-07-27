@@ -50,4 +50,23 @@ impl ByteOrder {
             Self::LittleEndian => i64::from_le_bytes(bytes),
         }
     }
+
+    /// Encodes an `f64` into an 8-byte array.
+    #[must_use]
+    pub(crate) fn write_f64(self, value: f64) -> [u8; 8] {
+        match self {
+            Self::BigEndian => value.to_be_bytes(),
+            Self::LittleEndian => value.to_le_bytes(),
+        }
+    }
+
+    /// Encodes a `u64` into an 8-byte array. Used for on-disk values
+    /// specified as bit patterns rather than as numbers.
+    #[must_use]
+    pub(crate) fn write_u64(self, value: u64) -> [u8; 8] {
+        match self {
+            Self::BigEndian => value.to_be_bytes(),
+            Self::LittleEndian => value.to_le_bytes(),
+        }
+    }
 }
