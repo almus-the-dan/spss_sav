@@ -270,10 +270,7 @@ fn comprehensive_float_sentinels_match_our_defaults() {
     }
     let sentinels = sentinels.expect("float sentinels");
 
-    assert_eq!(
-        sentinels,
-        FloatSentinels::spss_defaults(encoding).expect("ieee defaults"),
-    );
+    assert_eq!(sentinels, FloatSentinels::spss_defaults(encoding));
     assert_eq!(
         sentinels.system_missing_as_f64(encoding).to_bits(),
         (-f64::MAX).to_bits(),

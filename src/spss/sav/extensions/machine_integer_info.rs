@@ -124,9 +124,7 @@ impl MachineIntegerInfo {
         let expected = match format {
             FloatFormat::Ieee754 => FLOATING_POINT_REPRESENTATION_IEEE,
             FloatFormat::IbmHfp => FLOATING_POINT_REPRESENTATION_IBM_HFP,
-            FloatFormat::VaxDFloat | FloatFormat::VaxGFloat => {
-                FLOATING_POINT_REPRESENTATION_VAX
-            }
+            FloatFormat::VaxDFloat | FloatFormat::VaxGFloat => FLOATING_POINT_REPRESENTATION_VAX,
         };
         self.floating_point_representation == expected
     }

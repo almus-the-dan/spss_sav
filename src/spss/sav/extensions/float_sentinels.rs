@@ -2,9 +2,11 @@
 
 use crate::spss::sav::dictionary_format::{
     FLOAT_SENTINELS_ELEMENT_COUNT, FLOAT_SENTINELS_ELEMENT_SIZE, FLOAT_SENTINELS_HIGHEST_OFFSET,
-    FLOAT_SENTINELS_IEEE_HIGHEST_BITS, FLOAT_SENTINELS_IEEE_LOWEST_BITS,
-    FLOAT_SENTINELS_IEEE_SYSTEM_MISSING_BITS, FLOAT_SENTINELS_LOWEST_OFFSET,
-    FLOAT_SENTINELS_SYSTEM_MISSING_OFFSET,
+    FLOAT_SENTINELS_IBM_HFP_HIGHEST, FLOAT_SENTINELS_IBM_HFP_LOWEST,
+    FLOAT_SENTINELS_IBM_HFP_SYSTEM_MISSING, FLOAT_SENTINELS_IEEE_HIGHEST_BITS,
+    FLOAT_SENTINELS_IEEE_LOWEST_BITS, FLOAT_SENTINELS_IEEE_SYSTEM_MISSING_BITS,
+    FLOAT_SENTINELS_LOWEST_OFFSET, FLOAT_SENTINELS_SYSTEM_MISSING_OFFSET,
+    FLOAT_SENTINELS_VAX_HIGHEST, FLOAT_SENTINELS_VAX_LOWEST, FLOAT_SENTINELS_VAX_SYSTEM_MISSING,
 };
 use crate::spss::sav::dictionary_record::DictionaryRecord;
 use crate::spss::sav::extension_envelope::ExtensionEnvelope;
@@ -12,7 +14,7 @@ use crate::spss::sav::extensions::extension_parse::validate_extension_shape;
 use crate::spss::sav::extensions::extension_record::ExtensionRecord;
 use crate::spss::sav::float_encoding::FloatEncoding;
 use crate::spss::sav::float_format::FloatFormat;
-use crate::spss::sav::sav_error::{Result, SavError};
+use crate::spss::sav::sav_error::Result;
 
 /// Float sentinel values declared by extension record subtype 4.
 ///
@@ -37,19 +39,27 @@ pub struct FloatSentinels {
 }
 
 impl FloatSentinels {
-    /// Returns a fresh [`FloatSentinelsBuilder`].
+    /// Returns a fresh [`RawFloatSentinelsBuilder`].
     #[must_use]
     #[inline]
-    pub fn builder() -> FloatSentinelsBuilder {
-        FloatSentinelsBuilder::default()
+    pub fn raw_builder() -> RawFloatSentinelsBuilder {
+        RawFloatSentinelsBuilder::default()
     }
 
-    /// The sentinel triple SPSS and PSPP write, laid out for
-    /// `encoding`.
+    /// Returns a fresh [`ValueFloatSentinelsBuilder`], which takes
+    /// sentinels as `f64` values and encodes them through `encoding`.
     ///
-    /// This is what nearly every writer wants; the raw setters on
-    /// [`FloatSentinelsBuilder`] exist for the rest. Obtain `encoding`
-    /// from the header driving the file:
+    /// Use [`builder`](Self::raw_builder) instead to set raw bytes.
+    #[must_use]
+    #[inline]
+    pub fn value_builder(encoding: FloatEncoding) -> ValueFloatSentinelsBuilder {
+        ValueFloatSentinelsBuilder::new(encoding)
+    }
+
+    /// The canonical sentinel triple, laid out for `encoding`.
+    ///
+    /// This is what nearly every writer wants; the builders exist for
+    /// the rest. Obtain `encoding` from the header driving the file:
     ///
     /// ```
     /// use spss_sav::spss::sav::byte_order::ByteOrder;
@@ -59,37 +69,51 @@ impl FloatSentinels {
     /// let header = SavHeader::builder()
     ///     .byte_order(ByteOrder::LittleEndian)
     ///     .build();
-    /// let sentinels = FloatSentinels::spss_defaults(header.float_encoding())?;
+    /// let sentinels = FloatSentinels::spss_defaults(header.float_encoding());
     /// assert_eq!(
     ///     sentinels.system_missing(),
     ///     [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xEF, 0xFF],
     /// );
-    /// # Ok::<(), spss_sav::spss::sav::sav_error::SavError>(())
     /// ```
     ///
-    /// The IEEE values are `-DBL_MAX` for system missing, `DBL_MAX`
-    /// for `HIGHEST`, and the second-lowest double for `LOWEST`.
+    /// Defined for every float format, because the triple is a rule
+    /// rather than three constants: system-missing is the format's
+    /// most-negative finite value, `HIGHEST` its most-positive, and
+    /// `LOWEST` the system-missing pattern with its fraction
+    /// decremented by one.
     ///
-    /// # Errors
-    ///
-    /// Returns [`SavError::UnsupportedFloatFormat`] for any format
-    /// other than IEEE 754. The triple is format-specific, not
-    /// universal: `-DBL_MAX` has no IBM HFP encoding at all. Rather
-    /// than guess at IBM HFP or VAX bit patterns we cannot check
-    /// against a real file, this errors until such a fixture exists.
-    pub fn spss_defaults(encoding: FloatEncoding) -> Result<Self> {
-        let FloatFormat::Ieee754 = encoding.format() else {
-            return Err(SavError::UnsupportedFloatFormat {
-                format: encoding.format(),
-            });
+    /// Note that IBM HFP and VAX `D_float` carry more mantissa bits
+    /// than an `f64`, so their system-missing and `LOWEST` sentinels
+    /// decode to the *same* `f64` even though the bit patterns differ.
+    /// Compare raw bytes, not decoded values, when classifying a cell
+    /// in one of those files.
+    #[must_use]
+    pub fn spss_defaults(encoding: FloatEncoding) -> Self {
+        let (system_missing, highest, lowest) = match encoding.format() {
+            FloatFormat::Ieee754 => {
+                let byte_order = encoding.byte_order();
+                (
+                    byte_order.write_u64(FLOAT_SENTINELS_IEEE_SYSTEM_MISSING_BITS),
+                    byte_order.write_u64(FLOAT_SENTINELS_IEEE_HIGHEST_BITS),
+                    byte_order.write_u64(FLOAT_SENTINELS_IEEE_LOWEST_BITS),
+                )
+            }
+            FloatFormat::IbmHfp => (
+                FLOAT_SENTINELS_IBM_HFP_SYSTEM_MISSING,
+                FLOAT_SENTINELS_IBM_HFP_HIGHEST,
+                FLOAT_SENTINELS_IBM_HFP_LOWEST,
+            ),
+            FloatFormat::VaxDFloat | FloatFormat::VaxGFloat => (
+                FLOAT_SENTINELS_VAX_SYSTEM_MISSING,
+                FLOAT_SENTINELS_VAX_HIGHEST,
+                FLOAT_SENTINELS_VAX_LOWEST,
+            ),
         };
-        let byte_order = encoding.byte_order();
-        let sentinels = Self {
-            system_missing: byte_order.write_u64(FLOAT_SENTINELS_IEEE_SYSTEM_MISSING_BITS),
-            highest: byte_order.write_u64(FLOAT_SENTINELS_IEEE_HIGHEST_BITS),
-            lowest: byte_order.write_u64(FLOAT_SENTINELS_IEEE_LOWEST_BITS),
-        };
-        Ok(sentinels)
+        Self {
+            system_missing,
+            highest,
+            lowest,
+        }
     }
 
     /// Raw bytes of the system-missing sentinel.
@@ -142,13 +166,13 @@ impl FloatSentinels {
 
 /// Builder for [`FloatSentinels`].
 #[derive(Debug, Default, Clone, Copy)]
-pub struct FloatSentinelsBuilder {
+pub struct RawFloatSentinelsBuilder {
     system_missing: Option<[u8; 8]>,
     highest: Option<[u8; 8]>,
     lowest: Option<[u8; 8]>,
 }
 
-impl FloatSentinelsBuilder {
+impl RawFloatSentinelsBuilder {
     /// Sets the system-missing sentinel.
     #[must_use]
     #[inline]
@@ -187,6 +211,101 @@ impl FloatSentinelsBuilder {
             highest,
             lowest,
         }
+    }
+}
+
+/// Builder for [`FloatSentinels`] that takes sentinels as `f64`
+/// values, encoding them through a file's [`FloatEncoding`].
+///
+/// Separate from [`RawFloatSentinelsBuilder`] because a value can fail to
+/// encode — the legacy float formats have far narrower ranges than
+/// `f64` — so this builder's [`build`](Self::build) is fallible while
+/// the raw-bytes one stays infallible. The raw builder therefore keeps
+/// its noise-free bit-exact copy path.
+///
+/// A setter here means "this literal number", not "the sentinel class".
+/// On an IBM HFP file `.system_missing(-f64::MAX)` fails as
+/// out-of-range even though that file *has* a system-missing sentinel
+/// (about `-7.2e75`). Reach for
+/// [`FloatSentinels::spss_defaults`] for the canonical triple, and use
+/// this builder only for genuinely custom sentinels.
+///
+/// ```
+/// use spss_sav::spss::sav::extensions::float_sentinels::FloatSentinels;
+/// use spss_sav::spss::sav::sav_header::SavHeader;
+///
+/// let encoding = SavHeader::builder().build().float_encoding();
+/// let sentinels = FloatSentinels::value_builder(encoding)
+///     .system_missing(-1.0e30)
+///     .highest(1.0e30)
+///     .build()?;
+/// assert_eq!(sentinels.system_missing(), (-1.0e30_f64).to_le_bytes());
+/// # Ok::<(), spss_sav::spss::sav::sav_error::SavError>(())
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub struct ValueFloatSentinelsBuilder {
+    encoding: FloatEncoding,
+    system_missing: Option<f64>,
+    highest: Option<f64>,
+    lowest: Option<f64>,
+}
+
+impl ValueFloatSentinelsBuilder {
+    /// Starts a builder that encodes through `encoding`.
+    #[must_use]
+    #[inline]
+    fn new(encoding: FloatEncoding) -> Self {
+        Self {
+            encoding,
+            system_missing: None,
+            highest: None,
+            lowest: None,
+        }
+    }
+
+    /// Sets the system-missing sentinel.
+    #[must_use]
+    #[inline]
+    pub fn system_missing(mut self, value: f64) -> Self {
+        self.system_missing = Some(value);
+        self
+    }
+
+    /// Sets the `HIGHEST` sentinel.
+    #[must_use]
+    #[inline]
+    pub fn highest(mut self, value: f64) -> Self {
+        self.highest = Some(value);
+        self
+    }
+
+    /// Sets the `LOWEST` sentinel.
+    #[must_use]
+    #[inline]
+    pub fn lowest(mut self, value: f64) -> Self {
+        self.lowest = Some(value);
+        self
+    }
+
+    /// Encodes the collected values into a [`FloatSentinels`].
+    ///
+    /// Unset sentinels default to all-zero bytes, matching
+    /// [`RawFloatSentinelsBuilder::build`].
+    ///
+    /// # Errors
+    ///
+    /// Propagates the first [`FloatEncoding::encode`] failure, in
+    /// declaration order: system-missing, then `HIGHEST`, then
+    /// `LOWEST`.
+    pub fn build(self) -> Result<FloatSentinels> {
+        let encode = |value: Option<f64>| -> Result<[u8; 8]> {
+            value.map_or_else(|| Ok([0; 8]), |value| self.encoding.encode(value))
+        };
+        Ok(FloatSentinels {
+            system_missing: encode(self.system_missing)?,
+            highest: encode(self.highest)?,
+            lowest: encode(self.lowest)?,
+        })
     }
 }
 
@@ -245,7 +364,7 @@ fn parse(
             .try_into()
             .expect("envelope validation guarantees a 24-byte payload")
     };
-    let sentinels = FloatSentinels::builder()
+    let sentinels = FloatSentinels::raw_builder()
         .system_missing(slab(FLOAT_SENTINELS_SYSTEM_MISSING_OFFSET))
         .highest(slab(FLOAT_SENTINELS_HIGHEST_OFFSET))
         .lowest(slab(FLOAT_SENTINELS_LOWEST_OFFSET))
@@ -280,7 +399,7 @@ mod tests {
     fn spss_defaults_match_the_canonical_little_endian_triple() {
         // Byte-for-byte the values PSPP wrote into
         // `tests/fixtures/comprehensive.sav`.
-        let sentinels = FloatSentinels::spss_defaults(ieee(ByteOrder::LittleEndian)).unwrap();
+        let sentinels = FloatSentinels::spss_defaults(ieee(ByteOrder::LittleEndian));
         assert_eq!(
             sentinels.system_missing(),
             [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xEF, 0xFF],
@@ -297,8 +416,8 @@ mod tests {
 
     #[test]
     fn spss_defaults_honor_the_byte_order() {
-        let little = FloatSentinels::spss_defaults(ieee(ByteOrder::LittleEndian)).unwrap();
-        let big = FloatSentinels::spss_defaults(ieee(ByteOrder::BigEndian)).unwrap();
+        let little = FloatSentinels::spss_defaults(ieee(ByteOrder::LittleEndian));
+        let big = FloatSentinels::spss_defaults(ieee(ByteOrder::BigEndian));
         assert_ne!(little, big);
 
         let mut reversed = little.system_missing();
@@ -311,7 +430,7 @@ mod tests {
         // The one-ULP gap is load-bearing: an open lower bound must
         // never collide with a system-missing cell.
         let encoding = ieee(ByteOrder::LittleEndian);
-        let sentinels = FloatSentinels::spss_defaults(encoding).unwrap();
+        let sentinels = FloatSentinels::spss_defaults(encoding);
         assert_ne!(sentinels.lowest(), sentinels.system_missing());
 
         let system_missing = sentinels.system_missing_as_f64(encoding);
@@ -326,7 +445,7 @@ mod tests {
     fn spss_defaults_round_trip_through_both_byte_orders() {
         for byte_order in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
             let encoding = ieee(byte_order);
-            let sentinels = FloatSentinels::spss_defaults(encoding).unwrap();
+            let sentinels = FloatSentinels::spss_defaults(encoding);
             assert_eq!(
                 sentinels.system_missing_as_f64(encoding).to_bits(),
                 (-f64::MAX).to_bits(),
@@ -336,20 +455,173 @@ mod tests {
     }
 
     #[test]
-    fn spss_defaults_reject_non_ieee_formats() {
-        // -DBL_MAX has no IBM HFP encoding, so the canonical triple is
-        // IEEE-specific; we refuse rather than invent bit patterns.
+    fn spss_defaults_are_each_format_extremes() {
+        // The rule PSPP's `assemble_number` encodes: system-missing is
+        // the format's most-negative finite value, HIGHEST its
+        // most-positive. Cross-checked against the conversion crates'
+        // own extremes so the byte tables cannot silently drift.
+        let cases: [(FloatFormat, f64, f64); 3] = [
+            (
+                FloatFormat::IbmHfp,
+                f64::from(ibm_hfp::IbmFloat64::MIN_VALUE),
+                f64::from(ibm_hfp::IbmFloat64::MAX_VALUE),
+            ),
+            (
+                FloatFormat::VaxDFloat,
+                vax_floating::DFloating::MIN.to_f64(),
+                vax_floating::DFloating::MAX.to_f64(),
+            ),
+            (
+                FloatFormat::VaxGFloat,
+                vax_floating::GFloating::MIN.to_f64(),
+                vax_floating::GFloating::MAX.to_f64(),
+            ),
+        ];
+        for (format, minimum, maximum) in cases {
+            let encoding = encoding_of(format, ByteOrder::LittleEndian);
+            let sentinels = FloatSentinels::spss_defaults(encoding);
+            assert_eq!(
+                sentinels.system_missing_as_f64(encoding).to_bits(),
+                minimum.to_bits(),
+                "{format} system missing",
+            );
+            assert_eq!(
+                sentinels.highest_as_f64(encoding).to_bits(),
+                maximum.to_bits(),
+                "{format} highest",
+            );
+        }
+    }
+
+    #[test]
+    fn spss_defaults_keep_lowest_distinct_in_every_format() {
+        // LOWEST is system-missing with the fraction decremented, so
+        // the patterns must differ in every format — even where the
+        // two collapse to the same f64 (IBM HFP and VAX D_float carry
+        // more mantissa bits than a double).
+        for format in [
+            FloatFormat::Ieee754,
+            FloatFormat::IbmHfp,
+            FloatFormat::VaxDFloat,
+            FloatFormat::VaxGFloat,
+        ] {
+            let sentinels =
+                FloatSentinels::spss_defaults(encoding_of(format, ByteOrder::LittleEndian));
+            assert_ne!(
+                sentinels.lowest(),
+                sentinels.system_missing(),
+                "{format} LOWEST collides with system missing",
+            );
+        }
+    }
+
+    #[test]
+    fn spss_defaults_ignore_byte_order_for_the_legacy_formats() {
         for format in [
             FloatFormat::IbmHfp,
             FloatFormat::VaxDFloat,
             FloatFormat::VaxGFloat,
         ] {
-            let encoding = encoding_of(format, ByteOrder::BigEndian);
-            let err = FloatSentinels::spss_defaults(encoding).unwrap_err();
-            assert!(
-                matches!(err, SavError::UnsupportedFloatFormat { format: f } if f == format),
-                "{format} gave {err:?}",
+            assert_eq!(
+                FloatSentinels::spss_defaults(encoding_of(format, ByteOrder::LittleEndian)),
+                FloatSentinels::spss_defaults(encoding_of(format, ByteOrder::BigEndian)),
+                "{format}",
             );
+        }
+    }
+
+    #[test]
+    fn spss_defaults_never_produce_a_vax_reserved_operand() {
+        // The VAX reserved operand is sign-set with a zero exponent;
+        // our sentinels use the maximum exponent, so they must decode
+        // to real numbers rather than NaN.
+        for format in [FloatFormat::VaxDFloat, FloatFormat::VaxGFloat] {
+            let encoding = encoding_of(format, ByteOrder::LittleEndian);
+            let sentinels = FloatSentinels::spss_defaults(encoding);
+            assert!(
+                sentinels.system_missing_as_f64(encoding) < 0.0,
+                "{format} system missing decoded to NaN or a positive",
+            );
+            assert!(sentinels.highest_as_f64(encoding) > 0.0, "{format} highest");
+        }
+    }
+
+    // -- Value builder ------------------------------------------------------
+
+    #[test]
+    fn value_builder_encodes_through_the_encoding() {
+        let encoding = ieee(ByteOrder::BigEndian);
+        let sentinels = FloatSentinels::value_builder(encoding)
+            .system_missing(-1.0e30)
+            .highest(1.0e30)
+            .lowest(-9.0e29)
+            .build()
+            .unwrap();
+        assert_eq!(sentinels.system_missing(), (-1.0e30_f64).to_be_bytes());
+        assert_eq!(sentinels.highest(), 1.0e30_f64.to_be_bytes());
+        assert_eq!(sentinels.lowest(), (-9.0e29_f64).to_be_bytes());
+    }
+
+    #[test]
+    fn value_builder_defaults_unset_sentinels_to_zero_bytes() {
+        let sentinels = FloatSentinels::value_builder(ieee(ByteOrder::LittleEndian))
+            .highest(1.0)
+            .build()
+            .unwrap();
+        assert_eq!(sentinels.system_missing(), [0; 8]);
+        assert_eq!(sentinels.lowest(), [0; 8]);
+        assert_eq!(sentinels.highest(), 1.0_f64.to_le_bytes());
+    }
+
+    #[test]
+    fn value_builder_agrees_with_the_raw_builder() {
+        let encoding = ieee(ByteOrder::LittleEndian);
+        let from_values = FloatSentinels::value_builder(encoding)
+            .system_missing(-f64::MAX)
+            .highest(f64::MAX)
+            .lowest((-f64::MAX).next_up())
+            .build()
+            .unwrap();
+        assert_eq!(from_values, FloatSentinels::spss_defaults(encoding));
+    }
+
+    #[test]
+    fn value_builder_surfaces_the_first_encoding_failure() {
+        // -DBL_MAX is far outside IBM HFP's range. The canonical
+        // sentinel *concept* is representable there, but this setter
+        // means a literal number — which is why `spss_defaults` exists.
+        let encoding = encoding_of(FloatFormat::IbmHfp, ByteOrder::BigEndian);
+        let err = FloatSentinels::value_builder(encoding)
+            .system_missing(-f64::MAX)
+            .build()
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SavError::FloatNotRepresentable {
+                    format: FloatFormat::IbmHfp,
+                    ..
+                }
+            ),
+            "got {err:?}",
+        );
+    }
+
+    #[test]
+    fn value_builder_reports_failures_in_declaration_order() {
+        // Both are out of range; the system-missing failure wins
+        // because it is encoded first.
+        let encoding = encoding_of(FloatFormat::VaxDFloat, ByteOrder::LittleEndian);
+        let err = FloatSentinels::value_builder(encoding)
+            .system_missing(-f64::MAX)
+            .highest(f64::NAN)
+            .build()
+            .unwrap_err();
+        match err {
+            SavError::FloatNotRepresentable { value, .. } => {
+                assert_eq!(value.to_bits(), (-f64::MAX).to_bits());
+            }
+            other => panic!("expected FloatNotRepresentable, got {other:?}"),
         }
     }
 

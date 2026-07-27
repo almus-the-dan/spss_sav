@@ -245,6 +245,15 @@ pub(super) const FLOAT_SENTINELS_HIGHEST_OFFSET: usize = 8;
 /// Byte offset of the `LOWEST` sentinel within a subtype-4 payload.
 pub(super) const FLOAT_SENTINELS_LOWEST_OFFSET: usize = 16;
 
+// The canonical sentinel triple is a rule, not three magic numbers:
+// system-missing is the format's most-negative finite value, `HIGHEST`
+// its most-positive, and `LOWEST` the system-missing pattern with its
+// fraction decremented by one.
+//
+// IEEE is the only format whose sentinels do not use the maximum raw
+// exponent: it reserves that exponent for infinity and NaN, so its
+// extremes sit one exponent lower.
+
 /// Canonical IEEE 754 system-missing sentinel, as a bit pattern:
 /// `-DBL_MAX` (`-1.7976931348623157e308`).
 pub(super) const FLOAT_SENTINELS_IEEE_SYSTEM_MISSING_BITS: u64 = 0xFFEF_FFFF_FFFF_FFFF;
@@ -260,6 +269,45 @@ pub(super) const FLOAT_SENTINELS_IEEE_HIGHEST_BITS: u64 = 0x7FEF_FFFF_FFFF_FFFF;
 /// what keeps an open lower bound in a missing-value range from being
 /// mistaken for a system-missing cell.
 pub(super) const FLOAT_SENTINELS_IEEE_LOWEST_BITS: u64 = 0xFFEF_FFFF_FFFF_FFFE;
+
+/// Canonical IBM HFP system-missing sentinel, as on-disk bytes:
+/// negative, maximum characteristic, all-ones fraction — the format's
+/// most-negative finite value (about `-7.2e75`). IBM HFP has no
+/// byte-order variants, so these bytes are absolute.
+pub(super) const FLOAT_SENTINELS_IBM_HFP_SYSTEM_MISSING: [u8; 8] = [0xFF; 8];
+
+/// Canonical IBM HFP `HIGHEST` sentinel: the system-missing pattern
+/// with the sign bit cleared.
+pub(super) const FLOAT_SENTINELS_IBM_HFP_HIGHEST: [u8; 8] =
+    [0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+
+/// Canonical IBM HFP `LOWEST` sentinel: system-missing with the
+/// fraction decremented by one. IBM HFP's fraction is big-endian, so
+/// that is the final byte.
+pub(super) const FLOAT_SENTINELS_IBM_HFP_LOWEST: [u8; 8] =
+    [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE];
+
+/// Canonical VAX system-missing sentinel, as on-disk bytes: negative,
+/// maximum exponent, all-ones fraction. Shared by `D_float` and
+/// `G_float` — they split the exponent and fraction differently, but
+/// "every bit set" is the most-negative finite value either way.
+///
+/// Not the VAX reserved operand, which is sign-set with a *zero*
+/// exponent.
+pub(super) const FLOAT_SENTINELS_VAX_SYSTEM_MISSING: [u8; 8] = [0xFF; 8];
+
+/// Canonical VAX `HIGHEST` sentinel: system-missing with the sign bit
+/// cleared. The sign is the high bit of the first 16-bit word, which
+/// VAX stores low byte first — hence the `0x7F` in the second byte
+/// rather than the first.
+pub(super) const FLOAT_SENTINELS_VAX_HIGHEST: [u8; 8] =
+    [0xFF, 0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+
+/// Canonical VAX `LOWEST` sentinel: system-missing with the fraction
+/// decremented by one. The fraction's low-order bits live in the last
+/// 16-bit word, stored low byte first, so that is byte six.
+pub(super) const FLOAT_SENTINELS_VAX_LOWEST: [u8; 8] =
+    [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE, 0xFF];
 
 /// Extension subtype 16 — extended number of cases. Authoritative
 /// when the header's `case_count` field is `-1` (used for files
