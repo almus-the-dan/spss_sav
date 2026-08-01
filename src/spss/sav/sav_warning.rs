@@ -1,5 +1,7 @@
 //! Recoverable issues raised during SAV reading or writing.
 
+use crate::spss::sav::extensions::extension_subtype::ExtensionSubtype;
+
 /// A recoverable issue surfaced during SAV processing.
 ///
 /// Warnings are accumulated in the reader/writer's per-phase state
@@ -10,6 +12,60 @@
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum SavWarning {
+    /// An extension record named a variable the dictionary does not
+    /// contain.
+    ///
+    /// The patch that record carried is dropped and the read continues.
+    /// Which name space applies depends on the subtype: subtypes 13 and
+    /// 14 key off the short name, subtypes 18, 21 and 22 off the long
+    /// name.
+    UnknownVariableInExtension {
+        /// The subtype that named it.
+        subtype: ExtensionSubtype,
+        /// The name as the record spelled it.
+        name: String,
+    },
+    /// A subtype-14 record declared a very-long-string width that the
+    /// variable records around it do not bear out — the segments that
+    /// should follow are missing, too few, or the wrong declared width,
+    /// or the width itself is wider than any string SAV can hold.
+    ///
+    /// The variable is left **uncollapsed**: the type-2 records already
+    /// define the row layout, so the data still reads correctly, and
+    /// each segment stays a variable of its own.
+    VeryLongStringSegmentMismatch {
+        /// Short name of the variable the record named.
+        short_name: String,
+        /// Logical width the record declared.
+        declared_width: u32,
+    },
+    /// A subtype-11 record's element count was neither two nor three
+    /// times the number of segments, so it could not be sliced
+    /// per-variable. No display parameters are attached.
+    DisplayParameterCountMismatch {
+        /// Element count the record declared.
+        element_count: u32,
+        /// Number of segments in the dictionary.
+        segment_count: u32,
+    },
+    /// A type-3 / type-4 value-label set pointed at a segment of a very
+    /// long string. Its entries are dropped.
+    ///
+    /// SPSS puts labels for very long strings in subtype 21 instead, and
+    /// a type-3 key is only eight bytes wide, so an entry attached here
+    /// could never match a value.
+    ValueLabelOnVeryLongString {
+        /// 0-based segment index the type-4 record named.
+        segment_index: u32,
+    },
+    /// The header's case count and the subtype-16 extended count
+    /// disagreed. The extended count wins.
+    CaseCountMismatch {
+        /// Count from the 176-byte header.
+        header: u32,
+        /// Count from the subtype-16 record.
+        extended: i64,
+    },
     /// A `(format-kind, width, decimals)` triple does not match any
     /// valid SPSS display-format combination. The triple is preserved
     /// verbatim; the writer's `finish()` surfaces accumulated

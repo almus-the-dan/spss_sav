@@ -16,7 +16,9 @@ use std::path::Path;
 
 use crate::spss::sav::encoding_strategy::EncodingStrategy;
 use crate::spss::sav::header_reader::HeaderReader;
+use crate::spss::sav::reader_options::ReaderOptions;
 use crate::spss::sav::sav_error::{Result, SavError, Section};
+use crate::spss::sav::skippable_content::SkippableContent;
 
 /// Builder for configuring and opening a SAV file reader.
 ///
@@ -34,7 +36,7 @@ use crate::spss::sav::sav_error::{Result, SavError, Section};
 /// ```
 #[derive(Debug, Clone)]
 pub struct SavReader {
-    encoding_strategy: EncodingStrategy,
+    options: ReaderOptions,
 }
 
 impl SavReader {
@@ -43,7 +45,7 @@ impl SavReader {
     #[inline]
     pub fn new() -> Self {
         Self {
-            encoding_strategy: EncodingStrategy::default(),
+            options: ReaderOptions::default(),
         }
     }
 
@@ -55,7 +57,63 @@ impl SavReader {
     #[must_use]
     #[inline]
     pub fn encoding_strategy(mut self, strategy: EncodingStrategy) -> Self {
-        self.encoding_strategy = strategy;
+        self.options.set_encoding_strategy(strategy);
+        self
+    }
+
+    /// Asks the reader not to retain one category of dictionary
+    /// content. Call once per category; nothing is skipped by default.
+    ///
+    /// See [`SkippableContent`] for what skipping does and does not
+    /// change — in short, it drops retention and decoding but not the
+    /// read, and it can never make a well-formed file fail to parse or
+    /// a data read come out wrong.
+    ///
+    /// There is deliberately no "skip everything" shorthand: the set of
+    /// content a caller does not want is worth stating outright.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use spss_sav::spss::sav::extensions::extension_subtype::ExtensionSubtype;
+    /// use spss_sav::spss::sav::sav_reader::SavReader;
+    /// use spss_sav::spss::sav::skippable_content::SkippableContent;
+    ///
+    /// let header_reader = SavReader::new()
+    ///     .skip_dictionary_content(SkippableContent::Documents)
+    ///     .skip_dictionary_content(SkippableContent::Extension(
+    ///         ExtensionSubtype::LongValueLabels,
+    ///     ))
+    ///     .from_path("data.sav")
+    ///     .unwrap();
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn skip_dictionary_content(mut self, content: SkippableContent) -> Self {
+        self.options.skip(content);
+        self
+    }
+
+    /// Sets whether a
+    /// [`SavSchema`](crate::spss::sav::sav_schema::SavSchema) is
+    /// assembled as dictionary records are handed out. `true` by
+    /// default.
+    ///
+    /// Pass `false` when you are folding the streamed records into your
+    /// own structure and would otherwise pay to build both.
+    /// [`RecordReader::schema`](crate::spss::sav::record_reader::RecordReader::schema)
+    /// then returns `None`. The data layout the record reader needs is
+    /// accumulated separately and is unaffected, so this cannot change
+    /// how the rows read.
+    ///
+    /// This is the mirror of
+    /// [`skip_dictionary_content`](Self::skip_dictionary_content):
+    /// skipping controls what is retained on the way in, this controls
+    /// what is assembled on the way out.
+    #[must_use]
+    #[inline]
+    pub fn build_schema(mut self, build: bool) -> Self {
+        self.options.set_build_schema(build);
         self
     }
 
@@ -87,7 +145,7 @@ impl SavReader {
     #[must_use]
     #[inline]
     pub fn from_reader<R>(self, reader: R) -> HeaderReader<R> {
-        HeaderReader::new(reader, self.encoding_strategy)
+        HeaderReader::new(reader, self.options)
     }
 }
 

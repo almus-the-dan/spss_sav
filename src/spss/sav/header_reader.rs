@@ -26,6 +26,7 @@ use crate::spss::sav::header_parse::{
     parse_bias, parse_case_count, parse_file_label, parse_layout_code, parse_magic,
     parse_nominal_case_size, parse_product_name, parse_weight_index, resolve_compression,
 };
+use crate::spss::sav::reader_options::ReaderOptions;
 use crate::spss::sav::reader_state::ReaderState;
 use crate::spss::sav::sav_creation_timestamp::SavCreationTimestamp;
 use crate::spss::sav::sav_error::{Result, Section};
@@ -44,19 +45,16 @@ use crate::spss::sav::sav_warning::SavWarning;
 #[derive(Debug)]
 pub struct HeaderReader<R> {
     state: ReaderState<R>,
-    encoding_strategy: EncodingStrategy,
+    options: ReaderOptions,
 }
 
 impl<R> HeaderReader<R> {
-    /// Constructs a new header reader, forwarding the encoding
-    /// strategy from the upstream
+    /// Constructs a new header reader, forwarding the options set on
+    /// the upstream
     /// [`SavReader`](crate::spss::sav::sav_reader::SavReader).
-    pub(crate) fn new(reader: R, encoding_strategy: EncodingStrategy) -> Self {
+    pub(crate) fn new(reader: R, options: ReaderOptions) -> Self {
         let state = ReaderState::new(reader);
-        Self {
-            state,
-            encoding_strategy,
-        }
+        Self { state, options }
     }
 
     /// The encoding strategy supplied via
@@ -64,7 +62,7 @@ impl<R> HeaderReader<R> {
     #[must_use]
     #[inline]
     pub fn encoding_strategy(&self) -> EncodingStrategy {
-        self.encoding_strategy
+        self.options.encoding_strategy()
     }
 
     /// Warnings accumulated so far. Empty before
@@ -92,7 +90,7 @@ struct RawHeader {
     bias: f64,
     case_count: Option<u32>,
     nominal_case_size: Option<u32>,
-    weight_variable_index: Option<usize>,
+    weight_offset: Option<usize>,
 }
 
 impl<R: Read> HeaderReader<R> {
@@ -156,8 +154,8 @@ impl<R: Read> HeaderReader<R> {
             WEIGHT_INDEX_OFFSET
         );
         let weight_index_value = self.state.read_i32(byte_order, Section::Header)?;
-        let weight_variable_index_one_based = parse_weight_index(weight_index_value);
-        let weight_variable_index = weight_variable_index_one_based.map(|i| i - 1);
+        let weight_offset_one_based = parse_weight_index(weight_index_value);
+        let weight_offset = weight_offset_one_based.map(|i| i - 1);
 
         debug_assert_eq!(
             usize::try_from(self.state.position()).unwrap(),
@@ -209,7 +207,7 @@ impl<R: Read> HeaderReader<R> {
             bias,
             case_count,
             nominal_case_size,
-            weight_variable_index,
+            weight_offset,
         };
         Ok(raw_header)
     }
@@ -255,9 +253,9 @@ impl<R: Read> HeaderReader<R> {
         // Walk the dictionary so the file's declared encoding becomes
         // reachable, then resolve it before decoding any text at all —
         // including the header's own two text fields.
-        let buffer = DictionaryBuffer::read(&mut self.state, raw.byte_order)?;
+        let buffer = DictionaryBuffer::read(&mut self.state, raw.byte_order, &self.options)?;
         let file_encoding = resolve(
-            self.encoding_strategy,
+            self.options.encoding_strategy(),
             buffer.declared_encoding_label(),
             buffer.character_code(),
             self.state.warnings_mut(),
@@ -282,10 +280,11 @@ impl<R: Read> HeaderReader<R> {
         let reader = DictionaryReader::new(
             self.state,
             header,
+            self.options,
             file_encoding,
             declared,
             buffer,
-            raw.weight_variable_index,
+            raw.weight_offset,
         );
         Ok(reader)
     }
@@ -508,17 +507,17 @@ mod tests {
     }
 
     #[test]
-    fn weight_index_resolves_to_zero_based() {
+    fn weight_index_resolves_to_a_zero_based_offset() {
         let mut h = HeaderBytes::new();
         h.weight_index = 3;
         let dict = read(h.build()).unwrap();
-        assert_eq!(dict.weight_variable_index(), Some(2));
+        assert_eq!(dict.weight_offset(), Some(2));
     }
 
     #[test]
     fn weight_index_zero_means_no_weight() {
         let dict = read(HeaderBytes::new().build()).unwrap();
-        assert_eq!(dict.weight_variable_index(), None);
+        assert_eq!(dict.weight_offset(), None);
     }
 
     #[test]

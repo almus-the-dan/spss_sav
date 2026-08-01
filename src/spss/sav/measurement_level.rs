@@ -33,6 +33,19 @@ pub enum MeasurementLevel {
 }
 
 impl MeasurementLevel {
+    /// Classifies an on-disk measurement-level byte, preserving
+    /// anything outside `0..=3` in [`Unknown`](Self::Unknown).
+    #[must_use]
+    pub(crate) fn from_byte(byte: u8) -> Self {
+        match byte {
+            0 => Self::Unspecified,
+            1 => Self::Nominal,
+            2 => Self::Ordinal,
+            3 => Self::Scale,
+            other => Self::Unknown(other),
+        }
+    }
+
     /// On-disk byte representation of this measurement level.
     #[must_use]
     #[allow(dead_code)] // exercised once the writer phase lands.
@@ -63,5 +76,17 @@ mod tests {
     fn to_byte_preserves_unknown() {
         assert_eq!(MeasurementLevel::Unknown(7).to_byte(), 7);
         assert_eq!(MeasurementLevel::Unknown(255).to_byte(), 255);
+    }
+
+    #[test]
+    fn from_byte_round_trips_every_canonical_level() {
+        for byte in 0..=3 {
+            assert_eq!(MeasurementLevel::from_byte(byte).to_byte(), byte);
+        }
+    }
+
+    #[test]
+    fn from_byte_preserves_an_out_of_range_byte() {
+        assert_eq!(MeasurementLevel::from_byte(9), MeasurementLevel::Unknown(9));
     }
 }

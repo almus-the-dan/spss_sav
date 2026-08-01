@@ -20,6 +20,12 @@ use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::sav_error::{Field, FormatErrorKind, Result, SavError, Section};
 use crate::spss::sav::sav_warning::SavWarning;
 
+/// Largest chunk [`ReaderState::skip`] reads at once. Bounds how far
+/// the shared scratch buffer can grow on behalf of bytes nobody
+/// wanted, without making the discard loop chatty for the small skips
+/// (record filler, padding) that dominate.
+const SKIP_WINDOW_LEN: usize = 64 * 1024;
+
 /// Crate-internal state threaded through the reader typestate
 /// chain. The same allocation is moved from one phase to the next
 /// via the `into_*()` consuming transitions, so the warnings vec
@@ -107,8 +113,21 @@ impl<R: Read> ReaderState<R> {
     }
 
     /// Reads `len` bytes and discards them.
+    ///
+    /// Discards through a bounded window rather than one
+    /// [`read_exact`](Self::read_exact) of `len` bytes. There is no
+    /// [`Seek`](std::io::Seek) bound to seek past the data with, so the
+    /// bytes have to be read either way — but reading them into the
+    /// shared scratch buffer would size that buffer to the largest
+    /// record ever skipped and keep it there for the rest of the read,
+    /// which is the opposite of what skipping a large record is for.
     pub fn skip(&mut self, len: usize, section: Section) -> Result<()> {
-        self.read_exact(len, section)?;
+        let mut remaining = len;
+        while remaining > 0 {
+            let chunk = remaining.min(SKIP_WINDOW_LEN);
+            self.read_exact(chunk, section)?;
+            remaining -= chunk;
+        }
         Ok(())
     }
 

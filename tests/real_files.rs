@@ -38,6 +38,8 @@ const COMPREHENSIVE: &str = concat!(
     "/tests/fixtures/comprehensive.sav"
 );
 
+const WEIGHTED: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/weighted.sav");
+
 const ENCODING_UTF8: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/encoding_utf8.sav"
@@ -229,7 +231,7 @@ fn comprehensive_value_labels_and_documents() {
     assert_eq!(sets.len(), 1);
     let set = sets[0];
     // No/Yes applied to q1, q2, q3 (logical indices 1, 2, 3).
-    assert_eq!(set.variable_indices(), [1, 2, 3]);
+    assert_eq!(set.segment_indices(), [1, 2, 3]);
     assert_eq!(set.entries().len(), 2);
     assert_eq!(set.entries()[0].label(), "No");
     assert_eq!(set.entries()[1].label(), "Yes");
@@ -569,5 +571,359 @@ fn override_wins_and_warns_when_the_file_disagrees() {
         overridden[0].contains("UTF-8") && overridden[0].contains("windows-1252"),
         "warning = {}",
         overridden[0]
+    );
+}
+
+// ---------------------------------------------------------------------
+// Schema finalization
+//
+// These read the dictionary through to the record reader and assert the
+// reconciled schema, which is where the extension records stop being
+// separate payloads and become properties of a variable.
+// ---------------------------------------------------------------------
+
+/// Opens the comprehensive fixture and finalizes straight through to the
+/// record reader without pulling a single dictionary record by hand.
+fn finalize_comprehensive() -> spss_sav::spss::sav::record_reader::RecordReader<BufReader<File>> {
+    SavReader::new()
+        .from_path(COMPREHENSIVE)
+        .expect("open fixture")
+        .read_header()
+        .expect("read header")
+        .into_record_reader()
+        .expect("finalize")
+}
+
+/// The fixture declares `longstr (A300)`, which PSPP stores as two
+/// segments — `LONGSTR` at width 255 and `LONGST_A` at width 48. The
+/// schema must show one variable at width 300.
+#[test]
+fn very_long_strings_collapse_into_one_variable() {
+    let reader = finalize_comprehensive();
+    let schema = reader.schema().expect("schema built by default");
+
+    let names: Vec<&str> = schema
+        .variables()
+        .iter()
+        .map(spss_sav::spss::sav::sav_variable::SavVariable::full_name)
+        .collect();
+    assert_eq!(names, ["id", "q1", "q2", "q3", "longstr", "shortstr"]);
+
+    let longstr = schema.variable_by_name("longstr").expect("longstr present");
+    assert_eq!(longstr.variable_type(), VariableType::String(300));
+    assert_eq!(longstr.index(), 4);
+    assert_eq!(longstr.label(), Some("A long string variable"));
+}
+
+/// Subtype 13 maps short names to long ones, keyed by the short name.
+#[test]
+fn long_names_are_patched_onto_variables() {
+    let reader = finalize_comprehensive();
+    let schema = reader.schema().expect("schema");
+    let id = schema.variable_by_name("id").expect("id present");
+    assert_eq!(id.short_name(), "ID");
+    assert_eq!(id.long_name(), Some("id"));
+    assert_eq!(id.full_name(), "id");
+}
+
+/// A type-3 / type-4 pair covering q1, q2 and q3 becomes one shared set.
+#[test]
+fn value_labels_attach_to_every_variable_the_pair_named() {
+    use spss_sav::spss::sav::value_label_value::ValueLabelValue;
+
+    let reader = finalize_comprehensive();
+    let schema = reader.schema().expect("schema");
+    for name in ["q1", "q2", "q3"] {
+        let variable = schema.variable_by_name(name).expect("variable present");
+        let labels = variable.value_labels().expect("labels attached");
+        assert_eq!(labels.len(), 2);
+        assert_eq!(
+            variable.label_for(&ValueLabelValue::Numeric(0.0)),
+            Some("No"),
+            "variable {name}",
+        );
+        assert_eq!(
+            variable.label_for(&ValueLabelValue::Numeric(1.0)),
+            Some("Yes"),
+            "variable {name}",
+        );
+    }
+    // A variable the pair did not name has none.
+    assert!(
+        schema
+            .variable_by_name("id")
+            .expect("id present")
+            .value_labels()
+            .is_none()
+    );
+}
+
+/// Subtype 21 carries full-width keys for a very long string.
+#[test]
+fn long_value_labels_attach_with_full_width_keys() {
+    use spss_sav::spss::sav::value_label_value::ValueLabelValue;
+
+    let reader = finalize_comprehensive();
+    let schema = reader.schema().expect("schema");
+    let longstr = schema.variable_by_name("longstr").expect("longstr present");
+    let labels = longstr.value_labels().expect("labels attached");
+    assert_eq!(labels.len(), 2);
+
+    let mut key = vec![b' '; 300];
+    key[..5].copy_from_slice(b"alpha");
+    assert_eq!(
+        longstr.label_for(&ValueLabelValue::LongString(key.into_boxed_slice())),
+        Some("First value"),
+    );
+}
+
+/// `MISSING VALUES id (99)` is numeric; `MISSING VALUES longstr
+/// ('alpha')` goes through subtype 22 and stays raw bytes.
+#[test]
+fn missing_values_decode_per_variable_type() {
+    use spss_sav::spss::sav::missing_value_specification::MissingValueSpecification;
+
+    let reader = finalize_comprehensive();
+    let schema = reader.schema().expect("schema");
+
+    let id = schema.variable_by_name("id").expect("id present");
+    assert_eq!(
+        id.missing_value_spec(),
+        &MissingValueSpecification::Discrete(vec![99.0]),
+    );
+
+    let longstr = schema.variable_by_name("longstr").expect("longstr present");
+    let MissingValueSpecification::String(values) = longstr.missing_value_spec() else {
+        panic!(
+            "expected string missing values, got {:?}",
+            longstr.missing_value_spec()
+        );
+    };
+    assert_eq!(values.len(), 1);
+    assert_eq!(&*values[0], b"alpha   ");
+}
+
+/// Subtype 11 writes a tuple per *segment*; the leading segment's is the
+/// one that describes the collapsed variable.
+#[test]
+fn display_parameters_slice_per_segment() {
+    use spss_sav::spss::sav::alignment::Alignment;
+    use spss_sav::spss::sav::measurement_level::MeasurementLevel;
+
+    let reader = finalize_comprehensive();
+    let schema = reader.schema().expect("schema");
+
+    let id = schema.variable_by_name("id").expect("id present");
+    let display = id.display().expect("display attached");
+    assert_eq!(display.measurement_level(), MeasurementLevel::Nominal);
+    assert_eq!(display.display_width(), Some(8));
+    assert_eq!(display.alignment(), Alignment::Right);
+
+    // The very long string's tuple is the first segment's: (1, 32, 0).
+    let longstr = schema.variable_by_name("longstr").expect("longstr present");
+    let display = longstr.display().expect("display attached");
+    assert_eq!(display.display_width(), Some(32));
+    assert_eq!(display.alignment(), Alignment::Left);
+}
+
+/// Subtype 18 keys off the long name, and `$@Role` must survive the
+/// `[n]` collapse untouched.
+#[test]
+fn variable_attributes_attach_by_long_name() {
+    let reader = finalize_comprehensive();
+    let schema = reader.schema().expect("schema");
+    let id = schema.variable_by_name("id").expect("id present");
+
+    let attribute = id.attribute("MyAttr").expect("MyAttr present");
+    assert_eq!(attribute.value(), Some("hello world"));
+    assert!(id.attribute("$@Role").is_some(), "{:?}", id.attributes());
+}
+
+/// The header declares the case count; the fixture has two rows.
+#[test]
+fn case_count_comes_through_finalization() {
+    let reader = finalize_comprehensive();
+    assert_eq!(reader.case_count(), Some(2));
+}
+
+/// `build_schema(false)` drops the schema but must not disturb anything
+/// the record reader needs.
+#[test]
+fn schema_building_can_be_turned_off() {
+    let reader = SavReader::new()
+        .build_schema(false)
+        .from_path(COMPREHENSIVE)
+        .expect("open fixture")
+        .read_header()
+        .expect("read header")
+        .into_record_reader()
+        .expect("finalize");
+    assert!(reader.schema().is_none());
+    assert_eq!(reader.case_count(), Some(2));
+}
+
+/// The load-bearing invariant: skipping every skippable record must not
+/// change the layout the rows are read through. Subtype 14 is what
+/// collapses the very long string, and skipping it must not un-collapse
+/// anything the data reader depends on.
+#[test]
+fn skipping_everything_skippable_leaves_the_data_layout_intact() {
+    use spss_sav::spss::sav::extensions::extension_subtype::ExtensionSubtype;
+    use spss_sav::spss::sav::skippable_content::SkippableContent;
+
+    let mut reader = SavReader::new().skip_dictionary_content(SkippableContent::Documents);
+    reader = reader.skip_dictionary_content(SkippableContent::ValueLabels);
+    for subtype in [
+        ExtensionSubtype::MachineIntegerInfo,
+        ExtensionSubtype::FloatInfo,
+        ExtensionSubtype::VariableSets,
+        ExtensionSubtype::MultipleResponseSets,
+        ExtensionSubtype::MultipleResponseSetsExtended,
+        ExtensionSubtype::DisplayParameters,
+        ExtensionSubtype::LongVariableNames,
+        ExtensionSubtype::VeryLongStrings,
+        ExtensionSubtype::ExtendedNumberOfCases,
+        ExtensionSubtype::FileAttributes,
+        ExtensionSubtype::VariableAttributes,
+        ExtensionSubtype::CharacterEncoding,
+        ExtensionSubtype::LongValueLabels,
+        ExtensionSubtype::LongMissingValues,
+        ExtensionSubtype::Unrecognized,
+    ] {
+        reader = reader.skip_dictionary_content(SkippableContent::Extension(subtype));
+    }
+
+    let stripped = reader
+        .from_path(COMPREHENSIVE)
+        .expect("open fixture")
+        .read_header()
+        .expect("read header")
+        .into_record_reader()
+        .expect("finalize");
+
+    // Encoding still resolves from the records that were "skipped".
+    assert_eq!(
+        stripped.encoding_provenance(),
+        finalize_comprehensive().encoding_provenance(),
+    );
+    // And the very long string is still one variable at width 300.
+    let schema = stripped.schema().expect("schema");
+    let longstr = schema
+        .variables()
+        .iter()
+        .find(|v| v.short_name() == "LONGSTR")
+        .expect("longstr present");
+    assert_eq!(longstr.variable_type(), VariableType::String(300));
+    assert_eq!(schema.variable_count(), 6);
+    assert_eq!(stripped.case_count(), Some(2));
+}
+
+/// The header declares the weight as an offset into the data row, which
+/// in this fixture is 40 (1-based) because the `A300` variable ahead of
+/// it occupies 38 units across two segments. Resolving that to a
+/// variable crosses offset → segment → variable; conflating any two of
+/// those spaces picks the wrong variable or none at all.
+#[test]
+fn weight_variable_resolves_across_all_three_index_spaces() {
+    let reader = SavReader::new()
+        .from_path(WEIGHTED)
+        .expect("open fixture")
+        .read_header()
+        .expect("read header")
+        .into_record_reader()
+        .expect("finalize");
+
+    let schema = reader.schema().expect("schema");
+    let names: Vec<&str> = schema
+        .variables()
+        .iter()
+        .map(spss_sav::spss::sav::sav_variable::SavVariable::full_name)
+        .collect();
+    assert_eq!(names, ["id", "descr", "wgt"]);
+
+    let weight = schema.weight_variable().expect("weight declared");
+    assert_eq!(weight.full_name(), "wgt");
+    assert_eq!(weight.index(), 2);
+}
+
+/// A file that declares no weight reports none, rather than defaulting
+/// to the first variable.
+#[test]
+fn a_file_without_a_weight_reports_none() {
+    let reader = finalize_comprehensive();
+    let schema = reader.schema().expect("schema");
+    assert!(schema.weight_variable().is_none());
+}
+
+/// The weight lives on the schema, so turning schema building off takes
+/// it with them — there is nothing left to resolve the offset against.
+#[test]
+fn no_schema_means_no_weight_variable() {
+    let reader = SavReader::new()
+        .build_schema(false)
+        .from_path(WEIGHTED)
+        .expect("open fixture")
+        .read_header()
+        .expect("read header")
+        .into_record_reader()
+        .expect("finalize");
+    assert!(reader.schema().is_none());
+}
+
+/// The strongest form of the rule: on a real file, passing over every
+/// record must produce exactly the schema that reading every record
+/// does. `skip_record` withholds records from the caller; it does not
+/// withhold them from the library.
+#[test]
+fn skipping_every_record_produces_the_same_schema_as_reading_them() {
+    fn describe(schema: &spss_sav::spss::sav::sav_schema::SavSchema) -> Vec<String> {
+        schema
+            .variables()
+            .iter()
+            .map(|variable| {
+                format!(
+                    "{}|{:?}|{:?}|{}|{:?}",
+                    variable.full_name(),
+                    variable.variable_type(),
+                    variable.missing_value_spec(),
+                    variable
+                        .value_labels()
+                        .map_or(0, spss_sav::spss::sav::value_label_set::ValueLabelSet::len),
+                    variable.display(),
+                )
+            })
+            .collect()
+    }
+
+    let mut read_all = SavReader::new()
+        .from_path(COMPREHENSIVE)
+        .expect("open fixture")
+        .read_header()
+        .expect("read header");
+    while read_all.read_record().expect("read record").is_some() {}
+    let read_all = read_all.into_record_reader().expect("finalize");
+
+    let mut skipped = SavReader::new()
+        .from_path(COMPREHENSIVE)
+        .expect("open fixture")
+        .read_header()
+        .expect("read header");
+    while skipped.skip_record().expect("skip record").is_some() {}
+    let skipped = skipped.into_record_reader().expect("finalize");
+
+    assert_eq!(
+        describe(skipped.schema().expect("schema")),
+        describe(read_all.schema().expect("schema")),
+    );
+    assert_eq!(skipped.case_count(), read_all.case_count());
+    assert_eq!(
+        skipped
+            .schema()
+            .and_then(spss_sav::spss::sav::sav_schema::SavSchema::weight_variable)
+            .map(spss_sav::spss::sav::sav_variable::SavVariable::full_name),
+        read_all
+            .schema()
+            .and_then(spss_sav::spss::sav::sav_schema::SavSchema::weight_variable)
+            .map(spss_sav::spss::sav::sav_variable::SavVariable::full_name),
     );
 }

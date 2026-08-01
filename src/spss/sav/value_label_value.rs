@@ -8,11 +8,21 @@ use crate::spss::sav::sav_error::{Result, SavError};
 
 const VALUE_LABEL_KEY_WIDTH: usize = 8;
 
-/// The 8-byte key of a value-label entry.
+/// The key of a value-label entry.
 ///
-/// SAV value-label keys are always eight bytes on disk: an `f64`
+/// Type-3 value-label keys are always eight bytes on disk: an `f64`
 /// for numeric variables, or a fixed eight-byte string slot
-/// (right-padded with spaces) for short-string variables.
+/// (right-padded with spaces) for short-string variables. Extension
+/// subtype 21 carries keys for very long strings at their full declared
+/// width, which is what [`LongString`](Self::LongString) holds.
+///
+/// String keys stay as raw bytes rather than decoding to a `String`,
+/// even though the encoding is known by the time they are read. A key
+/// is matched byte-for-byte against a cell in the data section, and
+/// decoding first would let two genuinely distinct byte sequences
+/// collide on `U+FFFD` whenever they are not valid in the declared
+/// encoding. Decoding is the data layer's job, and it needs the
+/// undecoded key to compare against.
 ///
 /// `PartialEq`/`Eq`/`Hash` use IEEE 754 **bit-pattern** equality on
 /// the numeric variant — the same comparison rule the SAV format
@@ -22,13 +32,30 @@ const VALUE_LABEL_KEY_WIDTH: usize = 8;
 /// matches itself) but distinguishes IEEE-equal-but-different-bits
 /// values like `+0.0` and `-0.0`. This makes `ValueLabelValue`
 /// usable directly as a `HashMap` key.
-#[derive(Debug, Clone, Copy)]
+///
+/// [`String`](Self::String) and [`LongString`](Self::LongString) never
+/// compare equal even when they hold the same bytes. They come from
+/// different records describing different variables, so a key of one
+/// kind matching a cell of the other would be a bug rather than a
+/// convenience.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum ValueLabelValue {
     /// Numeric key.
     Numeric(f64),
-    /// String key — eight raw bytes from the file, in the file's
-    /// declared encoding.
+    /// Short-string key — eight raw bytes from the file, in the file's
+    /// declared encoding, right-padded with spaces.
     String([u8; VALUE_LABEL_KEY_WIDTH]),
+    /// Very-long-string key from extension subtype 21 — the variable's
+    /// full declared width in raw bytes, in the file's declared
+    /// encoding.
+    ///
+    /// A boxed slice rather than a `Vec` because a key is fixed the
+    /// moment it is read and never grows, so there is no capacity worth
+    /// tracking. Not a size choice: the enum measures 24 bytes with
+    /// `Box<[u8]>`, `Vec<u8>` or `String` alike, since the compiler
+    /// finds a niche in all three.
+    LongString(Box<[u8]>),
 }
 
 impl PartialEq for ValueLabelValue {
@@ -36,6 +63,7 @@ impl PartialEq for ValueLabelValue {
         match (self, other) {
             (Self::Numeric(a), Self::Numeric(b)) => a.to_bits() == b.to_bits(),
             (Self::String(a), Self::String(b)) => a == b,
+            (Self::LongString(a), Self::LongString(b)) => a == b,
             _ => false,
         }
     }
@@ -52,6 +80,10 @@ impl Hash for ValueLabelValue {
             }
             Self::String(bytes) => {
                 1u8.hash(state);
+                bytes.hash(state);
+            }
+            Self::LongString(bytes) => {
+                2u8.hash(state);
                 bytes.hash(state);
             }
         }

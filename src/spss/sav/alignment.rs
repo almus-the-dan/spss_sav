@@ -27,6 +27,18 @@ pub enum Alignment {
 }
 
 impl Alignment {
+    /// Classifies an on-disk alignment byte, preserving anything
+    /// outside `0..=2` in [`Unknown`](Self::Unknown).
+    #[must_use]
+    pub(crate) fn from_byte(byte: u8) -> Self {
+        match byte {
+            0 => Self::Left,
+            1 => Self::Right,
+            2 => Self::Center,
+            other => Self::Unknown(other),
+        }
+    }
+
     /// On-disk byte representation of this alignment.
     #[must_use]
     #[allow(dead_code)] // exercised once the writer phase lands.
@@ -55,5 +67,17 @@ mod tests {
     fn to_byte_preserves_unknown() {
         assert_eq!(Alignment::Unknown(7).to_byte(), 7);
         assert_eq!(Alignment::Unknown(255).to_byte(), 255);
+    }
+
+    #[test]
+    fn from_byte_round_trips_every_canonical_alignment() {
+        for byte in 0..=2 {
+            assert_eq!(Alignment::from_byte(byte).to_byte(), byte);
+        }
+    }
+
+    #[test]
+    fn from_byte_preserves_an_out_of_range_byte() {
+        assert_eq!(Alignment::from_byte(9), Alignment::Unknown(9));
     }
 }

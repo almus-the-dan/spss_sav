@@ -15,6 +15,14 @@ use crate::spss::sav::sav_creation_timestamp::SavCreationTimestamp;
 /// file-attribute writer options (compression, byte order, float
 /// format, file label, …) live here rather than on the writer
 /// itself.
+///
+/// The weight variable is the one preamble field deliberately absent.
+/// The header block stores it as an offset into the data row, and the
+/// variable it points at is a property of the dictionary — SPSS spells
+/// it `WEIGHT BY`, alongside variable labels and missing values, not
+/// alongside the file label. It is reported by
+/// [`SavSchema::weight_variable`](crate::spss::sav::sav_schema::SavSchema::weight_variable),
+/// which can hand back the variable itself rather than its name.
 #[derive(Debug, Clone)]
 pub struct SavHeader {
     product_name: String,
@@ -24,7 +32,6 @@ pub struct SavHeader {
     byte_order: ByteOrder,
     float_format: FloatFormat,
     bias: f64,
-    weight_variable: Option<String>,
     case_count: Option<u32>,
     nominal_case_size: Option<u32>,
 }
@@ -116,13 +123,6 @@ impl SavHeader {
         self.bias
     }
 
-    /// Long name of the weight variable, if one was declared.
-    #[must_use]
-    #[inline]
-    pub fn weight_variable(&self) -> Option<&str> {
-        self.weight_variable.as_deref()
-    }
-
     /// Declared case count, or `None` when the file recorded `-1`
     /// ("unknown").
     #[must_use]
@@ -153,7 +153,6 @@ pub struct SavHeaderBuilder {
     byte_order: Option<ByteOrder>,
     float_format: Option<FloatFormat>,
     bias: Option<f64>,
-    weight_variable: Option<String>,
     case_count: Option<u32>,
     nominal_case_size: Option<u32>,
 }
@@ -216,22 +215,6 @@ impl SavHeaderBuilder {
         self
     }
 
-    /// Sets the weight variable's long name.
-    #[must_use]
-    #[inline]
-    pub fn weight_variable(mut self, name: impl Into<String>) -> Self {
-        self.weight_variable = Some(name.into());
-        self
-    }
-
-    /// Clears the weight variable's long name.
-    #[must_use]
-    #[inline]
-    pub fn clear_weight_variable(mut self) -> Self {
-        self.weight_variable = None;
-        self
-    }
-
     /// Sets the declared case count.
     ///
     /// Crate-internal — the writer patches this in via
@@ -280,7 +263,6 @@ impl SavHeaderBuilder {
             byte_order: self.byte_order.unwrap_or(ByteOrder::LittleEndian),
             float_format: self.float_format.unwrap_or(FloatFormat::Ieee754),
             bias: self.bias.unwrap_or(100.0),
-            weight_variable: self.weight_variable,
             case_count: self.case_count,
             nominal_case_size: self.nominal_case_size,
         }

@@ -13,7 +13,12 @@ use crate::spss::sav::byte_order::ByteOrder;
 /// the whole dictionary has been scanned, so an envelope that owned one
 /// could only ever hold a stale guess; the resolved encoding is passed
 /// to each `read` helper as an argument instead.
-#[derive(Debug)]
+///
+/// `Clone` so the buffering pass can keep a copy of the few subtypes
+/// the data layout depends on. Those copies are what let the layout be
+/// derived at finalization no matter which records the caller pulled,
+/// skipped, or filtered out.
+#[derive(Debug, Clone)]
 pub(crate) struct ExtensionEnvelope {
     /// The 4-byte subtype code identifying the extension.
     pub(crate) subtype: i32,

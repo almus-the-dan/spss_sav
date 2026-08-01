@@ -3,7 +3,9 @@
 use crate::spss::sav::buffered_document_record::BufferedDocumentRecord;
 use crate::spss::sav::buffered_value_label_set::BufferedValueLabelSet;
 use crate::spss::sav::buffered_variable_record::BufferedVariableRecord;
+use crate::spss::sav::dictionary_record_kind::DictionaryRecordKind;
 use crate::spss::sav::extension_envelope::ExtensionEnvelope;
+use crate::spss::sav::extensions::extension_subtype::ExtensionSubtype;
 
 /// One dictionary record as read off the wire, before its text has been
 /// decoded.
@@ -25,4 +27,24 @@ pub(crate) enum BufferedRecordPayload {
     Document(BufferedDocumentRecord),
     /// A type-7 extension record of any subtype.
     Extension(ExtensionEnvelope),
+}
+
+impl BufferedRecordPayload {
+    /// This record's kind, available without decoding it.
+    ///
+    /// Classifying an extension costs only an
+    /// [`ExtensionSubtype::from_code`] on the already-read envelope, so
+    /// [`DictionaryReader::peek_kind`](crate::spss::sav::dictionary_reader::DictionaryReader::peek_kind)
+    /// can answer without touching the payload.
+    pub fn kind(&self) -> DictionaryRecordKind {
+        match self {
+            Self::Variable(_) => DictionaryRecordKind::Variable,
+            Self::ValueLabelSet(_) => DictionaryRecordKind::ValueLabelSet,
+            Self::Document(_) => DictionaryRecordKind::Document,
+            Self::Extension(envelope) => {
+                let subtype = ExtensionSubtype::from_code(envelope.subtype);
+                DictionaryRecordKind::Extension(subtype)
+            }
+        }
+    }
 }

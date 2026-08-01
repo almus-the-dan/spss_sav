@@ -12,6 +12,8 @@ pub mod extended_number_of_cases;
 pub mod extension_parse;
 /// Top-level extension record enum.
 pub mod extension_record;
+/// Wire-level discriminant of a type-7 extension record.
+pub mod extension_subtype;
 /// Extra product information (subtype 10).
 pub mod extra_product_info;
 /// File-level custom attributes (subtype 17).

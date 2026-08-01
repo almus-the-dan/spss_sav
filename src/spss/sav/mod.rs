@@ -18,6 +18,8 @@ mod byte_cursor;
 pub mod byte_order;
 /// Compression scheme of a SAV file.
 pub mod compression;
+/// Everything the record reader needs to decode a data row.
+mod data_layout;
 /// Buffering the dictionary section so its text can be decoded later.
 mod dictionary_buffer;
 /// On-disk byte layout of the SAV dictionary section.
@@ -28,6 +30,8 @@ mod dictionary_parse;
 pub mod dictionary_reader;
 /// One typed record from the SAV dictionary section.
 pub mod dictionary_record;
+/// Which kind of record a dictionary record is, without its payload.
+pub mod dictionary_record_kind;
 /// Free-text document lines from a SAV file.
 pub mod document_record;
 /// Where the text encoding the reader applied came from.
@@ -54,6 +58,8 @@ pub mod header_reader;
 pub mod lazy_sav_record;
 /// Measurement level of a SAV variable.
 pub mod measurement_level;
+/// Turning wire-level missing-value bytes into a typed specification.
+mod missing_value_reconcile;
 /// A variable's missing-value specification.
 pub mod missing_value_specification;
 /// Endpoint of a missing-value range.
@@ -64,6 +70,8 @@ pub mod raw_missing_values;
 pub mod raw_value_label_entry;
 /// Wire-level value-label set from a paired type-3 + type-4 record.
 pub mod raw_value_label_set;
+/// Crate-internal bundle of the options set on a `SavReader`.
+mod reader_options;
 /// Crate-internal per-reader state.
 mod reader_state;
 /// Reader for the data-record section of a SAV file.
@@ -82,7 +90,7 @@ pub mod sav_header;
 pub mod sav_reader;
 /// A single decoded SAV data record.
 pub mod sav_record;
-/// Schema of variables in a SAV file.
+/// Schema of variables in a SAV file, and the accumulator that builds one.
 pub mod sav_schema;
 /// A SAV timestamp.
 pub mod sav_timestamp;
@@ -92,6 +100,10 @@ pub mod sav_variable;
 pub mod sav_variable_header;
 /// Recoverable issues raised during SAV reading or writing.
 pub mod sav_warning;
+/// On-disk placement of one variable's bytes within a data row.
+mod segment_layout;
+/// Dictionary content a reader can be told not to retain.
+pub mod skippable_content;
 /// Shared `#[cfg(test)]` helpers for building on-disk SAV byte
 /// streams.
 #[cfg(test)]
@@ -102,13 +114,15 @@ mod text_field;
 pub mod value;
 /// A single value-label mapping.
 pub mod value_label_entry;
-/// A named set of value-label mappings.
+/// A set of value-label mappings attached to a variable.
 pub mod value_label_set;
-/// In-memory lookup table for value-label sets.
-pub mod value_label_table;
 /// Typed key for a value-label entry.
 pub mod value_label_value;
 /// One custom attribute on a SAV variable.
 pub mod variable_attribute;
+/// Collapsing indexed attribute names into array-valued attributes.
+mod variable_attribute_reconcile;
+/// On-disk placement of one logical variable within a data row.
+mod variable_layout;
 /// SAV variable storage type.
 pub mod variable_type;

@@ -20,6 +20,7 @@ use crate::spss::sav::header_format::{
 };
 use crate::spss::sav::sav_error::{Field, FormatErrorKind, SavError};
 use crate::spss::sav::sav_reader::SavReader;
+use crate::spss::sav::skippable_content::SkippableContent;
 
 /// Asserts that `err` is a dictionary `UnexpectedValue` format error
 /// tagged with `expected`.
@@ -83,6 +84,26 @@ pub(crate) fn open_with(
         .from_reader(Cursor::new(bytes))
         .read_header()
         .unwrap()
+}
+
+/// Like [`open`], but skipping the given dictionary content.
+pub(crate) fn open_skipping(
+    bytes: Vec<u8>,
+    skipped: &[SkippableContent],
+) -> DictionaryReader<Cursor<Vec<u8>>> {
+    try_open_skipping(bytes, skipped).unwrap()
+}
+
+/// Like [`open_skipping`], but surfaces the error rather than panicking.
+pub(crate) fn try_open_skipping(
+    bytes: Vec<u8>,
+    skipped: &[SkippableContent],
+) -> Result<DictionaryReader<Cursor<Vec<u8>>>, SavError> {
+    let mut reader = SavReader::new();
+    for &content in skipped {
+        reader = reader.skip_dictionary_content(content);
+    }
+    reader.from_reader(Cursor::new(bytes)).read_header()
 }
 
 /// Appends a subtype-3 machine integer info record declaring

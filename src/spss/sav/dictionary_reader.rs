@@ -27,25 +27,18 @@ use crate::spss::sav::buffered_document_record::BufferedDocumentRecord;
 use crate::spss::sav::buffered_record_payload::BufferedRecordPayload;
 use crate::spss::sav::buffered_value_label_set::BufferedValueLabelSet;
 use crate::spss::sav::buffered_variable_record::BufferedVariableRecord;
+use crate::spss::sav::data_layout::{DataLayout, DataLayoutBuilder};
 use crate::spss::sav::dictionary_buffer::DictionaryBuffer;
-use crate::spss::sav::dictionary_format::{
-    EXTENSION_SUBTYPE_CHARACTER_ENCODING, EXTENSION_SUBTYPE_DATA_FILE_ATTRIBUTES,
-    EXTENSION_SUBTYPE_DISPLAY_PARAMETERS, EXTENSION_SUBTYPE_EXTENDED_NUMBER_OF_CASES,
-    EXTENSION_SUBTYPE_EXTRA_PRODUCT_INFO, EXTENSION_SUBTYPE_FLOAT_INFO,
-    EXTENSION_SUBTYPE_LONG_STRING_MISSING_VALUES, EXTENSION_SUBTYPE_LONG_STRING_VALUE_LABELS,
-    EXTENSION_SUBTYPE_LONG_VARIABLE_NAMES, EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO,
-    EXTENSION_SUBTYPE_MULTIPLE_RESPONSE_SETS, EXTENSION_SUBTYPE_MULTIPLE_RESPONSE_SETS_EXTENDED,
-    EXTENSION_SUBTYPE_UUID, EXTENSION_SUBTYPE_VARIABLE_ATTRIBUTES, EXTENSION_SUBTYPE_VARIABLE_SETS,
-    EXTENSION_SUBTYPE_VERY_LONG_STRINGS,
-};
 use crate::spss::sav::dictionary_parse::{parse_short_name, parse_value_label_entry};
 use crate::spss::sav::dictionary_record::DictionaryRecord;
+use crate::spss::sav::dictionary_record_kind::DictionaryRecordKind;
 use crate::spss::sav::document_record::DocumentRecord;
 use crate::spss::sav::encoding_provenance::EncodingProvenance;
 use crate::spss::sav::extension_envelope::ExtensionEnvelope;
 use crate::spss::sav::extensions::character_encoding;
 use crate::spss::sav::extensions::extended_number_of_cases;
 use crate::spss::sav::extensions::extension_record::ExtensionRecord;
+use crate::spss::sav::extensions::extension_subtype::ExtensionSubtype;
 use crate::spss::sav::extensions::extra_product_info;
 use crate::spss::sav::extensions::file_attributes;
 use crate::spss::sav::extensions::float_sentinels;
@@ -61,10 +54,12 @@ use crate::spss::sav::extensions::variable_attributes;
 use crate::spss::sav::extensions::variable_sets;
 use crate::spss::sav::extensions::very_long_strings;
 use crate::spss::sav::raw_value_label_set::RawValueLabelSet;
+use crate::spss::sav::reader_options::ReaderOptions;
 use crate::spss::sav::reader_state::ReaderState;
 use crate::spss::sav::record_reader::RecordReader;
 use crate::spss::sav::sav_error::Result;
 use crate::spss::sav::sav_header::SavHeader;
+use crate::spss::sav::sav_schema::SavSchemaBuilder;
 use crate::spss::sav::sav_variable_header::SavVariableHeader;
 use crate::spss::sav::sav_warning::SavWarning;
 
@@ -80,49 +75,71 @@ use crate::spss::sav::sav_warning::SavWarning;
 pub struct DictionaryReader<R> {
     state: ReaderState<R>,
     header: SavHeader,
+    /// Options set on the upstream `SavReader`. Consulted at
+    /// finalization to decide whether a schema is assembled.
+    #[allow(dead_code)] // exercised once schema accumulation lands.
+    options: ReaderOptions,
     encoding_provenance: EncodingProvenance,
     /// What the file's own declarations named, regardless of what the
     /// reader applied. Only consulted to report an override.
     declared_encoding: Option<EncodingProvenance>,
     buffer: DictionaryBuffer,
-    #[allow(dead_code)] // exercised once the record reader phase lands.
-    weight_variable_index: Option<usize>,
+    /// The in-progress schema, folded together at
+    /// [`into_record_reader`](Self::into_record_reader). Left empty when
+    /// the caller turned schema building off.
+    schema: SavSchemaBuilder,
+    /// 0-based offset of the weight variable within a data row, in
+    /// 8-byte units — the form the header declares it in.
+    ///
+    /// Also the physical type-2 record position, continuations
+    /// included: a numeric variable and each string segment occupy one
+    /// unit and one record apiece, so the two counts never diverge.
+    weight_offset: Option<usize>,
 }
 
 impl<R> DictionaryReader<R> {
     pub(crate) fn new(
         state: ReaderState<R>,
         header: SavHeader,
+        options: ReaderOptions,
         encoding_provenance: EncodingProvenance,
         declared_encoding: Option<EncodingProvenance>,
         buffer: DictionaryBuffer,
-        weight_variable_index: Option<usize>,
+        weight_offset: Option<usize>,
     ) -> Self {
         Self {
             state,
             header,
+            options,
             encoding_provenance,
             declared_encoding,
             buffer,
-            weight_variable_index,
+            schema: SavSchemaBuilder::default(),
+            weight_offset,
         }
     }
 
-    /// 0-based index of the declared weight variable, if any.
-    /// Surfaced via [`SavHeader::weight_variable`] (the long name)
-    /// only after the dictionary phase finalizes; before then,
-    /// callers can inspect the raw index here.
+    /// The raw weight offset the header declared, 0-based, or `None`
+    /// when the file declared no weight.
+    ///
+    /// Test-only. A row offset is the least useful of the three index
+    /// spaces and the easiest to misread, so nothing outside the header
+    /// reader's own tests has a reason to see one — the resolved
+    /// variable is reported by
+    /// [`SavSchema::weight_variable`](crate::spss::sav::sav_schema::SavSchema::weight_variable)
+    /// once the dictionary phase finalizes.
+    #[cfg(test)]
     #[must_use]
     #[inline]
-    #[allow(dead_code)] // exercised once the record reader phase lands.
-    pub(crate) fn weight_variable_index(&self) -> Option<usize> {
-        self.weight_variable_index
+    pub(crate) fn weight_offset(&self) -> Option<usize> {
+        self.weight_offset
     }
 
     /// The file header parsed by the upstream
     /// [`HeaderReader`](crate::spss::sav::header_reader::HeaderReader).
-    /// `weight_variable` and any other extension-derived fields stay
-    /// empty until the dictionary phase finalizes them.
+    ///
+    /// Complete as it stands — every field comes from the 176-byte
+    /// preamble, so nothing here changes as the dictionary is read.
     #[must_use]
     #[inline]
     pub fn header(&self) -> &SavHeader {
@@ -150,32 +167,99 @@ impl<R> DictionaryReader<R> {
     pub fn warnings(&self) -> &[SavWarning] {
         self.state.warnings()
     }
-}
 
-impl<R: Read> DictionaryReader<R> {
-    /// Decodes and returns the next dictionary record. Returns
-    /// `Ok(None)` once every record has been handed out.
+    /// The kind of the record [`read_record`](Self::read_record) would
+    /// return next, or `None` once every record has been handed out.
     ///
-    /// String-variable continuation records were collapsed into their
-    /// primaries while buffering; the caller never sees them.
+    /// Free and infallible: the bytes are already resident, and
+    /// classifying a record needs nothing beyond fields the buffering
+    /// pass has already read. Use it to decide whether the next record
+    /// is worth decoding before paying to decode it.
+    ///
+    /// Records excluded up front via
+    /// [`SavReader::skip_dictionary_content`](crate::spss::sav::sav_reader::SavReader::skip_dictionary_content)
+    /// were never buffered, so this never sees them — the two
+    /// mechanisms compose without overlap.
+    #[must_use]
+    #[inline]
+    pub fn peek_kind(&self) -> Option<DictionaryRecordKind> {
+        self.buffer.peek_kind()
+    }
+
+    /// Passes over the next record without handing it out, returning the
+    /// kind passed over, or `None` once every record has been consumed.
+    ///
+    /// This says "I do not want this record", not "do not read this
+    /// record". The bytes were read during
+    /// [`read_header`](crate::spss::sav::header_reader::HeaderReader::read_header)
+    /// regardless — the up-front
+    /// [`SavReader::skip_dictionary_content`](crate::spss::sav::sav_reader::SavReader::skip_dictionary_content)
+    /// is where the memory win lives. What this saves is the decode and
+    /// the allocations behind it, for a record the caller has looked at
+    /// with [`peek_kind`](Self::peek_kind) and decided against.
+    ///
+    /// So it saves that work only where nobody else needs it. A record
+    /// the schema draws on is decoded and folded in anyway and simply
+    /// not returned; the data layout never depended on this path at all,
+    /// since it comes from a skeleton the buffering pass kept aside. No
+    /// sequence of calls here can leave the schema with a hole in it or
+    /// a data read misaligned.
+    ///
+    /// Clears [`warnings`](Self::warnings) the way
+    /// [`read_record`](Self::read_record) does. A record that was
+    /// processed still reports its warnings — they are about the file,
+    /// and the reader acted on it. One passed over undecoded reports
+    /// nothing.
     ///
     /// # Errors
     ///
-    /// Returns [`SavError::Format`](crate::spss::sav::sav_error::SavError::Format)
-    /// when an extension record's payload does not match its subtype's
-    /// declared shape. Structural errors cannot occur here — they
-    /// surfaced from `read_header`.
-    pub fn read_record(&mut self) -> Result<Option<DictionaryRecord>> {
+    /// Returns whatever [`read_record`](Self::read_record) would for
+    /// this record, when it is one the schema needs and its payload does
+    /// not match its subtype's declared shape. A record nothing needs is
+    /// never decoded and so can never fail.
+    pub fn skip_record(&mut self) -> Result<Option<DictionaryRecordKind>> {
         self.state.warnings_mut().clear();
         let Some(buffered) = self.buffer.next_record() else {
             return Ok(None);
         };
-        // Replay the warnings this record raised while it was read, so
-        // `warnings()` still reports per-call results.
+        let kind = buffered.payload.kind();
+        if !self.wants(kind) {
+            return Ok(Some(kind));
+        }
         self.state.warnings_mut().extend(buffered.warnings);
+        let record = self.decode(buffered.payload)?;
+        self.accumulate(&record);
+        Ok(Some(kind))
+    }
 
+    /// Whether the library itself draws on a record of this kind, and so
+    /// must decode it even when the caller has passed over it.
+    ///
+    /// Mirrors [`accumulate`](Self::accumulate) — every kind that method
+    /// does something with has to be listed here. Nothing consults the
+    /// data layout: that is built from the buffer's skeleton, not from
+    /// these records.
+    fn wants(&self, kind: DictionaryRecordKind) -> bool {
+        if !self.options.build_schema() {
+            return false;
+        }
+        match kind {
+            DictionaryRecordKind::Variable | DictionaryRecordKind::ValueLabelSet => true,
+            DictionaryRecordKind::Document => false,
+            DictionaryRecordKind::Extension(subtype) => matches!(
+                subtype,
+                ExtensionSubtype::LongVariableNames
+                    | ExtensionSubtype::DisplayParameters
+                    | ExtensionSubtype::VariableAttributes
+                    | ExtensionSubtype::LongValueLabels
+                    | ExtensionSubtype::LongMissingValues
+            ),
+        }
+    }
+    /// Decodes one buffered payload into the record a caller sees.
+    fn decode(&mut self, payload: BufferedRecordPayload) -> Result<DictionaryRecord> {
         let encoding = self.encoding_provenance.encoding();
-        let record = match buffered.payload {
+        let record = match payload {
             BufferedRecordPayload::Variable(variable) => {
                 let record = decode_variable_record(variable, encoding);
                 DictionaryRecord::Variable(record)
@@ -192,37 +276,40 @@ impl<R: Read> DictionaryReader<R> {
                 self.decode_extension_record(envelope, encoding)?
             }
         };
-        Ok(Some(record))
+        Ok(record)
     }
 
-    /// Auto-consumes any remaining dictionary records, finalizes
-    /// the schema, and transitions to record reading.
+    /// Folds a decoded record into the in-progress schema.
     ///
-    /// # Errors
-    ///
-    /// Returns whatever [`read_record`](Self::read_record) would
-    /// return for any record consumed during finalization.
-    ///
-    /// # Implementation note
-    ///
-    /// The [`SavSchema`](crate::spss::sav::sav_schema::SavSchema) must be
-    /// accumulated **in [`read_record`](Self::read_record), as each
-    /// record is handed out** — not rebuilt here.
-    ///
-    /// Records are buffered by
-    /// [`read_header`](crate::spss::sav::header_reader::HeaderReader::read_header)
-    /// and drained one at a time, and draining *moves* each record out of
-    /// the buffer so its bytes are released. By the time this runs, every
-    /// record the caller already pulled is gone, so there is nothing left
-    /// here to rebuild a schema from. Only the records the caller never
-    /// pulled are still available, which is why this method has to
-    /// auto-consume them through the same path.
-    ///
-    /// Still open when this lands: whether the schema copies content out
-    /// of the dictionary records or borrows it somehow. That question is
-    /// what deferred the design, not the mechanism above.
-    pub fn into_record_reader(self) -> Result<RecordReader<R>> {
-        todo!("body lands with the record reader phase")
+    /// A no-op when the caller turned schema building off. The data
+    /// layout is deliberately not fed here — it comes from the buffer's
+    /// own skeleton at finalization, so it cannot depend on which
+    /// records were pulled.
+    fn accumulate(&mut self, record: &DictionaryRecord) {
+        if !self.options.build_schema() {
+            return;
+        }
+        match record {
+            DictionaryRecord::Variable(header) => self.schema.push_variable(header),
+            DictionaryRecord::ValueLabelSet(set) => self.schema.push_value_labels(set),
+            DictionaryRecord::Document(_) => {}
+            DictionaryRecord::Extension(extension) => match extension {
+                ExtensionRecord::LongVariableNames(names) => self.schema.set_long_names(names),
+                ExtensionRecord::DisplayParameters(parameters) => {
+                    self.schema.set_display_parameters(parameters);
+                }
+                ExtensionRecord::VariableAttributes(attributes) => {
+                    self.schema.set_variable_attributes(attributes);
+                }
+                ExtensionRecord::LongValueLabels(labels) => {
+                    self.schema.set_long_value_labels(labels);
+                }
+                ExtensionRecord::LongMissingValues(values) => {
+                    self.schema.set_long_missing_values(values);
+                }
+                _ => {}
+            },
+        }
     }
 
     /// Dispatches an extension envelope to its per-subtype reader.
@@ -236,32 +323,28 @@ impl<R: Read> DictionaryReader<R> {
         encoding: &'static Encoding,
     ) -> Result<DictionaryRecord> {
         self.warn_if_override_disagrees(envelope.subtype);
-        match envelope.subtype {
-            EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO => {
+        match ExtensionSubtype::from_code(envelope.subtype) {
+            ExtensionSubtype::MachineIntegerInfo => {
                 machine_integer_info::read(&envelope, &self.header, self.state.warnings_mut())
             }
-            EXTENSION_SUBTYPE_FLOAT_INFO => float_sentinels::read(&envelope),
-            EXTENSION_SUBTYPE_EXTENDED_NUMBER_OF_CASES => extended_number_of_cases::read(&envelope),
-            EXTENSION_SUBTYPE_CHARACTER_ENCODING => character_encoding::read(&envelope),
-            EXTENSION_SUBTYPE_LONG_VARIABLE_NAMES => long_variable_names::read(&envelope, encoding),
-            EXTENSION_SUBTYPE_VERY_LONG_STRINGS => very_long_strings::read(&envelope, encoding),
-            EXTENSION_SUBTYPE_DISPLAY_PARAMETERS => raw_display_parameters::read(&envelope),
-            EXTENSION_SUBTYPE_VARIABLE_SETS => variable_sets::read(&envelope, encoding),
-            EXTENSION_SUBTYPE_MULTIPLE_RESPONSE_SETS
-            | EXTENSION_SUBTYPE_MULTIPLE_RESPONSE_SETS_EXTENDED => {
+            ExtensionSubtype::FloatInfo => float_sentinels::read(&envelope),
+            ExtensionSubtype::ExtendedNumberOfCases => extended_number_of_cases::read(&envelope),
+            ExtensionSubtype::CharacterEncoding => character_encoding::read(&envelope),
+            ExtensionSubtype::LongVariableNames => long_variable_names::read(&envelope, encoding),
+            ExtensionSubtype::VeryLongStrings => very_long_strings::read(&envelope, encoding),
+            ExtensionSubtype::DisplayParameters => raw_display_parameters::read(&envelope),
+            ExtensionSubtype::VariableSets => variable_sets::read(&envelope, encoding),
+            ExtensionSubtype::MultipleResponseSets
+            | ExtensionSubtype::MultipleResponseSetsExtended => {
                 multiple_response_sets::read(&envelope, encoding)
             }
-            EXTENSION_SUBTYPE_EXTRA_PRODUCT_INFO => extra_product_info::read(&envelope, encoding),
-            EXTENSION_SUBTYPE_UUID => uuid::read(&envelope, encoding),
-            EXTENSION_SUBTYPE_DATA_FILE_ATTRIBUTES => file_attributes::read(&envelope, encoding),
-            EXTENSION_SUBTYPE_VARIABLE_ATTRIBUTES => variable_attributes::read(&envelope, encoding),
-            EXTENSION_SUBTYPE_LONG_STRING_VALUE_LABELS => {
-                long_value_labels::read(&envelope, encoding)
-            }
-            EXTENSION_SUBTYPE_LONG_STRING_MISSING_VALUES => {
-                long_missing_values::read(&envelope, encoding)
-            }
-            _ => {
+            ExtensionSubtype::ExtraProductInfo => extra_product_info::read(&envelope, encoding),
+            ExtensionSubtype::Uuid => uuid::read(&envelope, encoding),
+            ExtensionSubtype::FileAttributes => file_attributes::read(&envelope, encoding),
+            ExtensionSubtype::VariableAttributes => variable_attributes::read(&envelope, encoding),
+            ExtensionSubtype::LongValueLabels => long_value_labels::read(&envelope, encoding),
+            ExtensionSubtype::LongMissingValues => long_missing_values::read(&envelope, encoding),
+            ExtensionSubtype::Unrecognized => {
                 let unknown = self.decode_unknown_extension(envelope);
                 Ok(unknown)
             }
@@ -288,18 +371,21 @@ impl<R: Read> DictionaryReader<R> {
         let EncodingProvenance::Overridden(used) = self.encoding_provenance else {
             return;
         };
-        let declaring_subtype = match self.declared_encoding {
-            Some(EncodingProvenance::Label(_)) => EXTENSION_SUBTYPE_CHARACTER_ENCODING,
-            Some(EncodingProvenance::Codepage(_)) => EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO,
+        // Bound together so the encoding comes from the same match that
+        // identified the declaring record, rather than being re-derived
+        // from a value only this match proves is present.
+        let (declaring_subtype, declared) = match self.declared_encoding {
+            Some(EncodingProvenance::Label(declared)) => {
+                (ExtensionSubtype::CharacterEncoding, declared)
+            }
+            Some(EncodingProvenance::Codepage(declared)) => {
+                (ExtensionSubtype::MachineIntegerInfo, declared)
+            }
             _ => return,
         };
-        if subtype != declaring_subtype {
+        if ExtensionSubtype::from_code(subtype) != declaring_subtype {
             return;
         }
-        let declared = self
-            .declared_encoding
-            .expect("matched a declaring variant above")
-            .encoding();
         if declared == used {
             return;
         }
@@ -332,6 +418,177 @@ impl<R: Read> DictionaryReader<R> {
         let record = ExtensionRecord::Unknown(unknown);
         DictionaryRecord::Extension(record)
     }
+}
+
+impl<R: Read> DictionaryReader<R> {
+    /// Decodes and returns the next dictionary record. Returns
+    /// `Ok(None)` once every record has been handed out.
+    ///
+    /// String-variable continuation records were collapsed into their
+    /// primaries while buffering; the caller never sees them.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SavError::Format`](crate::spss::sav::sav_error::SavError::Format)
+    /// when an extension record's payload does not match its subtype's
+    /// declared shape. Structural errors cannot occur here — they
+    /// surfaced from `read_header`.
+    pub fn read_record(&mut self) -> Result<Option<DictionaryRecord>> {
+        self.state.warnings_mut().clear();
+        let Some(buffered) = self.buffer.next_record() else {
+            return Ok(None);
+        };
+        // Replay the warnings this record raised while it was read, so
+        // `warnings()` still reports per-call results.
+        self.state.warnings_mut().extend(buffered.warnings);
+
+        let record = self.decode(buffered.payload)?;
+        self.accumulate(&record);
+        Ok(Some(record))
+    }
+
+    /// Auto-consumes any remaining dictionary records, finalizes
+    /// the schema, and transitions to record reading.
+    ///
+    /// Never complains that the caller left records unread — consuming
+    /// them is this method's job.
+    ///
+    /// # Errors
+    ///
+    /// Returns whatever [`read_record`](Self::read_record) would
+    /// return for any record consumed during finalization, plus any
+    /// error from decoding the layout-bearing extension records.
+    ///
+    /// # Implementation note
+    ///
+    /// The schema is accumulated in
+    /// [`read_record`](Self::read_record), as each record is handed
+    /// out, and cannot be rebuilt here: draining *moves* each record out
+    /// of the buffer, so by the time this runs everything the caller
+    /// already pulled is gone. Only the records they never pulled remain,
+    /// which is why finalization has to drive them through the same path
+    /// rather than making a second pass.
+    ///
+    /// The data layout is the exception, and deliberately so. It is
+    /// derived from a compact skeleton the buffering pass kept aside —
+    /// each variable's short name and declared type, plus copies of the
+    /// three extension records the layout depends on. That is what makes
+    /// the layout independent of every filtering choice: pull the
+    /// records, skip them, exclude them up front, or never touch the
+    /// reader, and the rows still read the same.
+    pub fn into_record_reader(mut self) -> Result<RecordReader<R>> {
+        self.state.warnings_mut().clear();
+        while self.read_record()?.is_some() {
+            self.state.warnings_mut().clear();
+        }
+        self.state.warnings_mut().clear();
+
+        let encoding = self.encoding_provenance.encoding();
+        let layout = self.build_layout(encoding)?;
+
+        let weight = self.weight_variable_index(&layout);
+        let schema = if self.options.build_schema() {
+            let mut warnings = Vec::new();
+            let accumulated = std::mem::take(&mut self.schema);
+            let schema = accumulated.build(
+                &layout,
+                self.header.float_encoding(),
+                layout.sentinels(),
+                weight,
+                &mut warnings,
+            );
+            self.state.warnings_mut().append(&mut warnings);
+            Some(schema)
+        } else {
+            None
+        };
+
+        let reader = RecordReader::new(
+            self.state,
+            self.header,
+            self.encoding_provenance,
+            layout,
+            schema,
+        );
+        Ok(reader)
+    }
+
+    /// Rebuilds the data layout from the buffer's skeleton.
+    fn build_layout(&mut self, encoding: &'static Encoding) -> Result<DataLayout> {
+        let mut builder = DataLayoutBuilder::default();
+        for (short_name, variable_type) in self.buffer.skeleton().variables() {
+            let short_name = parse_short_name(*short_name, encoding);
+            builder.push_variable(short_name, *variable_type);
+        }
+        // Cloned so the borrow of the buffer ends before the builder is
+        // fed; there are at most three of these, and they are tiny.
+        let envelopes: Vec<_> = self.buffer.skeleton().envelopes().to_vec();
+        for envelope in &envelopes {
+            match ExtensionSubtype::from_code(envelope.subtype) {
+                ExtensionSubtype::FloatInfo => {
+                    if let DictionaryRecord::Extension(ExtensionRecord::FloatInfo(sentinels)) =
+                        float_sentinels::read(envelope)?
+                    {
+                        builder.set_sentinels(sentinels);
+                    }
+                }
+                ExtensionSubtype::VeryLongStrings => {
+                    if let DictionaryRecord::Extension(ExtensionRecord::VeryLongStrings(strings)) =
+                        very_long_strings::read(envelope, encoding)?
+                    {
+                        builder.set_very_long_strings(&strings);
+                    }
+                }
+                ExtensionSubtype::ExtendedNumberOfCases => {
+                    if let DictionaryRecord::Extension(ExtensionRecord::ExtendedNumberOfCases(
+                        cases,
+                    )) = extended_number_of_cases::read(envelope)?
+                    {
+                        builder.set_extended_case_count(cases.count());
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut warnings = Vec::new();
+        let layout = builder.build(&self.header, encoding, &mut warnings);
+        self.state.warnings_mut().append(&mut warnings);
+        Ok(layout)
+    }
+
+    /// The weight variable's position in the finalized schema, resolved
+    /// from the row offset the header declared.
+    ///
+    /// Three index spaces have to be crossed. The header stores an
+    /// offset into the data row, which is also the *physical* record
+    /// position since a numeric variable and each string segment occupy
+    /// one 8-byte unit apiece; the skeleton turns that into a *segment*;
+    /// and the layout's segment grouping turns that into the *variable*
+    /// the schema indexes by.
+    ///
+    /// `None` when the file declared no weight, or when the offset names
+    /// a continuation record or a position past the end.
+    fn weight_variable_index(&self, layout: &DataLayout) -> Option<usize> {
+        let physical = u32::try_from(self.weight_offset?).ok()?;
+        let segment = self.buffer.skeleton().segment_of_physical(physical)?;
+        variable_of_segment(layout, segment)
+    }
+}
+
+/// The logical variable that owns `segment`, or `None` when the segment
+/// index lies past the end.
+///
+/// A very long string owns several consecutive segments, so the mapping
+/// is a walk over the layout's grouping rather than an identity.
+fn variable_of_segment(layout: &DataLayout, segment: usize) -> Option<usize> {
+    let mut seen = 0;
+    for (index, variable) in layout.variables().iter().enumerate() {
+        seen += variable.segments().len();
+        if segment < seen {
+            return Some(index);
+        }
+    }
+    None
 }
 
 /// Decodes a buffered variable record's two text fields into a
@@ -371,7 +628,7 @@ fn decode_value_label_set(
         .collect();
     RawValueLabelSet::builder()
         .entries(entries)
-        .variable_indices(set.variable_indices)
+        .segment_indices(set.segment_indices)
         .build()
 }
 
@@ -1149,7 +1406,7 @@ mod tests {
         assert_eq!(set.entries()[0].label(), "one");
         assert_eq!(set.entries()[1].value(), 2.0_f64.to_le_bytes());
         assert_eq!(set.entries()[1].label(), "two");
-        assert_eq!(set.variable_indices(), &[0]);
+        assert_eq!(set.segment_indices(), &[0]);
     }
 
     #[test]
@@ -1184,7 +1441,7 @@ mod tests {
         assert_eq!(set.entries()[0].value(), *b"M\0\0\0\0\0\0\0");
         assert_eq!(set.entries()[0].label(), "Male");
         assert_eq!(set.entries()[1].label(), "Female");
-        assert_eq!(set.variable_indices(), &[0]);
+        assert_eq!(set.segment_indices(), &[0]);
     }
 
     #[test]
@@ -1217,7 +1474,7 @@ mod tests {
         let DictionaryRecord::ValueLabelSet(set) = records.last().unwrap() else {
             panic!("expected ValueLabelSet last");
         };
-        assert_eq!(set.variable_indices(), &[0, 1]);
+        assert_eq!(set.segment_indices(), &[0, 1]);
     }
 
     #[test]
@@ -1263,7 +1520,7 @@ mod tests {
         let DictionaryRecord::ValueLabelSet(set) = records.last().unwrap() else {
             panic!("expected ValueLabelSet");
         };
-        assert_eq!(set.variable_indices(), &[1]);
+        assert_eq!(set.segment_indices(), &[1]);
     }
 
     #[test]
@@ -1398,7 +1655,7 @@ mod tests {
         let DictionaryRecord::ValueLabelSet(set) = record else {
             panic!("expected ValueLabelSet");
         };
-        assert_eq!(set.variable_indices(), &[] as &[u32]);
+        assert_eq!(set.segment_indices(), &[] as &[u32]);
         assert!(
             dict.warnings()
                 .iter()
@@ -1436,7 +1693,7 @@ mod tests {
         let DictionaryRecord::ValueLabelSet(set) = records.last().unwrap() else {
             panic!("expected ValueLabelSet");
         };
-        assert_eq!(set.variable_indices(), &[0, 2, 0]);
+        assert_eq!(set.segment_indices(), &[0, 2, 0]);
     }
 
     #[test]

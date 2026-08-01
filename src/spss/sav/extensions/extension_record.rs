@@ -3,6 +3,7 @@
 use crate::spss::sav::extensions::character_encoding::CharacterEncoding;
 use crate::spss::sav::extensions::data_entry::DataEntry;
 use crate::spss::sav::extensions::extended_number_of_cases::ExtendedNumberOfCases;
+use crate::spss::sav::extensions::extension_subtype::ExtensionSubtype;
 use crate::spss::sav::extensions::extra_product_info::ExtraProductInfo;
 use crate::spss::sav::extensions::file_attributes::FileAttributes;
 use crate::spss::sav::extensions::float_sentinels::FloatSentinels;
@@ -88,4 +89,43 @@ pub enum ExtensionRecord {
     /// An extension subtype this library does not yet recognize. The
     /// raw bytes are preserved verbatim for round-trip fidelity.
     Unknown(UnknownExtension),
+}
+
+impl ExtensionRecord {
+    /// Which subtype this record carries.
+    ///
+    /// [`Unknown`](Self::Unknown) maps to
+    /// [`ExtensionSubtype::Unrecognized`] — the record's actual on-disk
+    /// code stays available via
+    /// [`UnknownExtension::subtype`](crate::spss::sav::extensions::unknown_extension::UnknownExtension::subtype).
+    ///
+    /// Subtypes 7 and 19 share the
+    /// [`MultipleResponseSets`](Self::MultipleResponseSets) variant, so
+    /// this reports 7 for both. A caller that needs to tell the two
+    /// apart has to look at the record as it streams; nothing
+    /// downstream of parsing distinguishes them.
+    #[must_use]
+    pub fn subtype(&self) -> ExtensionSubtype {
+        match self {
+            Self::MachineIntegerInfo(_) => ExtensionSubtype::MachineIntegerInfo,
+            Self::FloatInfo(_) => ExtensionSubtype::FloatInfo,
+            Self::VariableSets(_) => ExtensionSubtype::VariableSets,
+            Self::MultipleResponseSets(_) => ExtensionSubtype::MultipleResponseSets,
+            Self::ExtraProductInfo(_) => ExtensionSubtype::ExtraProductInfo,
+            Self::Uuid(_) => ExtensionSubtype::Uuid,
+            Self::DisplayParameters(_) => ExtensionSubtype::DisplayParameters,
+            Self::LongVariableNames(_) => ExtensionSubtype::LongVariableNames,
+            Self::VeryLongStrings(_) => ExtensionSubtype::VeryLongStrings,
+            Self::ExtendedNumberOfCases(_) => ExtensionSubtype::ExtendedNumberOfCases,
+            Self::FileAttributes(_) => ExtensionSubtype::FileAttributes,
+            Self::VariableAttributes(_) => ExtensionSubtype::VariableAttributes,
+            Self::CharacterEncoding(_) => ExtensionSubtype::CharacterEncoding,
+            Self::LongValueLabels(_) => ExtensionSubtype::LongValueLabels,
+            Self::LongMissingValues(_) => ExtensionSubtype::LongMissingValues,
+            // Subtype 15 has no parser, so this variant is never
+            // produced by the reader; it exists for the writer and for
+            // round-tripping a record a caller built by hand.
+            Self::DataEntry(_) | Self::Unknown(_) => ExtensionSubtype::Unrecognized,
+        }
+    }
 }
