@@ -150,6 +150,10 @@ impl SavVariable {
     /// Matched case-insensitively: an attribute name is an SPSS
     /// identifier, and identifiers are not case-sensitive, so two
     /// attributes cannot differ by case alone.
+    ///
+    /// ASCII-only, with the same shortfall and the same miss-rather-
+    /// than-mismatch behavior described on
+    /// [`SavSchema::variable_index`](crate::spss::sav::sav_schema::SavSchema::variable_index).
     #[must_use]
     pub fn attribute(&self, name: &str) -> Option<&VariableAttribute> {
         self.attributes

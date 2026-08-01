@@ -111,6 +111,19 @@ impl SavSchema {
     /// The first declaration wins if a malformed file names two
     /// variables the same, matching how reconciliation resolves the
     /// names that extension records key off.
+    ///
+    /// # Non-ASCII names
+    ///
+    /// Case-insensitivity is **ASCII-only**, so `GRÜN` does not find
+    /// `grün`. SPSS compares identifiers with full Unicode caseless
+    /// matching over compatibility-normalized forms, under which
+    /// `straße` and `STRASSE` are one name and so are the NFC and NFD
+    /// spellings of `café`. Matching that needs Unicode case-folding
+    /// and normalization tables this crate does not currently carry.
+    ///
+    /// The shortfall can only ever *miss* a match, never return the
+    /// wrong variable, so a lookup that should have hit comes back
+    /// `None` rather than resolving to a neighbour.
     #[must_use]
     pub fn variable_index(&self, name: &str) -> Option<usize> {
         self.variables
