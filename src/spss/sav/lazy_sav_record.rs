@@ -1,6 +1,7 @@
 //! A single data record decoded on demand, cell by cell.
 
 use crate::spss::sav::data_layout::DataLayout;
+use crate::spss::sav::record_parse::parse_cell;
 use crate::spss::sav::value::Value;
 
 /// A single data record decoded on demand, cell by cell.
@@ -54,8 +55,8 @@ impl<'a> LazySavRecord<'a> {
     /// [`StringValue::raw`](crate::spss::sav::string_value::StringValue::raw)
     /// either way.
     #[must_use]
-    pub fn value(&self, _index: usize) -> Option<Value<'a>> {
-        let _ = self.row;
-        todo!("body lands with Phase 6(a)")
+    pub fn value(&self, index: usize) -> Option<Value<'a>> {
+        let variable = self.layout.variables().get(index)?;
+        parse_cell(self.row, variable, self.layout)
     }
 }

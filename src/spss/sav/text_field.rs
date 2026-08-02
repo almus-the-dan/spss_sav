@@ -184,9 +184,9 @@ mod tests {
         // A deterministic spread of shapes: content and padding
         // interleaved at every offset around two chunk boundaries.
         for len in 0..(TRIM_CHUNK_LEN * 2 + 3) {
-            for pattern in 0..8_u32 {
+            for pattern in 0..8_usize {
                 let bytes: Vec<u8> = (0..len)
-                    .map(|index| match (index as u32 + pattern) % 4 {
+                    .map(|index| match (index + pattern) % 4 {
                         0 => b' ',
                         1 => 0,
                         2 => b'x',

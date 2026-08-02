@@ -187,16 +187,18 @@ mod tests {
     }
 
     /// With the canonical bias the inline codes cover exactly the range
-    /// ReadStat's compressor emits them for.
+    /// the compressor emits them for. Stated in integers: the
+    /// endpoints are whole numbers, and the decoder's `f64` arithmetic
+    /// represents them exactly.
     #[test]
-    fn inline_codes_cover_the_readstat_range() {
-        let bias = 100.0_f64;
-        assert_eq!(f64::from(COMMAND_INLINE_MIN) - bias, -99.0);
-        assert_eq!(f64::from(COMMAND_INLINE_MAX) - bias, 151.0);
+    fn inline_codes_cover_the_canonical_range() {
+        let bias = 100_i32;
+        assert_eq!(i32::from(COMMAND_INLINE_MIN) - bias, -99);
+        assert_eq!(i32::from(COMMAND_INLINE_MAX) - bias, 151);
     }
 
     /// The ZSAV field offsets tile their records with no gap or
-    /// overlap, matching ReadStat's packed structs.
+    /// overlap.
     #[test]
     fn zsav_field_offsets_tile_their_records() {
         let zheader = [

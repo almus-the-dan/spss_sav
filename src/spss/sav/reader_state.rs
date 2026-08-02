@@ -14,7 +14,7 @@
 //! uncompressed, so phases through the dictionary reader do not
 //! need it.
 
-use std::io::Read;
+use std::io::{ErrorKind, Read};
 
 use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::sav_error::{Field, FormatErrorKind, Result, SavError, Section};
@@ -126,6 +126,44 @@ impl<R: Read> ReaderState<R> {
         Ok(out)
     }
 
+    /// Fills `buffer` from the reader, telling a clean end of stream
+    /// apart from a truncated one.
+    ///
+    /// Returns `Ok(false)` when the stream was already exhausted and
+    /// not one byte was read. That is how a data section ordinarily
+    /// ends: PSPP writes no end-of-data marker, and the declared case
+    /// count may be absent or wrong, so running out of bytes on a row
+    /// boundary is the only reliable signal. `Ok(true)` means `buffer`
+    /// was filled. A stream that stops partway through is truncated and
+    /// errors.
+    ///
+    /// Unlike [`read_vec`](Self::read_vec) this fills a caller-owned
+    /// buffer, which is what lets the record reader reuse one row
+    /// allocation for the whole file.
+    pub fn read_into(&mut self, buffer: &mut [u8], section: Section) -> Result<bool> {
+        let mut filled = 0;
+        while filled < buffer.len() {
+            match self.reader.read(&mut buffer[filled..]) {
+                Ok(0) => break,
+                Ok(read) => filled += read,
+                Err(e) if e.kind() == ErrorKind::Interrupted => {}
+                Err(e) => return Err(SavError::io(section, e)),
+            }
+        }
+        self.advance(filled, section)?;
+        if filled == 0 {
+            return Ok(false);
+        }
+        if filled < buffer.len() {
+            let kind = FormatErrorKind::Truncated {
+                expected: as_u64(buffer.len()),
+                actual: as_u64(filled),
+            };
+            return Err(SavError::format(section, self.position, kind));
+        }
+        Ok(true)
+    }
+
     /// Reads exactly `N` bytes into a stack-allocated array.
     pub fn read_array<const N: usize>(&mut self, section: Section) -> Result<[u8; N]> {
         let mut out = [0u8; N];
@@ -203,6 +241,16 @@ impl<R: Read> ReaderState<R> {
         let value = byte_order.read_f64(bytes);
         Ok(value)
     }
+}
+
+/// Widens a byte count for reporting inside an error.
+///
+/// Saturates rather than failing: this is only ever called on a length
+/// that has already been read successfully, on a path that is already
+/// returning an error, so a second error kind would say nothing useful.
+/// Unreachable anyway unless `usize` is wider than `u64`.
+fn as_u64(len: usize) -> u64 {
+    u64::try_from(len).unwrap_or(u64::MAX)
 }
 
 /// Casts a `u32` to a `usize`, mapping any failure to a

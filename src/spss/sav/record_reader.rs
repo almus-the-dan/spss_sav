@@ -14,7 +14,8 @@ use crate::spss::sav::data_layout::DataLayout;
 use crate::spss::sav::encoding_provenance::EncodingProvenance;
 use crate::spss::sav::lazy_sav_record::LazySavRecord;
 use crate::spss::sav::reader_state::ReaderState;
-use crate::spss::sav::sav_error::Result;
+use crate::spss::sav::record_parse::parse_cell;
+use crate::spss::sav::sav_error::{FormatErrorKind, Result, SavError, Section};
 use crate::spss::sav::sav_header::SavHeader;
 use crate::spss::sav::sav_record::SavRecord;
 use crate::spss::sav::sav_schema::SavSchema;
@@ -61,7 +62,18 @@ impl<R: Read> RecordReader<R> {
     /// the underlying reader fails, or if the data section ends partway
     /// through a row.
     pub fn read_record(&mut self) -> Result<Option<SavRecord<'_>>> {
-        todo!("body lands with Phase 6(a)")
+        if !self.advance_row()? {
+            return Ok(None);
+        }
+        let mut values = Vec::with_capacity(self.layout.variables().len());
+        for variable in self.layout.variables() {
+            let Some(value) = parse_cell(&self.row, variable, &self.layout) else {
+                return Err(self.short_row());
+            };
+            values.push(value);
+        }
+        let record = SavRecord::new(values);
+        Ok(Some(record))
     }
 
     /// Reads the next data row without decoding any of its cells.
@@ -74,7 +86,11 @@ impl<R: Read> RecordReader<R> {
     ///
     /// As [`read_record`](Self::read_record).
     pub fn read_lazy_record(&mut self) -> Result<Option<LazySavRecord<'_>>> {
-        todo!("body lands with Phase 6(a)")
+        if !self.advance_row()? {
+            return Ok(None);
+        }
+        let record = LazySavRecord::new(&self.row, &self.layout);
+        Ok(Some(record))
     }
 
     /// Advances past the next data row without decoding it.
@@ -89,8 +105,60 @@ impl<R: Read> RecordReader<R> {
     ///
     /// As [`read_record`](Self::read_record).
     pub fn skip_record(&mut self) -> Result<bool> {
-        let _ = (&self.source, &self.row, self.rows_read);
-        todo!("body lands with Phase 6(a)")
+        self.advance_row()
+    }
+
+    /// Pulls the next row into the buffer, counting it.
+    ///
+    /// `false` at a clean end of the data section, at which point the
+    /// row count is cross-checked against what the dictionary declared.
+    fn advance_row(&mut self) -> Result<bool> {
+        self.state.warnings_mut().clear();
+        let read = self
+            .source
+            .next_row(&mut self.state, &self.layout, &mut self.row)?;
+        if read {
+            self.rows_read = self.rows_read.saturating_add(1);
+            return Ok(true);
+        }
+        self.check_row_count();
+        Ok(false)
+    }
+
+    /// Compares the rows actually read against the declared case count,
+    /// once the data section has ended.
+    ///
+    /// Warns rather than failing: the rows that were there read back
+    /// correctly whatever the header claimed, so refusing the whole file
+    /// over a stale count would lose good data. PSPP warns here as well;
+    /// `ReadStat` errors.
+    fn check_row_count(&mut self) {
+        let Some(declared) = self.layout.case_count() else {
+            return;
+        };
+        if declared == self.rows_read {
+            return;
+        }
+        let warning = SavWarning::RowCountMismatch {
+            declared,
+            actual: self.rows_read,
+        };
+        self.state.warnings_mut().push(warning);
+    }
+
+    /// The error for a row buffer that came back shorter than the
+    /// layout describes.
+    ///
+    /// Unreachable: every row source fills exactly
+    /// [`DataLayout::row_len`] bytes or reports the stream as ended.
+    /// It exists so a library bug surfaces as an error rather than as a
+    /// panic inside a caller's read loop.
+    fn short_row(&self) -> SavError {
+        let kind = FormatErrorKind::Truncated {
+            expected: u64::try_from(self.layout.row_len()).unwrap_or(u64::MAX),
+            actual: u64::try_from(self.row.len()).unwrap_or(u64::MAX),
+        };
+        SavError::format(Section::Records, self.state.position(), kind)
     }
 }
 

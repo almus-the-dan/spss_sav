@@ -66,6 +66,21 @@ pub enum SavWarning {
         /// Count from the subtype-16 record.
         extended: i64,
     },
+    /// The data section held a different number of rows than the
+    /// dictionary declared. The rows actually present are what was
+    /// handed out; the declared count is only a claim.
+    ///
+    /// Raised once the data section ends, so it cannot be reported
+    /// before the last row has been read or skipped. PSPP warns here
+    /// too; `ReadStat` treats the same disagreement as a hard error,
+    /// and we are deliberately the more forgiving of the two, since the
+    /// rows themselves read back fine either way.
+    RowCountMismatch {
+        /// Rows the dictionary said the file holds.
+        declared: u64,
+        /// Rows the data section actually yielded.
+        actual: u64,
+    },
     /// A `(format-kind, width, decimals)` triple does not match any
     /// valid SPSS display-format combination. The triple is preserved
     /// verbatim; the writer's `finish()` surfaces accumulated

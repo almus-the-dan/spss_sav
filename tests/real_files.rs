@@ -11,8 +11,10 @@
 //! asserting on those volatile values.
 
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Cursor};
 
+use spss_sav::spss::missing_value::MissingValue;
+use spss_sav::spss::numeric::Numeric;
 use spss_sav::spss::sav::byte_order::ByteOrder;
 use spss_sav::spss::sav::compression::compression_kind::CompressionKind;
 use spss_sav::spss::sav::dictionary_reader::DictionaryReader;
@@ -28,10 +30,19 @@ use spss_sav::spss::sav::extensions::multiple_response_set_kind::MultipleRespons
 use spss_sav::spss::sav::float_format::FloatFormat;
 use spss_sav::spss::sav::raw_missing_values::RawMissingValues;
 use spss_sav::spss::sav::raw_value_label_set::RawValueLabelSet;
+use spss_sav::spss::sav::record_reader::RecordReader;
+use spss_sav::spss::sav::sav_error::{FormatErrorKind, SavError, Section};
 use spss_sav::spss::sav::sav_reader::SavReader;
+use spss_sav::spss::sav::sav_record::SavRecord;
 use spss_sav::spss::sav::sav_variable_header::SavVariableHeader;
 use spss_sav::spss::sav::sav_warning::SavWarning;
+use spss_sav::spss::sav::value::Value;
 use spss_sav::spss::sav::variable_type::VariableType;
+
+const COMPRESSION_NONE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/compression_none.sav"
+);
 
 const COMPREHENSIVE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -926,4 +937,231 @@ fn skipping_every_record_produces_the_same_schema_as_reading_them() {
             .and_then(spss_sav::spss::sav::sav_schema::SavSchema::weight_variable)
             .map(spss_sav::spss::sav::sav_variable::SavVariable::full_name),
     );
+}
+
+// ---------------------------------------------------------------------
+// Data records — Uncompressed
+//
+// `compression.sps` writes the same three rows under all three
+// compression schemes so one expected row set can be asserted against
+// every one of them. Only the uncompressed file is read here; the
+// bytecode and ZSAV fixtures join this suite as 6(b) and 6(c) land.
+// ---------------------------------------------------------------------
+
+/// The rows `compression.sps` writes, rendered by `describe_row`.
+///
+/// Note `blank`: row 1 declares eight spaces and row 2 a single space,
+/// and both come back empty — SAV pads every string cell to its
+/// declared width, so a trailing space is indistinguishable from fill.
+const COMPRESSION_ROWS: [[&str; 8]; 3] = [
+    [
+        "1",
+        "0",
+        "1000000",
+        "1.5",
+        ".",
+        "\"\"",
+        "\"aa\"",
+        "\"alpha\"",
+    ],
+    [
+        "2", "151", "-999999", "-0.25", ".", "\"\"", "\"bb\"", "\"beta\"",
+    ],
+    ["3", "-100", "0", "0", ".", "\"xy\"", "\"cc\"", "\"gamma\""],
+];
+
+fn record_reader(path: &str) -> RecordReader<BufReader<File>> {
+    SavReader::new()
+        .from_path(path)
+        .expect("open fixture")
+        .read_header()
+        .expect("read header")
+        .into_record_reader()
+        .expect("finalize")
+}
+
+/// Renders one cell so a row reads as a single line of expectations.
+fn describe_value(value: &Value<'_>) -> String {
+    match value {
+        Value::Numeric(Numeric::Present(number)) => format!("{number}"),
+        Value::Numeric(Numeric::Missing(MissingValue::System)) => ".".to_owned(),
+        Value::Numeric(Numeric::Missing(MissingValue::UserDefined(number))) => {
+            format!("user({number})")
+        }
+        Value::String(string) => format!("{:?}", string.text()),
+    }
+}
+
+fn describe_row(record: &SavRecord<'_>) -> Vec<String> {
+    record.values().iter().map(describe_value).collect()
+}
+
+#[test]
+fn uncompressed_rows_decode_to_their_written_values() {
+    let mut reader = record_reader(COMPRESSION_NONE);
+    assert_eq!(reader.case_count(), Some(3));
+
+    let mut rows = Vec::new();
+    while let Some(record) = reader.read_record().expect("read record") {
+        rows.push(describe_row(&record));
+    }
+    assert_eq!(rows.len(), 3);
+    for (row, expected) in rows.iter().zip(COMPRESSION_ROWS) {
+        assert_eq!(row.as_slice(), expected.as_slice());
+    }
+}
+
+/// The `A300` is stored as a 255-wide segment plus a 48-wide one, so the
+/// eighth cell only reads correctly if reassembly skips the padding byte
+/// between them. `describe_row` above already covers the value; this
+/// pins the shape it came from.
+#[test]
+fn a_very_long_string_cell_reassembles_from_both_segments() {
+    let mut reader = record_reader(COMPRESSION_NONE);
+    let schema = reader.schema().expect("schema").clone();
+    let longstr = schema.variable_by_name("longstr").expect("longstr");
+    assert_eq!(longstr.variable_type(), VariableType::String(300));
+    assert_eq!(longstr.index(), 7);
+
+    let record = reader.read_record().expect("read").expect("a row");
+    let cell = record.values()[longstr.index()]
+        .string()
+        .expect("a string cell");
+    assert_eq!(cell.text(), "alpha");
+}
+
+/// Reading past the last row reports the end rather than erroring: PSPP
+/// writes no end-of-data marker, so a clean EOF on a row boundary is the
+/// only signal there is.
+#[test]
+fn reading_past_the_last_row_reports_the_end() {
+    let mut reader = record_reader(COMPRESSION_NONE);
+    for _ in 0..3 {
+        assert!(reader.read_record().expect("read").is_some());
+    }
+    assert!(reader.read_record().expect("read past end").is_none());
+    assert!(reader.read_record().expect("read past end twice").is_none());
+}
+
+/// The lazy reader must agree with the eager one cell for cell, and
+/// report nothing past the last variable.
+#[test]
+fn lazy_records_agree_with_eager_ones() {
+    let mut eager = record_reader(COMPRESSION_NONE);
+    let mut lazy = record_reader(COMPRESSION_NONE);
+    for expected in COMPRESSION_ROWS {
+        let eager_row = describe_row(&eager.read_record().expect("read").expect("a row"));
+        let record = lazy.read_lazy_record().expect("read").expect("a row");
+        assert_eq!(record.len(), expected.len());
+        assert!(!record.is_empty());
+        let lazy_row: Vec<String> = (0..record.len())
+            .map(|index| describe_value(&record.value(index).expect("a cell")))
+            .collect();
+        assert_eq!(lazy_row, eager_row);
+        assert_eq!(lazy_row.as_slice(), expected.as_slice());
+        assert!(record.value(record.len()).is_none(), "past the last cell");
+    }
+}
+
+/// Skipping advances the same way reading does, so a caller can mix the
+/// two and land on the rows it wanted.
+#[test]
+fn skipping_rows_advances_without_decoding_them() {
+    let mut reader = record_reader(COMPRESSION_NONE);
+    assert!(reader.skip_record().expect("skip"));
+    assert!(reader.skip_record().expect("skip"));
+    let record = reader.read_record().expect("read").expect("third row");
+    assert_eq!(
+        describe_row(&record).as_slice(),
+        COMPRESSION_ROWS[2].as_slice()
+    );
+    assert!(!reader.skip_record().expect("skip past end"));
+}
+
+/// The reason `StringValue` keeps its bytes: a variable's value-label
+/// and missing-value keys are raw, so matching a cell against them has
+/// to be byte-for-byte rather than through decoded text.
+#[test]
+fn string_cells_expose_the_raw_bytes_behind_the_text() {
+    let mut reader = record_reader(COMPRESSION_NONE);
+    let record = reader.read_record().expect("read").expect("a row");
+    let text = record.values()[6].string().expect("the text cell");
+    assert_eq!(text.raw(), b"aa", "padding is already trimmed");
+    assert_eq!(text.text(), "aa");
+}
+
+/// Bytes in one uncompressed row of the compression fixture: five
+/// numerics, an `A8` and an `A4` at one unit each, and the `A300` as a
+/// 256-byte segment plus a 48-byte one.
+const COMPRESSION_ROW_LEN: usize = 5 * 8 + 8 + 8 + 256 + 48;
+
+fn reader_over(bytes: Vec<u8>) -> RecordReader<Cursor<Vec<u8>>> {
+    SavReader::new()
+        .from_reader(Cursor::new(bytes))
+        .read_header()
+        .expect("read header")
+        .into_record_reader()
+        .expect("finalize")
+}
+
+/// A count that matches says nothing.
+#[test]
+fn a_row_count_matching_the_declaration_is_silent() {
+    let mut reader = record_reader(COMPRESSION_NONE);
+    while reader.read_record().expect("read").is_some() {}
+    assert!(reader.warnings().is_empty(), "{:?}", reader.warnings());
+}
+
+/// A file holding fewer rows than it claims still hands back the rows it
+/// does have — the shortfall is a warning, not a failure. `ReadStat`
+/// errors on this; PSPP warns, and so do we.
+#[test]
+fn fewer_rows_than_declared_warns_once_the_data_ends() {
+    let mut bytes = std::fs::read(COMPRESSION_NONE).expect("read fixture");
+    bytes.truncate(bytes.len() - COMPRESSION_ROW_LEN);
+
+    let mut reader = reader_over(bytes);
+    assert_eq!(reader.case_count(), Some(3));
+    let mut rows = 0;
+    while reader.read_record().expect("read").is_some() {
+        rows += 1;
+    }
+    assert_eq!(rows, 2, "the two whole rows still read");
+    assert!(
+        matches!(
+            reader.warnings(),
+            [SavWarning::RowCountMismatch {
+                declared: 3,
+                actual: 2,
+            }],
+        ),
+        "{:?}",
+        reader.warnings(),
+    );
+}
+
+/// Stopping *partway through* a row is a different thing from stopping
+/// on a boundary, and has to be an error rather than a quiet end.
+#[test]
+fn a_row_cut_in_half_is_a_truncation_error() {
+    let mut bytes = std::fs::read(COMPRESSION_NONE).expect("read fixture");
+    bytes.truncate(bytes.len() - COMPRESSION_ROW_LEN / 2);
+
+    let mut reader = reader_over(bytes);
+    assert!(reader.read_record().expect("first row").is_some());
+    assert!(reader.read_record().expect("second row").is_some());
+    let error = reader.read_record().expect_err("a partial row must error");
+    match error {
+        SavError::Format(format) => {
+            assert_eq!(format.section(), Section::Records);
+            assert_eq!(
+                format.kind(),
+                FormatErrorKind::Truncated {
+                    expected: COMPRESSION_ROW_LEN as u64,
+                    actual: (COMPRESSION_ROW_LEN / 2) as u64,
+                },
+            );
+        }
+        other => panic!("expected a format error, got {other:?}"),
+    }
 }

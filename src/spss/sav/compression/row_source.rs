@@ -17,7 +17,7 @@ use crate::spss::sav::compression::file_units::FileUnits;
 use crate::spss::sav::compression::zlib_blocks::ZlibBlocks;
 use crate::spss::sav::data_layout::DataLayout;
 use crate::spss::sav::reader_state::ReaderState;
-use crate::spss::sav::sav_error::Result;
+use crate::spss::sav::sav_error::{Result, Section};
 
 /// Fills row buffers from the data section.
 #[derive(Debug)]
@@ -77,13 +77,22 @@ impl RowSource {
     /// header may be absent (`-1`) or disagree with what is actually
     /// there. The count is a cross-check to warn against, not the thing
     /// that ends the read.
-    #[allow(dead_code)] // wired up in Phase 6(a).
     pub fn next_row<R: Read>(
         &mut self,
-        _state: &mut ReaderState<R>,
-        _layout: &DataLayout,
-        _row: &mut Vec<u8>,
+        state: &mut ReaderState<R>,
+        layout: &DataLayout,
+        row: &mut Vec<u8>,
     ) -> Result<bool> {
-        todo!("body lands with Phase 6(a), gaining arms in 6(b) and 6(c)")
+        match self {
+            Self::Uncompressed => {
+                // Resizing rather than clearing and extending keeps the
+                // one allocation for the whole file; after the first row
+                // this is a no-op.
+                row.resize(layout.row_len(), 0);
+                state.read_into(row, Section::Records)
+            }
+            Self::Bytecode { units, decoder } => decoder.fill_row(units, state, layout, row),
+            Self::Zlib { blocks, decoder } => decoder.fill_row(blocks, state, layout, row),
+        }
     }
 }
