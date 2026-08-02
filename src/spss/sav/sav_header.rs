@@ -1,7 +1,7 @@
 //! SAV file header.
 
 use crate::spss::sav::byte_order::ByteOrder;
-use crate::spss::sav::compression::Compression;
+use crate::spss::sav::compression::compression_kind::CompressionKind;
 use crate::spss::sav::float_encoding::FloatEncoding;
 use crate::spss::sav::float_format::FloatFormat;
 use crate::spss::sav::sav_creation_timestamp::SavCreationTimestamp;
@@ -28,7 +28,7 @@ pub struct SavHeader {
     product_name: String,
     file_label: String,
     creation_timestamp: SavCreationTimestamp,
-    compression: Compression,
+    compression: CompressionKind,
     byte_order: ByteOrder,
     float_format: FloatFormat,
     bias: f64,
@@ -71,7 +71,7 @@ impl SavHeader {
     /// Compression scheme of the data section.
     #[must_use]
     #[inline]
-    pub fn compression(&self) -> Compression {
+    pub fn compression(&self) -> CompressionKind {
         self.compression
     }
 
@@ -149,7 +149,7 @@ pub struct SavHeaderBuilder {
     product_name: Option<String>,
     file_label: Option<String>,
     creation_timestamp: Option<SavCreationTimestamp>,
-    compression: Option<Compression>,
+    compression: Option<CompressionKind>,
     byte_order: Option<ByteOrder>,
     float_format: Option<FloatFormat>,
     bias: Option<f64>,
@@ -186,7 +186,7 @@ impl SavHeaderBuilder {
     /// Sets the compression scheme.
     #[must_use]
     #[inline]
-    pub fn compression(mut self, compression: Compression) -> Self {
+    pub fn compression(mut self, compression: CompressionKind) -> Self {
         self.compression = Some(compression);
         self
     }
@@ -243,7 +243,7 @@ impl SavHeaderBuilder {
     /// Unset fields take spec-canonical defaults: empty strings for
     /// `product_name` and `file_label`; an empty
     /// [`SavCreationTimestamp::Unparsed`] for the timestamp;
-    /// [`Compression::None`], [`FloatFormat::Ieee754`],
+    /// [`CompressionKind::None`], [`FloatFormat::Ieee754`],
     /// `bias = 100.0`. Byte order
     /// defaults to little-endian — the dominant choice in
     /// SPSS-authored files since the late 1990s. Required-vs-
@@ -259,7 +259,7 @@ impl SavHeaderBuilder {
                     time: String::new(),
                 }
             }),
-            compression: self.compression.unwrap_or(Compression::None),
+            compression: self.compression.unwrap_or(CompressionKind::None),
             byte_order: self.byte_order.unwrap_or(ByteOrder::LittleEndian),
             float_format: self.float_format.unwrap_or(FloatFormat::Ieee754),
             bias: self.bias.unwrap_or(100.0),

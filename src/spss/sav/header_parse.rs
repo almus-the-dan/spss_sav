@@ -10,7 +10,7 @@
 use encoding_rs::Encoding;
 
 use crate::spss::sav::byte_order::ByteOrder;
-use crate::spss::sav::compression::Compression;
+use crate::spss::sav::compression::compression_kind::CompressionKind;
 use crate::spss::sav::float_encoding::FloatEncoding;
 use crate::spss::sav::float_format::FloatFormat;
 use crate::spss::sav::header_format::{CANONICAL_BIAS, LAYOUT_CODE_VALUES, MAGIC_FL2, MAGIC_FL3};
@@ -81,37 +81,37 @@ pub(super) fn parse_layout_code(bytes: [u8; 4], position: u64) -> Result<ByteOrd
 /// [`SavWarning::CompressionMismatch`], an unrecognized code as
 /// [`SavWarning::UnknownCompressionCode`].
 ///
-/// Returns the resolved [`Compression`] together with the warning
+/// Returns the resolved [`CompressionKind`] together with the warning
 /// to push (if any).
 pub(super) fn resolve_compression(
     code: i32,
     magic: MagicKind,
     rec_type: [u8; 4],
-) -> (Compression, Option<SavWarning>) {
+) -> (CompressionKind, Option<SavWarning>) {
     match code {
         0 => match magic {
-            MagicKind::Fl2 => (Compression::None, None),
+            MagicKind::Fl2 => (CompressionKind::None, None),
             MagicKind::Fl3 => (
-                Compression::None,
+                CompressionKind::None,
                 Some(SavWarning::CompressionMismatch { rec_type, code }),
             ),
         },
         1 => match magic {
-            MagicKind::Fl2 => (Compression::Bytecode, None),
+            MagicKind::Fl2 => (CompressionKind::Bytecode, None),
             MagicKind::Fl3 => (
-                Compression::Bytecode,
+                CompressionKind::Bytecode,
                 Some(SavWarning::CompressionMismatch { rec_type, code }),
             ),
         },
         2 => match magic {
-            MagicKind::Fl3 => (Compression::Zlib, None),
+            MagicKind::Fl3 => (CompressionKind::Zlib, None),
             MagicKind::Fl2 => (
-                Compression::Zlib,
+                CompressionKind::Zlib,
                 Some(SavWarning::CompressionMismatch { rec_type, code }),
             ),
         },
         _ => (
-            Compression::None,
+            CompressionKind::None,
             Some(SavWarning::UnknownCompressionCode { code }),
         ),
     }

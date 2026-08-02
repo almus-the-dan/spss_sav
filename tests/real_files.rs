@@ -14,7 +14,7 @@ use std::fs::File;
 use std::io::BufReader;
 
 use spss_sav::spss::sav::byte_order::ByteOrder;
-use spss_sav::spss::sav::compression::Compression;
+use spss_sav::spss::sav::compression::compression_kind::CompressionKind;
 use spss_sav::spss::sav::dictionary_reader::DictionaryReader;
 use spss_sav::spss::sav::dictionary_record::DictionaryRecord;
 use spss_sav::spss::sav::document_record::DocumentRecord;
@@ -75,7 +75,7 @@ fn assert_header(dictionary_reader: &DictionaryReader<BufReader<File>>) {
         "product_name = {:?}",
         header.product_name()
     );
-    assert_eq!(header.compression(), Compression::Bytecode);
+    assert_eq!(header.compression(), CompressionKind::Bytecode);
     assert_eq!(header.byte_order(), ByteOrder::LittleEndian);
     assert_eq!(header.float_format(), FloatFormat::Ieee754);
     assert_eq!(header.case_count(), Some(2));

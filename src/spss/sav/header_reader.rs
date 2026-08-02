@@ -10,7 +10,7 @@
 use std::io::Read;
 
 use crate::spss::sav::byte_order::ByteOrder;
-use crate::spss::sav::compression::Compression;
+use crate::spss::sav::compression::compression_kind::CompressionKind;
 use crate::spss::sav::dictionary_buffer::DictionaryBuffer;
 use crate::spss::sav::dictionary_reader::DictionaryReader;
 use crate::spss::sav::encoding_resolution::{declared_encoding, resolve};
@@ -84,7 +84,7 @@ struct RawHeader {
     product_name: Vec<u8>,
     file_label: Vec<u8>,
     creation_timestamp: SavCreationTimestamp,
-    compression: Compression,
+    compression: CompressionKind,
     byte_order: ByteOrder,
     float_format: FloatFormat,
     bias: f64,
@@ -295,7 +295,7 @@ mod tests {
     use std::io::Cursor;
 
     use crate::spss::sav::byte_order::ByteOrder;
-    use crate::spss::sav::compression::Compression;
+    use crate::spss::sav::compression::compression_kind::CompressionKind;
     use crate::spss::sav::dictionary_format::{
         CHARACTER_ENCODING_ELEMENT_SIZE, DICTIONARY_TERMINATOR_FILLER_LEN,
         EXTENSION_SUBTYPE_CHARACTER_ENCODING, RECORD_TYPE_DICTIONARY_TERMINATOR,
@@ -442,7 +442,7 @@ mod tests {
         let dict = read(HeaderBytes::new().build()).unwrap();
         let header = dict.header();
         assert_eq!(header.byte_order(), ByteOrder::LittleEndian);
-        assert_eq!(header.compression(), Compression::Bytecode);
+        assert_eq!(header.compression(), CompressionKind::Bytecode);
         assert_eq!(header.float_format(), FloatFormat::Ieee754);
         assert!((header.bias() - 100.0).abs() < f64::EPSILON);
         assert_eq!(header.case_count(), Some(100));
@@ -459,7 +459,7 @@ mod tests {
         h.compression_code = 0;
         let dict = read(h.build()).unwrap();
         assert_eq!(dict.header().byte_order(), ByteOrder::BigEndian);
-        assert_eq!(dict.header().compression(), Compression::None);
+        assert_eq!(dict.header().compression(), CompressionKind::None);
     }
 
     #[test]
@@ -468,7 +468,7 @@ mod tests {
         h.rec_type = *b"$FL3";
         h.compression_code = 2;
         let dict = read(h.build()).unwrap();
-        assert_eq!(dict.header().compression(), Compression::Zlib);
+        assert_eq!(dict.header().compression(), CompressionKind::Zlib);
         assert!(dict.warnings().is_empty());
     }
 
@@ -552,7 +552,7 @@ mod tests {
         h.rec_type = *b"$FL2";
         h.compression_code = 2;
         let dict = read(h.build()).unwrap();
-        assert_eq!(dict.header().compression(), Compression::Zlib);
+        assert_eq!(dict.header().compression(), CompressionKind::Zlib);
         assert!(matches!(
             dict.warnings(),
             &[SavWarning::CompressionMismatch { rec_type, code: 2 }] if &rec_type == b"$FL2"
@@ -565,7 +565,7 @@ mod tests {
         h.rec_type = *b"$FL3";
         h.compression_code = 0;
         let dict = read(h.build()).unwrap();
-        assert_eq!(dict.header().compression(), Compression::None);
+        assert_eq!(dict.header().compression(), CompressionKind::None);
         assert!(matches!(
             dict.warnings(),
             &[SavWarning::CompressionMismatch { rec_type, code: 0 }] if &rec_type == b"$FL3"
@@ -577,7 +577,7 @@ mod tests {
         let mut h = HeaderBytes::new();
         h.compression_code = 7;
         let dict = read(h.build()).unwrap();
-        assert_eq!(dict.header().compression(), Compression::None);
+        assert_eq!(dict.header().compression(), CompressionKind::None);
         assert!(matches!(
             dict.warnings(),
             &[SavWarning::UnknownCompressionCode { code: 7 }]

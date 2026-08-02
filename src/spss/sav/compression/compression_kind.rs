@@ -1,4 +1,4 @@
-//! Compression scheme of a SAV file.
+//! Which compression scheme a SAV file's data section uses.
 
 /// Compression scheme used for the data records of a SAV file.
 ///
@@ -8,7 +8,7 @@
 /// negotiated at the same point in the header but never combined.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
-pub enum Compression {
+pub enum CompressionKind {
     /// No compression — each cell occupies its full eight-byte slot.
     None,
     /// SAV bytecode compression.

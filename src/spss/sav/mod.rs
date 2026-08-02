@@ -16,7 +16,7 @@ mod buffered_variable_record;
 mod byte_cursor;
 /// Byte order of multibyte values in a SAV file.
 pub mod byte_order;
-/// Compression scheme of a SAV file.
+/// Compression of a SAV file's data section.
 pub mod compression;
 /// Everything the record reader needs to decode a data row.
 mod data_layout;
@@ -74,6 +74,10 @@ pub mod raw_value_label_set;
 mod reader_options;
 /// Crate-internal per-reader state.
 mod reader_state;
+/// On-disk byte layout of the SAV data-record section.
+mod record_format;
+/// Pure parse helpers for the SAV data-record section.
+mod record_parse;
 /// Reader for the data-record section of a SAV file.
 pub mod record_reader;
 /// Creation timestamp recorded in a SAV file header.
@@ -104,6 +108,8 @@ pub mod sav_warning;
 mod segment_layout;
 /// Dictionary content a reader can be told not to retain.
 pub mod skippable_content;
+/// A string cell's value: raw bytes, decoded on demand.
+pub mod string_value;
 /// Shared `#[cfg(test)]` helpers for building on-disk SAV byte
 /// streams.
 #[cfg(test)]

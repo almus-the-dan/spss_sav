@@ -2,7 +2,7 @@
 
 use encoding_rs::Encoding;
 
-use crate::spss::sav::compression::Compression;
+use crate::spss::sav::compression::compression_kind::CompressionKind;
 use crate::spss::sav::extensions::extension_subtype::ExtensionSubtype;
 use crate::spss::sav::extensions::float_sentinels::FloatSentinels;
 use crate::spss::sav::extensions::very_long_strings::VeryLongStrings;
@@ -35,7 +35,7 @@ use crate::spss::sav::variable_type::VariableType;
 pub(crate) struct DataLayout {
     variables: Vec<VariableLayout>,
     row_len: usize,
-    compression: Compression,
+    compression: CompressionKind,
     bias: f64,
     float_encoding: FloatEncoding,
     sentinels: FloatSentinels,
@@ -66,7 +66,7 @@ impl DataLayout {
     /// How the data section is compressed.
     #[allow(dead_code)] // exercised once row decoding lands.
     #[inline]
-    pub fn compression(&self) -> Compression {
+    pub fn compression(&self) -> CompressionKind {
         self.compression
     }
 

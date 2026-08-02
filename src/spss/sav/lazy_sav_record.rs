@@ -1,48 +1,61 @@
 //! A single data record decoded on demand, cell by cell.
 
-use core::marker::PhantomData;
-
-use crate::spss::sav::sav_error::Result;
+use crate::spss::sav::data_layout::DataLayout;
 use crate::spss::sav::value::Value;
 
 /// A single data record decoded on demand, cell by cell.
 ///
 /// Backed by the reader's internal row buffer. Each call to
-/// [`value`](Self::value) decodes only the requested cell;
-/// non-accessed cells are never decoded. The borrow of the row buffer
-/// is invalidated the next time `read_record` / `read_lazy_record` is
-/// called on the parent reader.
+/// [`value`](Self::value) decodes only the requested cell; cells that
+/// are never asked for are never decoded. The borrow of the row buffer
+/// is invalidated the next time a record is read from the parent
+/// reader.
 ///
 /// Use [`SavRecord`](crate::spss::sav::sav_record::SavRecord) when you
-/// want the entire row decoded eagerly.
+/// want the whole row decoded eagerly.
 #[derive(Debug)]
 pub struct LazySavRecord<'a> {
-    _phantom: PhantomData<&'a ()>,
+    row: &'a [u8],
+    layout: &'a DataLayout,
 }
 
 impl<'a> LazySavRecord<'a> {
+    #[allow(dead_code)] // handed out once row decoding lands.
+    pub(crate) fn new(row: &'a [u8], layout: &'a DataLayout) -> Self {
+        Self { row, layout }
+    }
+
     /// The number of cells in this record.
+    ///
+    /// Counts logical variables, so a very long string counts once
+    /// however many segments hold it — the same count
+    /// [`SavSchema::variables`](crate::spss::sav::sav_schema::SavSchema::variables)
+    /// reports.
     #[must_use]
     #[inline]
     pub fn len(&self) -> usize {
-        todo!("body lands with the record reader")
+        self.layout.variables().len()
     }
 
-    /// Whether the record is empty.
+    /// Whether the record has no cells.
     #[must_use]
     #[inline]
     pub fn is_empty(&self) -> bool {
-        todo!("body lands with the record reader")
+        self.layout.variables().is_empty()
     }
 
-    /// Decode and return the cell at `index`.
+    /// Decodes and returns the cell at `index`, or `None` when `index`
+    /// is out of range.
     ///
-    /// # Errors
-    ///
-    /// Returns a [`SavError`](crate::spss::sav::sav_error::SavError)
-    /// if the cell's bytes are not valid in the file's declared
-    /// encoding, or if `index` is out of range.
-    pub fn value(&self, _index: usize) -> Result<Value<'a>> {
-        todo!("body lands with the record reader")
+    /// Returns a value rather than a `Result` because decoding a cell
+    /// cannot fail: bytes that are not valid in the file's declared
+    /// encoding become U+FFFD, matching how the dictionary reader
+    /// treats malformed text, and the raw bytes stay reachable through
+    /// [`StringValue::raw`](crate::spss::sav::string_value::StringValue::raw)
+    /// either way.
+    #[must_use]
+    pub fn value(&self, _index: usize) -> Option<Value<'a>> {
+        let _ = self.row;
+        todo!("body lands with Phase 6(a)")
     }
 }
