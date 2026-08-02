@@ -27,7 +27,7 @@ pub(crate) fn read(
         encoding,
         envelope.element_size_position,
     )?;
-    let labels = LongValueLabels::builder().records(records).build();
+    let labels = LongValueLabels::builder().add_records(records).build();
     let record = ExtensionRecord::LongValueLabels(labels);
     let extension = DictionaryRecord::Extension(record);
     Ok(extension)
@@ -69,16 +69,16 @@ impl LongValueLabelsBuilder {
     /// Appends one variable's long value label record.
     #[must_use]
     #[inline]
-    pub fn record(mut self, value: LongValueLabelRecord) -> Self {
+    pub fn add_record(mut self, value: LongValueLabelRecord) -> Self {
         self.records.push(value);
         self
     }
 
-    /// Replaces the collection with `records`.
+    /// Appends `records`.
     #[must_use]
     #[inline]
-    pub fn records(mut self, records: Vec<LongValueLabelRecord>) -> Self {
-        self.records = records;
+    pub fn add_records(mut self, records: Vec<LongValueLabelRecord>) -> Self {
+        self.records.extend(records);
         self
     }
 
@@ -153,7 +153,7 @@ fn parse_long_value_label_record(
     let record = LongValueLabelRecord::builder()
         .variable_name(variable_name.into_owned())
         .width(width)
-        .labels(labels)
+        .add_labels(labels)
         .build();
     Ok(record)
 }

@@ -97,16 +97,16 @@ impl MultipleResponseSetBuilder {
     /// Appends one member variable's long name.
     #[must_use]
     #[inline]
-    pub fn variable(mut self, value: impl Into<String>) -> Self {
+    pub fn add_variable(mut self, value: impl Into<String>) -> Self {
         self.variables.push(value.into());
         self
     }
 
-    /// Replaces the set's member variables with `variables`.
+    /// Appends `variables` to the set's members.
     #[must_use]
     #[inline]
-    pub fn variables(mut self, variables: Vec<String>) -> Self {
-        self.variables = variables;
+    pub fn add_variables(mut self, variables: Vec<String>) -> Self {
+        self.variables.extend(variables);
         self
     }
 

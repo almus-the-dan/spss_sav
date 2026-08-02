@@ -49,16 +49,16 @@ impl LongVariableNamesBuilder {
     /// Appends one name mapping.
     #[must_use]
     #[inline]
-    pub fn mapping(mut self, value: LongVariableName) -> Self {
+    pub fn add_mapping(mut self, value: LongVariableName) -> Self {
         self.mappings.push(value);
         self
     }
 
-    /// Replaces the collection with `mappings`.
+    /// Appends `mappings`.
     #[must_use]
     #[inline]
-    pub fn mappings(mut self, mappings: Vec<LongVariableName>) -> Self {
-        self.mappings = mappings;
+    pub fn add_mappings(mut self, mappings: Vec<LongVariableName>) -> Self {
+        self.mappings.extend(mappings);
         self
     }
 
@@ -88,7 +88,7 @@ pub(crate) fn read(
         encoding,
         envelope.element_size_position,
     )?;
-    let names = LongVariableNames::builder().mappings(mappings).build();
+    let names = LongVariableNames::builder().add_mappings(mappings).build();
     let record = ExtensionRecord::LongVariableNames(names);
     let extension = DictionaryRecord::Extension(record);
     Ok(extension)

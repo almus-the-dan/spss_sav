@@ -26,7 +26,7 @@ pub(crate) fn read(
         encoding,
         envelope.element_size_position,
     )?;
-    let strings = VeryLongStrings::builder().strings(declarations).build();
+    let strings = VeryLongStrings::builder().add_strings(declarations).build();
     let record = ExtensionRecord::VeryLongStrings(strings);
     let extension = DictionaryRecord::Extension(record);
     Ok(extension)
@@ -69,16 +69,16 @@ impl VeryLongStringsBuilder {
     /// Appends one very-long-string declaration.
     #[must_use]
     #[inline]
-    pub fn string(mut self, value: VeryLongString) -> Self {
+    pub fn add_string(mut self, value: VeryLongString) -> Self {
         self.strings.push(value);
         self
     }
 
-    /// Replaces the collection with `strings`.
+    /// Appends `strings`.
     #[must_use]
     #[inline]
-    pub fn strings(mut self, strings: Vec<VeryLongString>) -> Self {
-        self.strings = strings;
+    pub fn add_strings(mut self, strings: Vec<VeryLongString>) -> Self {
+        self.strings.extend(strings);
         self
     }
 

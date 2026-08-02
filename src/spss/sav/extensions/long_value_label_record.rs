@@ -78,16 +78,16 @@ impl LongValueLabelRecordBuilder {
     /// Appends one `(value, label)` pair.
     #[must_use]
     #[inline]
-    pub fn label(mut self, label: LongValueLabel) -> Self {
+    pub fn add_label(mut self, label: LongValueLabel) -> Self {
         self.labels.push(label);
         self
     }
 
-    /// Replaces the record's `(value, label)` pairs with `labels`.
+    /// Appends `labels` to the record.
     #[must_use]
     #[inline]
-    pub fn labels(mut self, labels: Vec<LongValueLabel>) -> Self {
-        self.labels = labels;
+    pub fn add_labels(mut self, labels: Vec<LongValueLabel>) -> Self {
+        self.labels.extend(labels);
         self
     }
 

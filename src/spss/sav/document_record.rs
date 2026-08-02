@@ -45,18 +45,18 @@ pub struct DocumentRecordBuilder {
 }
 
 impl DocumentRecordBuilder {
-    /// Replaces the document lines with `lines`.
+    /// Appends `lines`.
     #[must_use]
     #[inline]
-    pub fn lines(mut self, lines: Vec<String>) -> Self {
-        self.lines = lines;
+    pub fn add_lines(mut self, lines: Vec<String>) -> Self {
+        self.lines.extend(lines);
         self
     }
 
     /// Appends one document line.
     #[must_use]
     #[inline]
-    pub fn line(mut self, line: impl Into<String>) -> Self {
+    pub fn add_line(mut self, line: impl Into<String>) -> Self {
         self.lines.push(line.into());
         self
     }

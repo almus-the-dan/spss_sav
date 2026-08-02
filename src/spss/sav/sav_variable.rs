@@ -303,16 +303,16 @@ impl SavVariableBuilder {
     /// Appends a custom attribute.
     #[must_use]
     #[inline]
-    pub fn attribute(mut self, attribute: VariableAttribute) -> Self {
+    pub fn add_attribute(mut self, attribute: VariableAttribute) -> Self {
         self.attributes.push(attribute);
         self
     }
 
-    /// Replaces the attribute list wholesale.
+    /// Appends `attributes`.
     #[must_use]
     #[inline]
-    pub fn attributes(mut self, attributes: Vec<VariableAttribute>) -> Self {
-        self.attributes = attributes;
+    pub fn add_attributes(mut self, attributes: Vec<VariableAttribute>) -> Self {
+        self.attributes.extend(attributes);
         self
     }
 
@@ -452,10 +452,10 @@ mod tests {
     fn attribute_lookup_is_case_insensitive() {
         let variable = SavVariable::builder()
             .short_name("V1")
-            .attribute(
+            .add_attribute(
                 VariableAttribute::builder()
                     .name("MyAttr")
-                    .value("hello")
+                    .add_value("hello")
                     .build(),
             )
             .build();

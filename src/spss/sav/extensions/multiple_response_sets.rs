@@ -32,7 +32,7 @@ pub(crate) fn read(
         encoding,
         envelope.element_size_position,
     )?;
-    let sets = MultipleResponseSets::builder().sets(sets).build();
+    let sets = MultipleResponseSets::builder().add_sets(sets).build();
     let record = ExtensionRecord::MultipleResponseSets(sets);
     let extension = DictionaryRecord::Extension(record);
     Ok(extension)
@@ -75,16 +75,16 @@ impl MultipleResponseSetsBuilder {
     /// Appends one multiple response set.
     #[must_use]
     #[inline]
-    pub fn set(mut self, value: MultipleResponseSet) -> Self {
+    pub fn add_set(mut self, value: MultipleResponseSet) -> Self {
         self.sets.push(value);
         self
     }
 
-    /// Replaces the collection with `sets`.
+    /// Appends `sets`.
     #[must_use]
     #[inline]
-    pub fn sets(mut self, sets: Vec<MultipleResponseSet>) -> Self {
-        self.sets = sets;
+    pub fn add_sets(mut self, sets: Vec<MultipleResponseSet>) -> Self {
+        self.sets.extend(sets);
         self
     }
 
@@ -190,7 +190,7 @@ fn parse_multiple_response_set(
             continue;
         }
         let (member, _, _) = encoding.decode(member);
-        builder = builder.variable(member.into_owned());
+        builder = builder.add_variable(member.into_owned());
     }
     let set = builder.build();
     Ok(set)

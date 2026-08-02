@@ -67,16 +67,16 @@ impl VariableAttributeEntryBuilder {
     /// Appends one value to the attribute.
     #[must_use]
     #[inline]
-    pub fn value(mut self, value: impl Into<String>) -> Self {
+    pub fn add_value(mut self, value: impl Into<String>) -> Self {
         self.values.push(value.into());
         self
     }
 
-    /// Replaces the attribute's values with `values`.
+    /// Appends `values` to the attribute.
     #[must_use]
     #[inline]
-    pub fn values(mut self, values: Vec<String>) -> Self {
-        self.values = values;
+    pub fn add_values(mut self, values: Vec<String>) -> Self {
+        self.values.extend(values);
         self
     }
 

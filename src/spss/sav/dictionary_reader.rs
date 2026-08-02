@@ -290,8 +290,8 @@ impl<R> DictionaryReader<R> {
             return;
         }
         match record {
-            DictionaryRecord::Variable(header) => self.schema.push_variable(header),
-            DictionaryRecord::ValueLabelSet(set) => self.schema.push_value_labels(set),
+            DictionaryRecord::Variable(header) => self.schema.add_variable(header),
+            DictionaryRecord::ValueLabelSet(set) => self.schema.add_value_labels(set),
             DictionaryRecord::Document(_) => {}
             DictionaryRecord::Extension(extension) => match extension {
                 ExtensionRecord::LongVariableNames(names) => self.schema.set_long_names(names),
@@ -518,7 +518,7 @@ impl<R: Read> DictionaryReader<R> {
         let mut builder = DataLayoutBuilder::default();
         for (short_name, variable_type) in self.buffer.skeleton().variables() {
             let short_name = parse_short_name(*short_name, encoding);
-            builder.push_variable(short_name, *variable_type);
+            builder.add_variable(short_name, *variable_type);
         }
         // Cloned so the borrow of the buffer ends before the builder is
         // fed; there are at most three of these, and they are tiny.
@@ -627,8 +627,8 @@ fn decode_value_label_set(
         })
         .collect();
     RawValueLabelSet::builder()
-        .entries(entries)
-        .segment_indices(set.segment_indices)
+        .add_entries(entries)
+        .add_segment_indices(set.segment_indices)
         .build()
 }
 
@@ -645,7 +645,7 @@ fn decode_document_record(
             decoded.into_owned()
         })
         .collect();
-    DocumentRecord::builder().lines(lines).build()
+    DocumentRecord::builder().add_lines(lines).build()
 }
 
 #[cfg(test)]

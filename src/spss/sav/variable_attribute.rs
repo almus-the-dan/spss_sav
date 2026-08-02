@@ -83,16 +83,16 @@ impl VariableAttributeBuilder {
     /// Appends one value.
     #[must_use]
     #[inline]
-    pub fn value(mut self, value: impl Into<String>) -> Self {
+    pub fn add_value(mut self, value: impl Into<String>) -> Self {
         self.values.push(value.into());
         self
     }
 
-    /// Replaces the value list wholesale.
+    /// Appends `values`.
     #[must_use]
     #[inline]
-    pub fn values(mut self, values: Vec<String>) -> Self {
-        self.values = values;
+    pub fn add_values(mut self, values: Vec<String>) -> Self {
+        self.values.extend(values);
         self
     }
 
@@ -119,7 +119,7 @@ mod tests {
     fn scalar_attribute_exposes_its_single_value() {
         let attribute = VariableAttribute::builder()
             .name("MyAttr")
-            .value("hello world")
+            .add_value("hello world")
             .build();
         assert_eq!(attribute.name(), "MyAttr");
         assert_eq!(attribute.values(), ["hello world"]);
@@ -130,10 +130,29 @@ mod tests {
     fn array_attribute_keeps_index_order() {
         let attribute = VariableAttribute::builder()
             .name("fred")
-            .values(vec!["first".to_owned(), "second".to_owned()])
+            .add_values(vec!["first".to_owned(), "second".to_owned()])
             .build();
         assert_eq!(attribute.values(), ["first", "second"]);
         assert_eq!(attribute.value(), Some("first"));
+    }
+
+    /// The plural setter appends rather than replacing, so calls
+    /// accumulate and mix freely with the singular one. A builder can
+    /// only ever gain values, never silently lose the ones already
+    /// added.
+    #[test]
+    fn add_values_appends_rather_than_replacing() {
+        let attribute = VariableAttribute::builder()
+            .name("fred")
+            .add_value("first")
+            .add_values(vec!["second".to_owned(), "third".to_owned()])
+            .add_values(vec!["fourth".to_owned()])
+            .add_value("fifth")
+            .build();
+        assert_eq!(
+            attribute.values(),
+            ["first", "second", "third", "fourth", "fifth"],
+        );
     }
 
     #[test]

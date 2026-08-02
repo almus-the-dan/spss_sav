@@ -184,12 +184,12 @@ pub(crate) struct SavSchemaBuilder {
 
 impl SavSchemaBuilder {
     /// Records one type-2 primary record.
-    pub fn push_variable(&mut self, header: &SavVariableHeader) {
+    pub fn add_variable(&mut self, header: &SavVariableHeader) {
         self.segments.push(header.clone());
     }
 
     /// Records one type-3 / type-4 value-label pair.
-    pub fn push_value_labels(&mut self, set: &RawValueLabelSet) {
+    pub fn add_value_labels(&mut self, set: &RawValueLabelSet) {
         self.value_label_sets.push(set.clone());
     }
 
@@ -446,7 +446,7 @@ impl SavSchemaBuilder {
                 continue;
             };
             replace(builders, index, |builder| {
-                builder.attributes(attributes.clone())
+                builder.add_attributes(attributes.clone())
             });
         }
     }

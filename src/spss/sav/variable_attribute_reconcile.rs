@@ -104,7 +104,7 @@ impl Group {
         values.extend(self.unindexed);
         VariableAttribute::builder()
             .name(self.name)
-            .values(values)
+            .add_values(values)
             .build()
     }
 }
@@ -116,7 +116,7 @@ mod tests {
     fn entry(name: &str, values: &[&str]) -> VariableAttributeEntry {
         let mut builder = VariableAttributeEntry::builder().name(name);
         for value in values {
-            builder = builder.value(*value);
+            builder = builder.add_value(*value);
         }
         builder.build()
     }

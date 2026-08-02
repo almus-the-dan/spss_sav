@@ -61,16 +61,16 @@ impl LongMissingValueRecordBuilder {
     /// Appends one missing value's raw bytes.
     #[must_use]
     #[inline]
-    pub fn value(mut self, value: Vec<u8>) -> Self {
+    pub fn add_value(mut self, value: Vec<u8>) -> Self {
         self.values.push(value);
         self
     }
 
-    /// Replaces the record's missing values with `values`.
+    /// Appends `values` to the record.
     #[must_use]
     #[inline]
-    pub fn values(mut self, values: Vec<Vec<u8>>) -> Self {
-        self.values = values;
+    pub fn add_values(mut self, values: Vec<Vec<u8>>) -> Self {
+        self.values.extend(values);
         self
     }
 

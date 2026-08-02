@@ -28,7 +28,7 @@ pub(crate) fn read(
         encoding,
         envelope.element_size_position,
     )?;
-    let values = LongMissingValues::builder().records(records).build();
+    let values = LongMissingValues::builder().add_records(records).build();
     let record = ExtensionRecord::LongMissingValues(values);
     let extension = DictionaryRecord::Extension(record);
     Ok(extension)
@@ -71,16 +71,16 @@ impl LongMissingValuesBuilder {
     /// Appends one variable's long missing value record.
     #[must_use]
     #[inline]
-    pub fn record(mut self, value: LongMissingValueRecord) -> Self {
+    pub fn add_record(mut self, value: LongMissingValueRecord) -> Self {
         self.records.push(value);
         self
     }
 
-    /// Replaces the collection with `records`.
+    /// Appends `records`.
     #[must_use]
     #[inline]
-    pub fn records(mut self, records: Vec<LongMissingValueRecord>) -> Self {
-        self.records = records;
+    pub fn add_records(mut self, records: Vec<LongMissingValueRecord>) -> Self {
+        self.records.extend(records);
         self
     }
 
@@ -161,7 +161,7 @@ fn parse_long_missing_value_record(
     let (variable_name, _, _) = encoding.decode(name_bytes);
     let record = LongMissingValueRecord::builder()
         .variable_name(variable_name.into_owned())
-        .values(values)
+        .add_values(values)
         .build();
     Ok(record)
 }

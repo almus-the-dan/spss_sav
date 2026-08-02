@@ -75,38 +75,38 @@ pub struct RawValueLabelSetBuilder {
 }
 
 impl RawValueLabelSetBuilder {
-    /// Replaces the value-label entries with `entries`.
+    /// Appends `entries`.
     #[must_use]
     #[inline]
-    pub fn entries(mut self, entries: Vec<RawValueLabelEntry>) -> Self {
-        self.entries = entries;
+    pub fn add_entries(mut self, entries: Vec<RawValueLabelEntry>) -> Self {
+        self.entries.extend(entries);
         self
     }
 
     /// Appends one value-label entry.
     #[must_use]
     #[inline]
-    pub fn entry(mut self, entry: RawValueLabelEntry) -> Self {
+    pub fn add_entry(mut self, entry: RawValueLabelEntry) -> Self {
         self.entries.push(entry);
         self
     }
 
-    /// Replaces the segment indices with `indices`. The indices are
-    /// expected to be 0-based segment positions (continuation records
-    /// excluded); the on-disk 1-based physical form is a reader/writer
-    /// concern. See [`RawValueLabelSet::segment_indices`].
+    /// Appends `indices`, which are expected to be 0-based segment
+    /// positions (continuation records excluded); the on-disk 1-based
+    /// physical form is a reader/writer concern. See
+    /// [`RawValueLabelSet::segment_indices`].
     #[must_use]
     #[inline]
-    pub fn segment_indices(mut self, indices: Vec<u32>) -> Self {
-        self.segment_indices = indices;
+    pub fn add_segment_indices(mut self, indices: Vec<u32>) -> Self {
+        self.segment_indices.extend(indices);
         self
     }
 
     /// Appends one segment index. See
-    /// [`segment_indices`](Self::segment_indices) for the convention.
+    /// [`RawValueLabelSet::segment_indices`] for the convention.
     #[must_use]
     #[inline]
-    pub fn segment_index(mut self, index: u32) -> Self {
+    pub fn add_segment_index(mut self, index: u32) -> Self {
         self.segment_indices.push(index);
         self
     }

@@ -27,7 +27,7 @@ pub(crate) fn read(
         encoding,
         envelope.element_size_position,
     )?;
-    let attributes = VariableAttributes::builder().records(records).build();
+    let attributes = VariableAttributes::builder().add_records(records).build();
     let record = ExtensionRecord::VariableAttributes(attributes);
     let extension = DictionaryRecord::Extension(record);
     Ok(extension)
@@ -70,16 +70,16 @@ impl VariableAttributesBuilder {
     /// Appends one variable's attribute record.
     #[must_use]
     #[inline]
-    pub fn record(mut self, value: VariableAttributeRecord) -> Self {
+    pub fn add_record(mut self, value: VariableAttributeRecord) -> Self {
         self.records.push(value);
         self
     }
 
-    /// Replaces the collection with `records`.
+    /// Appends `records`.
     #[must_use]
     #[inline]
-    pub fn records(mut self, records: Vec<VariableAttributeRecord>) -> Self {
-        self.records = records;
+    pub fn add_records(mut self, records: Vec<VariableAttributeRecord>) -> Self {
+        self.records.extend(records);
         self
     }
 
@@ -157,9 +157,9 @@ fn parse_variable_attribute(
     for (name, values) in set {
         let entry = VariableAttributeEntry::builder()
             .name(name)
-            .values(values)
+            .add_values(values)
             .build();
-        builder = builder.attribute(entry);
+        builder = builder.add_attribute(entry);
     }
     let record = builder.build();
     Ok(record)

@@ -67,16 +67,16 @@ impl VariableAttributeRecordBuilder {
     /// Appends one attribute to this variable's set.
     #[must_use]
     #[inline]
-    pub fn attribute(mut self, value: VariableAttributeEntry) -> Self {
+    pub fn add_attribute(mut self, value: VariableAttributeEntry) -> Self {
         self.attributes.push(value);
         self
     }
 
-    /// Replaces this variable's attributes with `attributes`.
+    /// Appends `attributes` to this variable.
     #[must_use]
     #[inline]
-    pub fn attributes(mut self, attributes: Vec<VariableAttributeEntry>) -> Self {
-        self.attributes = attributes;
+    pub fn add_attributes(mut self, attributes: Vec<VariableAttributeEntry>) -> Self {
+        self.attributes.extend(attributes);
         self
     }
 

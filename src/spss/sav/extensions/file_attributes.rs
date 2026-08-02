@@ -23,7 +23,7 @@ pub(crate) fn read(
         encoding,
         envelope.element_size_position,
     )?;
-    let attributes = FileAttributes::builder().attributes(attributes).build();
+    let attributes = FileAttributes::builder().add_attributes(attributes).build();
     let record = ExtensionRecord::FileAttributes(attributes);
     let extension = DictionaryRecord::Extension(record);
     Ok(extension)
@@ -66,16 +66,16 @@ impl FileAttributesBuilder {
     /// Appends one file attribute.
     #[must_use]
     #[inline]
-    pub fn attribute(mut self, value: FileAttribute) -> Self {
+    pub fn add_attribute(mut self, value: FileAttribute) -> Self {
         self.attributes.push(value);
         self
     }
 
-    /// Replaces the collection with `attributes`.
+    /// Appends `attributes`.
     #[must_use]
     #[inline]
-    pub fn attributes(mut self, attributes: Vec<FileAttribute>) -> Self {
-        self.attributes = attributes;
+    pub fn add_attributes(mut self, attributes: Vec<FileAttribute>) -> Self {
+        self.attributes.extend(attributes);
         self
     }
 
@@ -131,7 +131,10 @@ fn parse(
     while !cursor.is_empty() {
         let set = parse_attribute_set(&mut cursor, encoding, position, Field::FileAttribute)?;
         for (name, values) in set {
-            let attribute = FileAttribute::builder().name(name).values(values).build();
+            let attribute = FileAttribute::builder()
+                .name(name)
+                .add_values(values)
+                .build();
             attributes.push(attribute);
         }
     }

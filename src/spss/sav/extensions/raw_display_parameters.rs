@@ -50,18 +50,18 @@ pub struct RawDisplayParametersBuilder {
 }
 
 impl RawDisplayParametersBuilder {
-    /// Replaces the value list wholesale.
+    /// Appends `values`.
     #[must_use]
     #[inline]
-    pub fn values(mut self, values: Vec<u32>) -> Self {
-        self.values = values;
+    pub fn add_values(mut self, values: Vec<u32>) -> Self {
+        self.values.extend(values);
         self
     }
 
     /// Appends one value to the list.
     #[must_use]
     #[inline]
-    pub fn value(mut self, value: u32) -> Self {
+    pub fn add_value(mut self, value: u32) -> Self {
         self.values.push(value);
         self
     }
@@ -141,7 +141,7 @@ fn parse(
             byte_order.read_u32(bytes)
         })
         .collect();
-    let record = RawDisplayParameters::builder().values(values).build();
+    let record = RawDisplayParameters::builder().add_values(values).build();
     Ok(record)
 }
 

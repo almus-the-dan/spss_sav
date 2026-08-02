@@ -69,16 +69,16 @@ impl VariableSetsBuilder {
     /// Appends one variable set.
     #[must_use]
     #[inline]
-    pub fn set(mut self, value: VariableSet) -> Self {
+    pub fn add_set(mut self, value: VariableSet) -> Self {
         self.sets.push(value);
         self
     }
 
-    /// Replaces the collection with `sets`.
+    /// Appends `sets`.
     #[must_use]
     #[inline]
-    pub fn sets(mut self, sets: Vec<VariableSet>) -> Self {
-        self.sets = sets;
+    pub fn add_sets(mut self, sets: Vec<VariableSet>) -> Self {
+        self.sets.extend(sets);
         self
     }
 
@@ -131,7 +131,7 @@ fn parse(
             continue;
         }
         let set = parse_variable_set(line, encoding, position)?;
-        builder = builder.set(set);
+        builder = builder.add_set(set);
     }
     let sets = builder.build();
     Ok(sets)
@@ -173,7 +173,7 @@ fn parse_variable_set(
             continue;
         }
         let (member, _, _) = encoding.decode(member);
-        builder = builder.variable(member.into_owned());
+        builder = builder.add_variable(member.into_owned());
     }
     let set = builder.build();
     Ok(set)

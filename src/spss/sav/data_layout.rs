@@ -137,7 +137,7 @@ impl DataLayoutBuilder {
     /// Records one type-2 primary record. Continuation records are
     /// already collapsed away by the time they reach here, so every
     /// call is a new segment.
-    pub fn push_variable(&mut self, short_name: String, variable_type: VariableType) {
+    pub fn add_variable(&mut self, short_name: String, variable_type: VariableType) {
         let layout = SegmentLayout::new(self.row_len, variable_type);
         self.row_len += layout.stride();
         self.segments.push(Segment { short_name, layout });
@@ -364,7 +364,7 @@ mod tests {
                     .build()
             })
             .collect();
-        VeryLongStrings::builder().strings(strings).build()
+        VeryLongStrings::builder().add_strings(strings).build()
     }
 
     /// Builds the layout for `segments`, returning it with any warnings.
@@ -374,7 +374,7 @@ mod tests {
     ) -> (DataLayout, Vec<SavWarning>) {
         let mut builder = DataLayoutBuilder::default();
         for (name, variable_type) in segments {
-            builder.push_variable((*name).to_owned(), *variable_type);
+            builder.add_variable((*name).to_owned(), *variable_type);
         }
         if let Some(strings) = strings {
             builder.set_very_long_strings(&strings);
