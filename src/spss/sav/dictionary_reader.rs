@@ -54,7 +54,6 @@ use crate::spss::sav::extensions::variable_attributes;
 use crate::spss::sav::extensions::variable_sets;
 use crate::spss::sav::extensions::very_long_strings;
 use crate::spss::sav::raw_value_label_set::RawValueLabelSet;
-use crate::spss::sav::reader_options::ReaderOptions;
 use crate::spss::sav::reader_state::ReaderState;
 use crate::spss::sav::record_reader::RecordReader;
 use crate::spss::sav::sav_error::Result;
@@ -75,10 +74,6 @@ use crate::spss::sav::sav_warning::SavWarning;
 pub struct DictionaryReader<R> {
     state: ReaderState<R>,
     header: SavHeader,
-    /// Options set on the upstream `SavReader`. Consulted at
-    /// finalization to decide whether a schema is assembled.
-    #[allow(dead_code)] // exercised once schema accumulation lands.
-    options: ReaderOptions,
     encoding_provenance: EncodingProvenance,
     /// What the file's own declarations named, regardless of what the
     /// reader applied. Only consulted to report an override.
@@ -101,7 +96,6 @@ impl<R> DictionaryReader<R> {
     pub(crate) fn new(
         state: ReaderState<R>,
         header: SavHeader,
-        options: ReaderOptions,
         encoding_provenance: EncodingProvenance,
         declared_encoding: Option<EncodingProvenance>,
         buffer: DictionaryBuffer,
@@ -110,7 +104,6 @@ impl<R> DictionaryReader<R> {
         Self {
             state,
             header,
-            options,
             encoding_provenance,
             declared_encoding,
             buffer,

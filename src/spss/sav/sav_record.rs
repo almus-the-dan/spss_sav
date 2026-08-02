@@ -19,7 +19,6 @@ pub struct SavRecord<'a> {
 }
 
 impl<'a> SavRecord<'a> {
-    #[allow(dead_code)] // exercised once the record reader phase lands.
     pub(crate) fn new(values: Vec<Value<'a>>) -> Self {
         Self { values }
     }

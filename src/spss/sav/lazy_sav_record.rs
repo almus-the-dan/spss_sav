@@ -21,7 +21,6 @@ pub struct LazySavRecord<'a> {
 }
 
 impl<'a> LazySavRecord<'a> {
-    #[allow(dead_code)] // handed out once row decoding lands.
     pub(crate) fn new(row: &'a [u8], layout: &'a DataLayout) -> Self {
         Self { row, layout }
     }

@@ -21,25 +21,36 @@ use crate::spss::sav::variable_type::VariableType;
 /// The complete, self-contained description of a SAV file's data
 /// section.
 ///
-/// Deliberately separate from
-/// [`SavSchema`](crate::spss::sav::sav_schema::SavSchema), which is
-/// presentation — names, labels, value labels, display parameters, the
-/// things a data read never consults. Splitting them turns an invariant
-/// that would otherwise be a doc comment into a structural guarantee:
-/// `DataLayout` is derived from a skeleton the buffering pass retains
-/// rather than from the records as they stream, so neither
+/// Kept separate from
+/// [`SavSchema`](crate::spss::sav::sav_schema::SavSchema) because the
+/// two are assembled from different sources. This is derived from a
+/// skeleton the buffering pass sets aside *before any skip decision*,
+/// where the schema is accumulated from records as they are handed out.
+/// That difference is the guarantee: neither
 /// [`skip_dictionary_content`](crate::spss::sav::sav_reader::SavReader::skip_dictionary_content)
 /// nor
 /// [`skip_record`](crate::spss::sav::dictionary_reader::DictionaryReader::skip_record)
-/// can leave the record reader unable to do its job.
+/// can leave the record reader unable to do its job, and nothing has to
+/// be kept in sync for that to hold. The schema is skip-safe too, but by
+/// discipline rather than structure — `schema_draws_on` has to name
+/// every record kind that `accumulate` consumes, and missing one loses
+/// data silently.
 ///
-/// It is small — a few words per variable — so it is copied into the
-/// record reader rather than borrowed.
+/// The two overlap on the declared missing values, which a correct read
+/// needs and the schema also presents. The rest of the schema — names,
+/// labels, value labels, display parameters, attributes — a data read
+/// never consults.
+///
+/// It is copied into the record reader rather than borrowed because
+/// [`into_record_reader`](crate::spss::sav::dictionary_reader::DictionaryReader::into_record_reader)
+/// consumes the dictionary buffer the skeleton lives in, so by the time
+/// the record reader exists there is nothing left to borrow from.
 #[derive(Debug, Clone)]
 pub(crate) struct DataLayout {
     variables: Vec<VariableLayout>,
     row_len: usize,
     compression: CompressionKind,
+    #[allow(dead_code)] // read by BytecodeDecoder::fill_row in Phase 6(b).
     bias: f64,
     float_encoding: FloatEncoding,
     sentinels: FloatSentinels,
@@ -61,21 +72,22 @@ impl DataLayout {
     ///
     /// The sum of every segment's stride, which is also what the
     /// header's `nominal_case_size` counts in 8-byte units.
-    #[allow(dead_code)] // exercised once row decoding lands.
     #[inline]
     pub fn row_len(&self) -> usize {
         self.row_len
     }
 
     /// How the data section is compressed.
-    #[allow(dead_code)] // exercised once row decoding lands.
     #[inline]
     pub fn compression(&self) -> CompressionKind {
         self.compression
     }
 
     /// Bytecode-compression bias, from the header.
-    #[allow(dead_code)] // exercised once row decoding lands.
+    ///
+    /// What an inline command code is measured against: the decoder
+    /// turns code `c` into `c - bias`.
+    #[allow(dead_code)] // read by BytecodeDecoder::fill_row in Phase 6(b).
     #[inline]
     pub fn bias(&self) -> f64 {
         self.bias
@@ -96,7 +108,6 @@ impl DataLayout {
     }
 
     /// The resolved text encoding for string cells.
-    #[allow(dead_code)] // exercised once row decoding lands.
     #[inline]
     pub fn encoding(&self) -> &'static Encoding {
         self.encoding
@@ -518,7 +529,6 @@ mod tests {
         let longstr = &layout.variables()[0];
         assert_eq!(longstr.variable_type(), VariableType::String(300));
         assert_eq!(longstr.segments().len(), 2);
-        assert!(longstr.is_segmented());
         // Not contiguous: the 255-wide segment sits in 256 bytes.
         assert!(longstr.contiguous_range().is_none());
         assert_eq!(longstr.segments()[0].offset(), 0);
@@ -674,7 +684,7 @@ mod tests {
         );
         assert!(warnings.is_empty());
         assert_eq!(layout.variables().len(), 2);
-        assert!(!layout.variables()[1].is_segmented());
+        assert_eq!(layout.variables()[1].segments().len(), 1);
         assert_eq!(layout.variables()[1].contiguous_range(), Some(8..263));
     }
 

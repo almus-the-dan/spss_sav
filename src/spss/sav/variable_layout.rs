@@ -64,14 +64,6 @@ impl VariableLayout {
         &self.segments
     }
 
-    /// `true` when this variable's value is spread across more than one
-    /// segment and must be reassembled.
-    #[allow(dead_code)] // exercised once row decoding lands.
-    #[inline]
-    pub fn is_segmented(&self) -> bool {
-        self.segments.len() > 1
-    }
-
     /// Byte range of this variable's value within a row, for the common
     /// single-segment case.
     ///
@@ -79,7 +71,6 @@ impl VariableLayout {
     /// each segment is padded up to a unit boundary and the last one
     /// over-supplies. Those must go through
     /// [`segments`](Self::segments).
-    #[allow(dead_code)] // exercised once row decoding lands.
     #[inline]
     pub fn contiguous_range(&self) -> Option<Range<usize>> {
         let [segment] = self.segments[..] else {
@@ -92,7 +83,6 @@ impl VariableLayout {
     /// Number of bytes this variable's reassembled value holds before
     /// trailing padding is trimmed — its logical width, which is *less*
     /// than the sum of its segments' contributions when segmented.
-    #[allow(dead_code)] // exercised once row decoding lands.
     #[inline]
     pub fn content_len(&self) -> usize {
         match self.variable_type {

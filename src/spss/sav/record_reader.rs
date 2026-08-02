@@ -235,21 +235,4 @@ impl<R> RecordReader<R> {
     pub fn warnings(&self) -> &[SavWarning] {
         self.state.warnings()
     }
-
-    /// The data layout rows are read through.
-    ///
-    /// Crate-internal: callers get the same information, better
-    /// presented, from [`schema`](Self::schema).
-    #[allow(dead_code)] // exercised once row decoding lands.
-    #[inline]
-    pub(crate) fn layout(&self) -> &DataLayout {
-        &self.layout
-    }
-
-    /// The underlying reader, positioned at the first data row.
-    #[allow(dead_code)] // exercised once row decoding lands.
-    #[inline]
-    pub(crate) fn state_mut(&mut self) -> &mut ReaderState<R> {
-        &mut self.state
-    }
 }

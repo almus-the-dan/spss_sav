@@ -1,18 +1,20 @@
 //! Shared per-reader state used by every SAV reader phase.
 //!
 //! `ReaderState<R>` owns the underlying reader, the running byte
-//! position, the detected byte order (filled in by the header reader),
-//! and the warnings vec. It deliberately does not own an encoding: the
-//! file's encoding is not resolvable until the whole dictionary has
-//! been walked, so state that held one would only ever hold a stale
-//! guess. Pure parsing functions in `*_parse.rs` operate on byte
-//! slices; the I/O primitives that produce those slices live here.
+//! position, and the warnings vec — and deliberately little else. Pure
+//! parsing functions in `*_parse.rs` operate on byte slices; the I/O
+//! primitives that produce those slices live here.
 //!
-//! Compression-related state (bytecode codes block, ZLIB decoder
-//! wrapper) is intentionally absent. It will be added when the
-//! record reader lands; the dictionary section is always
-//! uncompressed, so phases through the dictionary reader do not
-//! need it.
+//! Three things it does *not* hold, each for the same reason — a copy
+//! here would only be a second place for the value to be wrong:
+//!
+//! - **Byte order.** Every multi-byte read takes it as a parameter.
+//! - **Encoding.** Not resolvable until the whole dictionary has been
+//!   walked, so any state holding one would hold a stale guess.
+//! - **Compression state.** The bytecode decoder and the ZSAV block
+//!   container keep their own, in
+//!   [`compression`](crate::spss::sav::compression), where the row
+//!   source that owns them lives.
 
 use std::io::{ErrorKind, Read};
 
@@ -38,7 +40,6 @@ const SKIP_CHUNK_LEN: usize = 1024;
 pub(crate) struct ReaderState<R> {
     reader: R,
     position: u64,
-    byte_order: Option<ByteOrder>,
     warnings: Vec<SavWarning>,
 }
 
@@ -47,7 +48,6 @@ impl<R> ReaderState<R> {
         Self {
             reader,
             position: 0,
-            byte_order: None,
             warnings: Vec::new(),
         }
     }
@@ -55,19 +55,6 @@ impl<R> ReaderState<R> {
     /// Byte offset in the file.
     pub fn position(&self) -> u64 {
         self.position
-    }
-
-    /// The detected byte order, or `None` before the header reader
-    /// has determined it.
-    #[allow(dead_code)] // exercised once the record reader phase lands.
-    pub fn byte_order(&self) -> Option<ByteOrder> {
-        self.byte_order
-    }
-
-    /// Records the byte order detected from the header's
-    /// `layout_code` field.
-    pub fn set_byte_order(&mut self, byte_order: ByteOrder) {
-        self.byte_order = Some(byte_order);
     }
 
     /// Warnings accumulated during the most recent advance. Each
@@ -231,14 +218,6 @@ impl<R: Read> ReaderState<R> {
     pub fn read_i32(&mut self, byte_order: ByteOrder, section: Section) -> Result<i32> {
         let bytes = self.read_array::<4>(section)?;
         let value = byte_order.read_i32(bytes);
-        Ok(value)
-    }
-
-    /// Reads an 8-byte IEEE 754 double in the file's byte order.
-    #[allow(dead_code)] // exercised once the record reader phase lands.
-    pub fn read_f64(&mut self, byte_order: ByteOrder, section: Section) -> Result<f64> {
-        let bytes = self.read_array::<8>(section)?;
-        let value = byte_order.read_f64(bytes);
         Ok(value)
     }
 }

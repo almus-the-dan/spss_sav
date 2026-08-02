@@ -126,7 +126,6 @@ impl<R: Read> HeaderReader<R> {
         );
         let layout_code_bytes = self.state.read_array::<LAYOUT_CODE_LEN>(Section::Header)?;
         let byte_order = parse_layout_code(layout_code_bytes, layout_code_position)?;
-        self.state.set_byte_order(byte_order);
 
         debug_assert_eq!(
             usize::try_from(self.state.position()).unwrap(),
@@ -274,7 +273,6 @@ impl<R: Read> HeaderReader<R> {
         let reader = DictionaryReader::new(
             self.state,
             header,
-            self.options,
             file_encoding,
             declared,
             buffer,

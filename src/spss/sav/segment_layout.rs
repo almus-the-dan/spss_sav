@@ -51,7 +51,6 @@ impl SegmentLayout {
     }
 
     /// Byte offset of this segment from the start of the row.
-    #[allow(dead_code)] // exercised once row decoding lands.
     #[inline]
     pub fn offset(self) -> usize {
         self.offset
@@ -82,7 +81,6 @@ impl SegmentLayout {
     /// Bytes this segment *contributes* to its variable's value — its
     /// declared width, ignoring the padding that rounds it up to a unit
     /// boundary.
-    #[allow(dead_code)] // exercised once row decoding lands.
     #[inline]
     pub fn content_len(self) -> usize {
         match self.variable_type {
