@@ -77,7 +77,7 @@ impl VeryLongStringsBuilder {
     /// Appends `strings`.
     #[must_use]
     #[inline]
-    pub fn add_strings(mut self, strings: Vec<VeryLongString>) -> Self {
+    pub fn add_strings(mut self, strings: impl IntoIterator<Item = VeryLongString>) -> Self {
         self.strings.extend(strings);
         self
     }

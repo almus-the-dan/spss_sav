@@ -78,7 +78,10 @@ impl VariableAttributesBuilder {
     /// Appends `records`.
     #[must_use]
     #[inline]
-    pub fn add_records(mut self, records: Vec<VariableAttributeRecord>) -> Self {
+    pub fn add_records(
+        mut self,
+        records: impl IntoIterator<Item = VariableAttributeRecord>,
+    ) -> Self {
         self.records.extend(records);
         self
     }

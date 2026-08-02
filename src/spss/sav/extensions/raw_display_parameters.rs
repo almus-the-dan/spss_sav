@@ -53,7 +53,7 @@ impl RawDisplayParametersBuilder {
     /// Appends `values`.
     #[must_use]
     #[inline]
-    pub fn add_values(mut self, values: Vec<u32>) -> Self {
+    pub fn add_values(mut self, values: impl IntoIterator<Item = u32>) -> Self {
         self.values.extend(values);
         self
     }

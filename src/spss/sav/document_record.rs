@@ -45,10 +45,12 @@ pub struct DocumentRecordBuilder {
 }
 
 impl DocumentRecordBuilder {
-    /// Appends `lines`.
+    /// Appends `lines` — any iterable of anything that converts to a
+    /// `String`.
     #[must_use]
     #[inline]
-    pub fn add_lines(mut self, lines: Vec<String>) -> Self {
+    pub fn add_lines(mut self, lines: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        let lines = lines.into_iter().map(Into::into);
         self.lines.extend(lines);
         self
     }

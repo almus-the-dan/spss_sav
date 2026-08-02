@@ -88,10 +88,12 @@ impl VariableAttributeBuilder {
         self
     }
 
-    /// Appends `values`.
+    /// Appends `values` — any iterable of anything that converts to a
+    /// `String`.
     #[must_use]
     #[inline]
-    pub fn add_values(mut self, values: Vec<String>) -> Self {
+    pub fn add_values(mut self, values: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        let values = values.into_iter().map(Into::into);
         self.values.extend(values);
         self
     }
@@ -130,7 +132,7 @@ mod tests {
     fn array_attribute_keeps_index_order() {
         let attribute = VariableAttribute::builder()
             .name("fred")
-            .add_values(vec!["first".to_owned(), "second".to_owned()])
+            .add_values(["first", "second"])
             .build();
         assert_eq!(attribute.values(), ["first", "second"]);
         assert_eq!(attribute.value(), Some("first"));
@@ -140,13 +142,17 @@ mod tests {
     /// accumulate and mix freely with the singular one. A builder can
     /// only ever gain values, never silently lose the ones already
     /// added.
+    ///
+    /// Also covers the argument being any iterable, not just a `Vec`:
+    /// an array of `&str` here, where the singular takes a
+    /// `impl Into<String>`.
     #[test]
     fn add_values_appends_rather_than_replacing() {
         let attribute = VariableAttribute::builder()
             .name("fred")
             .add_value("first")
-            .add_values(vec!["second".to_owned(), "third".to_owned()])
-            .add_values(vec!["fourth".to_owned()])
+            .add_values(["second", "third"])
+            .add_values(["fourth"])
             .add_value("fifth")
             .build();
         assert_eq!(

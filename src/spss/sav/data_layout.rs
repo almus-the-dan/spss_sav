@@ -355,15 +355,12 @@ mod tests {
     }
 
     fn very_long_strings(entries: &[(&str, u32)]) -> VeryLongStrings {
-        let strings = entries
-            .iter()
-            .map(|(name, width)| {
-                VeryLongString::builder()
-                    .short_name(*name)
-                    .width(*width)
-                    .build()
-            })
-            .collect();
+        let strings = entries.iter().map(|(name, width)| {
+            VeryLongString::builder()
+                .short_name(*name)
+                .width(*width)
+                .build()
+        });
         VeryLongStrings::builder().add_strings(strings).build()
     }
 

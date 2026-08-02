@@ -618,14 +618,10 @@ fn decode_value_label_set(
     set: BufferedValueLabelSet,
     encoding: &'static Encoding,
 ) -> RawValueLabelSet {
-    let entries = set
-        .entries
-        .into_iter()
-        .map(|entry| {
-            let unpadded_len = u8::try_from(entry.label.len()).unwrap_or(u8::MAX);
-            parse_value_label_entry(entry.value, unpadded_len, &entry.label, encoding)
-        })
-        .collect();
+    let entries = set.entries.into_iter().map(|entry| {
+        let unpadded_len = u8::try_from(entry.label.len()).unwrap_or(u8::MAX);
+        parse_value_label_entry(entry.value, unpadded_len, &entry.label, encoding)
+    });
     RawValueLabelSet::builder()
         .add_entries(entries)
         .add_segment_indices(set.segment_indices)
@@ -637,14 +633,10 @@ fn decode_document_record(
     document: BufferedDocumentRecord,
     encoding: &'static Encoding,
 ) -> DocumentRecord {
-    let lines = document
-        .lines
-        .into_iter()
-        .map(|line| {
-            let (decoded, _, _) = encoding.decode(&line);
-            decoded.into_owned()
-        })
-        .collect();
+    let lines = document.lines.into_iter().map(|line| {
+        let (decoded, _, _) = encoding.decode(&line);
+        decoded.into_owned()
+    });
     DocumentRecord::builder().add_lines(lines).build()
 }
 

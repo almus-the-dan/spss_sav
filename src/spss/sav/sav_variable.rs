@@ -311,7 +311,10 @@ impl SavVariableBuilder {
     /// Appends `attributes`.
     #[must_use]
     #[inline]
-    pub fn add_attributes(mut self, attributes: Vec<VariableAttribute>) -> Self {
+    pub fn add_attributes(
+        mut self,
+        attributes: impl IntoIterator<Item = VariableAttribute>,
+    ) -> Self {
         self.attributes.extend(attributes);
         self
     }

@@ -57,7 +57,7 @@ impl LongVariableNamesBuilder {
     /// Appends `mappings`.
     #[must_use]
     #[inline]
-    pub fn add_mappings(mut self, mappings: Vec<LongVariableName>) -> Self {
+    pub fn add_mappings(mut self, mappings: impl IntoIterator<Item = LongVariableName>) -> Self {
         self.mappings.extend(mappings);
         self
     }

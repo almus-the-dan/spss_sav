@@ -75,7 +75,8 @@ impl FileAttributeBuilder {
     /// Appends `values` to the attribute.
     #[must_use]
     #[inline]
-    pub fn add_values(mut self, values: Vec<String>) -> Self {
+    pub fn add_values(mut self, values: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        let values = values.into_iter().map(Into::into);
         self.values.extend(values);
         self
     }

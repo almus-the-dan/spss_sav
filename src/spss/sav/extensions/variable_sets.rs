@@ -77,7 +77,7 @@ impl VariableSetsBuilder {
     /// Appends `sets`.
     #[must_use]
     #[inline]
-    pub fn add_sets(mut self, sets: Vec<VariableSet>) -> Self {
+    pub fn add_sets(mut self, sets: impl IntoIterator<Item = VariableSet>) -> Self {
         self.sets.extend(sets);
         self
     }

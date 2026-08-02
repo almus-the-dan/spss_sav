@@ -77,7 +77,7 @@ impl LongValueLabelsBuilder {
     /// Appends `records`.
     #[must_use]
     #[inline]
-    pub fn add_records(mut self, records: Vec<LongValueLabelRecord>) -> Self {
+    pub fn add_records(mut self, records: impl IntoIterator<Item = LongValueLabelRecord>) -> Self {
         self.records.extend(records);
         self
     }

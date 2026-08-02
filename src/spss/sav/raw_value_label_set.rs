@@ -78,7 +78,7 @@ impl RawValueLabelSetBuilder {
     /// Appends `entries`.
     #[must_use]
     #[inline]
-    pub fn add_entries(mut self, entries: Vec<RawValueLabelEntry>) -> Self {
+    pub fn add_entries(mut self, entries: impl IntoIterator<Item = RawValueLabelEntry>) -> Self {
         self.entries.extend(entries);
         self
     }
@@ -97,7 +97,7 @@ impl RawValueLabelSetBuilder {
     /// [`RawValueLabelSet::segment_indices`].
     #[must_use]
     #[inline]
-    pub fn add_segment_indices(mut self, indices: Vec<u32>) -> Self {
+    pub fn add_segment_indices(mut self, indices: impl IntoIterator<Item = u32>) -> Self {
         self.segment_indices.extend(indices);
         self
     }

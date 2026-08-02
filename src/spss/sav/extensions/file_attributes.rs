@@ -74,7 +74,7 @@ impl FileAttributesBuilder {
     /// Appends `attributes`.
     #[must_use]
     #[inline]
-    pub fn add_attributes(mut self, attributes: Vec<FileAttribute>) -> Self {
+    pub fn add_attributes(mut self, attributes: impl IntoIterator<Item = FileAttribute>) -> Self {
         self.attributes.extend(attributes);
         self
     }

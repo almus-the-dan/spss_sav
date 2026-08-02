@@ -68,7 +68,8 @@ impl VariableSetBuilder {
     /// Appends `variables` to the set's members.
     #[must_use]
     #[inline]
-    pub fn add_variables(mut self, variables: Vec<String>) -> Self {
+    pub fn add_variables(mut self, variables: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        let variables = variables.into_iter().map(Into::into);
         self.variables.extend(variables);
         self
     }

@@ -69,7 +69,7 @@ impl LongMissingValueRecordBuilder {
     /// Appends `values` to the record.
     #[must_use]
     #[inline]
-    pub fn add_values(mut self, values: Vec<Vec<u8>>) -> Self {
+    pub fn add_values(mut self, values: impl IntoIterator<Item = Vec<u8>>) -> Self {
         self.values.extend(values);
         self
     }

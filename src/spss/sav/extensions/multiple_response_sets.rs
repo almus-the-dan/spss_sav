@@ -83,7 +83,7 @@ impl MultipleResponseSetsBuilder {
     /// Appends `sets`.
     #[must_use]
     #[inline]
-    pub fn add_sets(mut self, sets: Vec<MultipleResponseSet>) -> Self {
+    pub fn add_sets(mut self, sets: impl IntoIterator<Item = MultipleResponseSet>) -> Self {
         self.sets.extend(sets);
         self
     }
