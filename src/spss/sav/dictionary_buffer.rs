@@ -772,7 +772,6 @@ mod tests {
     use crate::spss::sav::encoding_provenance::EncodingProvenance;
     use crate::spss::sav::extensions::extension_subtype::ExtensionSubtype;
     use crate::spss::sav::sav_error::{FormatErrorKind, SavError};
-    use crate::spss::sav::sav_reader::SavReader;
     use crate::spss::sav::sav_warning::SavWarning;
     use crate::spss::sav::skippable_content::SkippableContent;
     use crate::spss::sav::test_support::{
@@ -1066,7 +1065,7 @@ mod tests {
         let mut reader = open(one_of_each());
         while reader.skip_record().unwrap().is_some() {}
         let finalized = reader.into_record_reader().expect("finalize");
-        let schema = finalized.schema().expect("schema built");
+        let schema = finalized.schema();
         assert_eq!(schema.variable_count(), 1);
         assert_eq!(schema.variables()[0].short_name(), "V1");
         // The value-label pair the caller passed over is attached too.
@@ -1081,14 +1080,14 @@ mod tests {
         let mut read_all = open(one_of_each());
         while read_all.read_record().unwrap().is_some() {}
         let expected = read_all.into_record_reader().expect("finalize");
-        let expected = expected.schema().expect("schema built");
+        let expected = expected.schema();
 
         let mut mixed = open(one_of_each());
         mixed.skip_record().unwrap(); // the variable
         mixed.read_record().unwrap(); // the value labels
         mixed.skip_record().unwrap(); // the document
         let mixed = mixed.into_record_reader().expect("finalize");
-        let mixed = mixed.schema().expect("schema built");
+        let mixed = mixed.schema();
 
         assert_eq!(mixed.variable_count(), expected.variable_count());
         assert_eq!(
@@ -1123,20 +1122,6 @@ mod tests {
             Some(DictionaryRecordKind::Document),
         );
         assert!(reader.warnings().is_empty());
-    }
-
-    /// With schema building off, nothing the library owns draws on any
-    /// record, so every skip is a pure pass-over.
-    #[test]
-    fn build_schema_off_makes_every_skip_a_pass_over() {
-        let mut reader = SavReader::new()
-            .build_schema(false)
-            .from_reader(Cursor::new(one_of_each()))
-            .read_header()
-            .expect("read header");
-        while reader.skip_record().unwrap().is_some() {}
-        let finalized = reader.into_record_reader().expect("finalize");
-        assert!(finalized.schema().is_none());
     }
 
     /// The two mechanisms compose without overlap: a record skipped up

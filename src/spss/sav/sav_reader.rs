@@ -94,29 +94,6 @@ impl SavReader {
         self
     }
 
-    /// Sets whether a
-    /// [`SavSchema`](crate::spss::sav::sav_schema::SavSchema) is
-    /// assembled as dictionary records are handed out. `true` by
-    /// default.
-    ///
-    /// Pass `false` when you are folding the streamed records into your
-    /// own structure and would otherwise pay to build both.
-    /// [`RecordReader::schema`](crate::spss::sav::record_reader::RecordReader::schema)
-    /// then returns `None`. The data layout the record reader needs is
-    /// accumulated separately and is unaffected, so this cannot change
-    /// how the rows read.
-    ///
-    /// This is the mirror of
-    /// [`skip_dictionary_content`](Self::skip_dictionary_content):
-    /// skipping controls what is retained on the way in, this controls
-    /// what is assembled on the way out.
-    #[must_use]
-    #[inline]
-    pub fn build_schema(mut self, build: bool) -> Self {
-        self.options.set_build_schema(build);
-        self
-    }
-
     /// Opens the file at `path` and begins reading it as a SAV
     /// file, wrapping it in a [`BufReader`] automatically.
     ///

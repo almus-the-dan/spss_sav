@@ -223,7 +223,7 @@ impl<R> DictionaryReader<R> {
             return Ok(None);
         };
         let kind = buffered.payload.kind();
-        if !self.wants(kind) {
+        if !schema_draws_on(kind) {
             return Ok(Some(kind));
         }
         self.state.warnings_mut().extend(buffered.warnings);
@@ -232,30 +232,6 @@ impl<R> DictionaryReader<R> {
         Ok(Some(kind))
     }
 
-    /// Whether the library itself draws on a record of this kind, and so
-    /// must decode it even when the caller has passed over it.
-    ///
-    /// Mirrors [`accumulate`](Self::accumulate) — every kind that method
-    /// does something with has to be listed here. Nothing consults the
-    /// data layout: that is built from the buffer's skeleton, not from
-    /// these records.
-    fn wants(&self, kind: DictionaryRecordKind) -> bool {
-        if !self.options.build_schema() {
-            return false;
-        }
-        match kind {
-            DictionaryRecordKind::Variable | DictionaryRecordKind::ValueLabelSet => true,
-            DictionaryRecordKind::Document => false,
-            DictionaryRecordKind::Extension(subtype) => matches!(
-                subtype,
-                ExtensionSubtype::LongVariableNames
-                    | ExtensionSubtype::DisplayParameters
-                    | ExtensionSubtype::VariableAttributes
-                    | ExtensionSubtype::LongValueLabels
-                    | ExtensionSubtype::LongMissingValues
-            ),
-        }
-    }
     /// Decodes one buffered payload into the record a caller sees.
     fn decode(&mut self, payload: BufferedRecordPayload) -> Result<DictionaryRecord> {
         let encoding = self.encoding_provenance.encoding();
@@ -286,9 +262,6 @@ impl<R> DictionaryReader<R> {
     /// own skeleton at finalization, so it cannot depend on which
     /// records were pulled.
     fn accumulate(&mut self, record: &DictionaryRecord) {
-        if !self.options.build_schema() {
-            return;
-        }
         match record {
             DictionaryRecord::Variable(header) => self.schema.add_variable(header),
             DictionaryRecord::ValueLabelSet(set) => self.schema.add_value_labels(set),
@@ -487,21 +460,16 @@ impl<R: Read> DictionaryReader<R> {
         let layout = self.build_layout(encoding)?;
 
         let weight = self.weight_variable_index(&layout);
-        let schema = if self.options.build_schema() {
-            let mut warnings = Vec::new();
-            let accumulated = std::mem::take(&mut self.schema);
-            let schema = accumulated.build(
-                &layout,
-                self.header.float_encoding(),
-                layout.sentinels(),
-                weight,
-                &mut warnings,
-            );
-            self.state.warnings_mut().append(&mut warnings);
-            Some(schema)
-        } else {
-            None
-        };
+        let mut warnings = Vec::new();
+        let accumulated = std::mem::take(&mut self.schema);
+        let schema = accumulated.build(
+            &layout,
+            self.header.float_encoding(),
+            layout.sentinels(),
+            weight,
+            &mut warnings,
+        );
+        self.state.warnings_mut().append(&mut warnings);
 
         let reader = RecordReader::new(
             self.state,
@@ -656,6 +624,28 @@ fn decode_document_record(
         decoded.into_owned()
     });
     DocumentRecord::builder().add_lines(lines).build()
+}
+
+/// Whether the schema draws on a record of this kind, and so whether it
+/// must be decoded even when the caller has passed over it.
+///
+/// Mirrors [`DictionaryReader::accumulate`] — every kind that method
+/// does something with has to be listed here. The data layout is
+/// deliberately absent: it is built from the buffer's skeleton rather
+/// than from these records, so no answer here can affect a data read.
+fn schema_draws_on(kind: DictionaryRecordKind) -> bool {
+    match kind {
+        DictionaryRecordKind::Variable | DictionaryRecordKind::ValueLabelSet => true,
+        DictionaryRecordKind::Document => false,
+        DictionaryRecordKind::Extension(subtype) => matches!(
+            subtype,
+            ExtensionSubtype::LongVariableNames
+                | ExtensionSubtype::DisplayParameters
+                | ExtensionSubtype::VariableAttributes
+                | ExtensionSubtype::LongValueLabels
+                | ExtensionSubtype::LongMissingValues
+        ),
+    }
 }
 
 #[cfg(test)]

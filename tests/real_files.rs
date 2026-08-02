@@ -612,7 +612,7 @@ fn finalize_comprehensive() -> spss_sav::spss::sav::record_reader::RecordReader<
 #[test]
 fn very_long_strings_collapse_into_one_variable() {
     let reader = finalize_comprehensive();
-    let schema = reader.schema().expect("schema built by default");
+    let schema = reader.schema();
 
     let names: Vec<&str> = schema
         .variables()
@@ -631,7 +631,7 @@ fn very_long_strings_collapse_into_one_variable() {
 #[test]
 fn long_names_are_patched_onto_variables() {
     let reader = finalize_comprehensive();
-    let schema = reader.schema().expect("schema");
+    let schema = reader.schema();
     let id = schema.variable_by_name("id").expect("id present");
     assert_eq!(id.short_name(), "ID");
     assert_eq!(id.long_name(), Some("id"));
@@ -644,7 +644,7 @@ fn value_labels_attach_to_every_variable_the_pair_named() {
     use spss_sav::spss::sav::value_label_value::ValueLabelValue;
 
     let reader = finalize_comprehensive();
-    let schema = reader.schema().expect("schema");
+    let schema = reader.schema();
     for name in ["q1", "q2", "q3"] {
         let variable = schema.variable_by_name(name).expect("variable present");
         let labels = variable.value_labels().expect("labels attached");
@@ -676,7 +676,7 @@ fn long_value_labels_attach_with_full_width_keys() {
     use spss_sav::spss::sav::value_label_value::ValueLabelValue;
 
     let reader = finalize_comprehensive();
-    let schema = reader.schema().expect("schema");
+    let schema = reader.schema();
     let longstr = schema.variable_by_name("longstr").expect("longstr present");
     let labels = longstr.value_labels().expect("labels attached");
     assert_eq!(labels.len(), 2);
@@ -696,7 +696,7 @@ fn missing_values_decode_per_variable_type() {
     use spss_sav::spss::sav::missing_value_specification::MissingValueSpecification;
 
     let reader = finalize_comprehensive();
-    let schema = reader.schema().expect("schema");
+    let schema = reader.schema();
 
     let id = schema.variable_by_name("id").expect("id present");
     assert_eq!(
@@ -723,7 +723,7 @@ fn display_parameters_slice_per_segment() {
     use spss_sav::spss::sav::measurement_level::MeasurementLevel;
 
     let reader = finalize_comprehensive();
-    let schema = reader.schema().expect("schema");
+    let schema = reader.schema();
 
     let id = schema.variable_by_name("id").expect("id present");
     let display = id.display().expect("display attached");
@@ -743,7 +743,7 @@ fn display_parameters_slice_per_segment() {
 #[test]
 fn variable_attributes_attach_by_long_name() {
     let reader = finalize_comprehensive();
-    let schema = reader.schema().expect("schema");
+    let schema = reader.schema();
     let id = schema.variable_by_name("id").expect("id present");
 
     let attribute = id.attribute("MyAttr").expect("MyAttr present");
@@ -755,22 +755,6 @@ fn variable_attributes_attach_by_long_name() {
 #[test]
 fn case_count_comes_through_finalization() {
     let reader = finalize_comprehensive();
-    assert_eq!(reader.case_count(), Some(2));
-}
-
-/// `build_schema(false)` drops the schema but must not disturb anything
-/// the record reader needs.
-#[test]
-fn schema_building_can_be_turned_off() {
-    let reader = SavReader::new()
-        .build_schema(false)
-        .from_path(COMPREHENSIVE)
-        .expect("open fixture")
-        .read_header()
-        .expect("read header")
-        .into_record_reader()
-        .expect("finalize");
-    assert!(reader.schema().is_none());
     assert_eq!(reader.case_count(), Some(2));
 }
 
@@ -819,7 +803,7 @@ fn skipping_everything_skippable_leaves_the_data_layout_intact() {
         finalize_comprehensive().encoding_provenance(),
     );
     // And the very long string is still one variable at width 300.
-    let schema = stripped.schema().expect("schema");
+    let schema = stripped.schema();
     let longstr = schema
         .variables()
         .iter()
@@ -845,7 +829,7 @@ fn weight_variable_resolves_across_all_three_index_spaces() {
         .into_record_reader()
         .expect("finalize");
 
-    let schema = reader.schema().expect("schema");
+    let schema = reader.schema();
     let names: Vec<&str> = schema
         .variables()
         .iter()
@@ -863,25 +847,11 @@ fn weight_variable_resolves_across_all_three_index_spaces() {
 #[test]
 fn a_file_without_a_weight_reports_none() {
     let reader = finalize_comprehensive();
-    let schema = reader.schema().expect("schema");
+    let schema = reader.schema();
     assert!(schema.weight_variable().is_none());
 }
 
 /// The weight lives on the schema, so turning schema building off takes
-/// it with them — there is nothing left to resolve the offset against.
-#[test]
-fn no_schema_means_no_weight_variable() {
-    let reader = SavReader::new()
-        .build_schema(false)
-        .from_path(WEIGHTED)
-        .expect("open fixture")
-        .read_header()
-        .expect("read header")
-        .into_record_reader()
-        .expect("finalize");
-    assert!(reader.schema().is_none());
-}
-
 /// The strongest form of the rule: on a real file, passing over every
 /// record must produce exactly the schema that reading every record
 /// does. `skip_record` withholds records from the caller; it does not
@@ -923,19 +893,16 @@ fn skipping_every_record_produces_the_same_schema_as_reading_them() {
     while skipped.skip_record().expect("skip record").is_some() {}
     let skipped = skipped.into_record_reader().expect("finalize");
 
-    assert_eq!(
-        describe(skipped.schema().expect("schema")),
-        describe(read_all.schema().expect("schema")),
-    );
+    assert_eq!(describe(skipped.schema()), describe(read_all.schema()),);
     assert_eq!(skipped.case_count(), read_all.case_count());
     assert_eq!(
         skipped
             .schema()
-            .and_then(spss_sav::spss::sav::sav_schema::SavSchema::weight_variable)
+            .weight_variable()
             .map(spss_sav::spss::sav::sav_variable::SavVariable::full_name),
         read_all
             .schema()
-            .and_then(spss_sav::spss::sav::sav_schema::SavSchema::weight_variable)
+            .weight_variable()
             .map(spss_sav::spss::sav::sav_variable::SavVariable::full_name),
     );
 }
@@ -1043,7 +1010,7 @@ fn uncompressed_rows_decode_to_their_written_values() {
 #[test]
 fn a_very_long_string_cell_reassembles_from_both_segments() {
     let mut reader = record_reader(COMPRESSION_NONE);
-    let schema = reader.schema().expect("schema").clone();
+    let schema = reader.schema().clone();
     let longstr = schema.variable_by_name("longstr").expect("longstr");
     assert_eq!(longstr.variable_type(), VariableType::String(300));
     assert_eq!(longstr.index(), 7);
@@ -1195,28 +1162,6 @@ fn a_row_cut_in_half_is_a_truncation_error() {
 /// The reason the missing-value specs live on `DataLayout` rather than
 /// only on `SavSchema`: with schema building switched off there is no
 /// `SavVariable` to consult, and a row that reported a declared-missing
-/// cell as present would be lying in a way the caller could not detect.
-#[test]
-fn missing_values_are_tagged_even_with_no_schema() {
-    let mut reader = SavReader::new()
-        .build_schema(false)
-        .from_path(COMPRESSION_NONE)
-        .expect("open fixture")
-        .read_header()
-        .expect("read header")
-        .into_record_reader()
-        .expect("finalize");
-    assert!(reader.schema().is_none(), "schema building is off");
-
-    let mut rows = Vec::new();
-    while let Some(record) = reader.read_record().expect("read record") {
-        rows.push(describe_row(&record));
-    }
-    for (row, expected) in rows.iter().zip(COMPRESSION_ROWS) {
-        assert_eq!(row.as_slice(), expected.as_slice());
-    }
-}
-
 /// The schema and the row reader derive missing values *independently*
 /// — `SavSchemaBuilder` from the type-2 records plus subtype 22 keyed
 /// through its own name index, `DataLayoutBuilder` from the skeleton
@@ -1225,7 +1170,7 @@ fn missing_values_are_tagged_even_with_no_schema() {
 #[test]
 fn the_schema_and_the_row_reader_agree_on_what_is_missing() {
     let mut reader = record_reader(COMPRESSION_NONE);
-    let schema = reader.schema().expect("schema").clone();
+    let schema = reader.schema().clone();
     let mut checked = 0;
     while let Some(record) = reader.read_record().expect("read record") {
         for (index, value) in record.values().iter().enumerate() {
@@ -1250,4 +1195,47 @@ fn the_schema_and_the_row_reader_agree_on_what_is_missing() {
         }
     }
     assert_eq!(checked, 24, "three rows of eight variables");
+}
+
+/// Missing-value tagging must survive the caller filtering the
+/// dictionary out from under it.
+///
+/// Subtype 22 became layout-bearing when rows started reporting
+/// declared-missing cells, so it is now retained the way subtypes 4, 13,
+/// 14 and 16 always were — before any skip decision, in the buffer's
+/// skeleton. Naming it here, alongside every other skippable thing,
+/// is what proves that: the rows come back identical to a plain read.
+#[test]
+fn skipping_the_whole_dictionary_leaves_missing_tagging_intact() {
+    use spss_sav::spss::sav::extensions::extension_subtype::ExtensionSubtype;
+    use spss_sav::spss::sav::skippable_content::SkippableContent;
+
+    let mut reader = SavReader::new()
+        .skip_dictionary_content(SkippableContent::Documents)
+        .skip_dictionary_content(SkippableContent::ValueLabels);
+    for subtype in [
+        ExtensionSubtype::LongVariableNames,
+        ExtensionSubtype::VeryLongStrings,
+        ExtensionSubtype::LongMissingValues,
+        ExtensionSubtype::FloatInfo,
+    ] {
+        reader = reader.skip_dictionary_content(SkippableContent::Extension(subtype));
+    }
+
+    let mut reader = reader
+        .from_path(COMPRESSION_NONE)
+        .expect("open fixture")
+        .read_header()
+        .expect("read header")
+        .into_record_reader()
+        .expect("finalize");
+
+    let mut rows = Vec::new();
+    while let Some(record) = reader.read_record().expect("read record") {
+        rows.push(describe_row(&record));
+    }
+    assert_eq!(rows.len(), 3);
+    for (row, expected) in rows.iter().zip(COMPRESSION_ROWS) {
+        assert_eq!(row.as_slice(), expected.as_slice());
+    }
 }

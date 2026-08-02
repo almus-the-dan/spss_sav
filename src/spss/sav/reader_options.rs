@@ -25,10 +25,6 @@ pub(crate) struct ReaderOptions {
     /// everything" and [`Default`] is the do-nothing policy. A bitset
     /// is a non-breaking swap later — nothing here is public.
     skipped: HashSet<SkippableContent>,
-    /// Whether to accumulate a
-    /// [`SavSchema`](crate::spss::sav::sav_schema::SavSchema) as records
-    /// are handed out. The data layout is accumulated either way.
-    build_schema: bool,
 }
 
 impl ReaderOptions {
@@ -60,26 +56,15 @@ impl ReaderOptions {
         };
         self.skipped.contains(&content)
     }
-
-    /// Sets whether a schema is accumulated.
-    pub fn set_build_schema(&mut self, build: bool) {
-        self.build_schema = build;
-    }
-
-    /// Whether a schema is accumulated.
-    pub fn build_schema(&self) -> bool {
-        self.build_schema
-    }
 }
 
 impl Default for ReaderOptions {
-    /// Honor the file's own encoding declaration, retain everything, and
-    /// build a schema — the policy a caller who set no options gets.
+    /// Honor the file's own encoding declaration and retain
+    /// everything — the policy a caller who set no options gets.
     fn default() -> Self {
         Self {
             encoding_strategy: EncodingStrategy::default(),
             skipped: HashSet::new(),
-            build_schema: true,
         }
     }
 }
@@ -99,7 +84,6 @@ mod tests {
         assert!(!options.skips(DictionaryRecordKind::Document));
         assert!(!options.skips(DictionaryRecordKind::ValueLabelSet));
         assert!(!options.skips(DictionaryRecordKind::Extension(ExtensionSubtype::Uuid)));
-        assert!(options.build_schema());
     }
 
     #[test]
@@ -144,13 +128,5 @@ mod tests {
         assert!(options.skips(DictionaryRecordKind::Extension(
             ExtensionSubtype::from_code(15)
         )));
-    }
-
-    #[test]
-    fn build_schema_round_trips() {
-        let mut options = ReaderOptions::default();
-        assert!(options.build_schema());
-        options.set_build_schema(false);
-        assert!(!options.build_schema());
     }
 }

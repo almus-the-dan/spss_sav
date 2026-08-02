@@ -49,11 +49,11 @@ use crate::spss::sav::{missing_value_reconcile, variable_attribute_reconcile};
 ///
 /// `SavSchema` is the presentation half of what the dictionary
 /// describes — names, labels, value labels, display parameters,
-/// attributes. The record reader does not consult it; it reads rows
-/// through a separate, always-complete layout, which is why a caller
-/// can turn schema building off entirely with
-/// [`SavReader::build_schema`](crate::spss::sav::sav_reader::SavReader::build_schema)
-/// without affecting how the data reads.
+/// attributes. The record reader does not consult it: rows are decoded
+/// through a separate [`DataLayout`](crate::spss::sav::data_layout),
+/// which carries everything a correct read depends on — placement,
+/// widths, sentinels, encoding, and the declared missing values. So
+/// nothing here can change how the data reads.
 ///
 /// Very-long-string segments are collapsed: a variable declared `A300`
 /// appears once, at width 300, not as the 255-byte and 48-byte segments

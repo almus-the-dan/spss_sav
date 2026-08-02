@@ -33,7 +33,7 @@ pub struct RecordReader<R> {
     header: SavHeader,
     encoding_provenance: EncodingProvenance,
     layout: DataLayout,
-    schema: Option<SavSchema>,
+    schema: SavSchema,
     /// Fills [`row`](Self::row) according to the file's compression.
     source: RowSource,
     /// The most recently read row, at full uncompressed width. Reused
@@ -168,7 +168,7 @@ impl<R> RecordReader<R> {
         header: SavHeader,
         encoding_provenance: EncodingProvenance,
         layout: DataLayout,
-        schema: Option<SavSchema>,
+        schema: SavSchema,
     ) -> Self {
         let source = RowSource::new(layout.compression());
         let row = Vec::with_capacity(layout.row_len());
@@ -199,16 +199,15 @@ impl<R> RecordReader<R> {
         &self.header
     }
 
-    /// The finalized schema, or `None` when the caller turned schema
-    /// building off with
-    /// [`SavReader::build_schema`](crate::spss::sav::sav_reader::SavReader::build_schema).
+    /// The finalized schema: every variable the dictionary described,
+    /// reconciled with the extension records that patch it.
     ///
-    /// Rows read the same either way — the layout they are read through
-    /// is accumulated separately and is always complete.
+    /// Presentation only. Rows are decoded through a separate
+    /// [`DataLayout`], so nothing here can affect how they read.
     #[must_use]
     #[inline]
-    pub fn schema(&self) -> Option<&SavSchema> {
-        self.schema.as_ref()
+    pub fn schema(&self) -> &SavSchema {
+        &self.schema
     }
 
     /// The encoding the reader applied, and where it came from.

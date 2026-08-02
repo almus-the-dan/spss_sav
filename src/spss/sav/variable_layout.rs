@@ -26,9 +26,9 @@ pub(crate) struct VariableLayout {
     /// Lives on the layout rather than only on
     /// [`SavVariable`](crate::spss::sav::sav_variable::SavVariable)
     /// because a decoded row must not report a declared-missing cell as
-    /// present, and the schema is optional — see
-    /// [`SavReader::build_schema`](crate::spss::sav::sav_reader::SavReader::build_schema).
-    /// Tagging has to work whether one was built.
+    /// present, which makes the declaration something a *correct read*
+    /// depends on rather than presentation. Everything the rows need is
+    /// reachable without touching the schema.
     missing: MissingValueSpecification,
 }
 

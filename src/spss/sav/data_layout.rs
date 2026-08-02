@@ -27,10 +27,9 @@ use crate::spss::sav::variable_type::VariableType;
 /// things a data read never consults. Splitting them turns an invariant
 /// that would otherwise be a doc comment into a structural guarantee:
 /// `DataLayout` is derived from a skeleton the buffering pass retains
-/// rather than from the records as they stream, so no combination of
-/// [`skip_dictionary_content`](crate::spss::sav::sav_reader::SavReader::skip_dictionary_content),
-/// [`build_schema(false)`](crate::spss::sav::sav_reader::SavReader::build_schema)
-/// or
+/// rather than from the records as they stream, so neither
+/// [`skip_dictionary_content`](crate::spss::sav::sav_reader::SavReader::skip_dictionary_content)
+/// nor
 /// [`skip_record`](crate::spss::sav::dictionary_reader::DictionaryReader::skip_record)
 /// can leave the record reader unable to do its job.
 ///
