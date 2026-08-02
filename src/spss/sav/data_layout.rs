@@ -3,6 +3,7 @@
 use encoding_rs::Encoding;
 
 use crate::spss::sav::compression::compression_kind::CompressionKind;
+use crate::spss::sav::compression::row_coding::RowCoding;
 use crate::spss::sav::extensions::extension_subtype::ExtensionSubtype;
 use crate::spss::sav::extensions::float_sentinels::FloatSentinels;
 use crate::spss::sav::extensions::long_missing_values::LongMissingValues;
@@ -50,7 +51,6 @@ pub(crate) struct DataLayout {
     variables: Vec<VariableLayout>,
     row_len: usize,
     compression: CompressionKind,
-    #[allow(dead_code)] // read by BytecodeDecoder::fill_row in Phase 6(b).
     bias: f64,
     float_encoding: FloatEncoding,
     sentinels: FloatSentinels,
@@ -77,20 +77,23 @@ impl DataLayout {
         self.row_len
     }
 
+    /// What the row source needs, and nothing else.
+    ///
+    /// Deliberately narrow — see [`RowCoding`] for why the compressed
+    /// decoders must not be able to reach [`variables`](Self::variables).
+    pub fn row_coding(&self) -> RowCoding {
+        RowCoding::new(
+            self.row_len,
+            self.bias,
+            self.float_encoding,
+            self.sentinels.system_missing(),
+        )
+    }
+
     /// How the data section is compressed.
     #[inline]
     pub fn compression(&self) -> CompressionKind {
         self.compression
-    }
-
-    /// Bytecode-compression bias, from the header.
-    ///
-    /// What an inline command code is measured against: the decoder
-    /// turns code `c` into `c - bias`.
-    #[allow(dead_code)] // read by BytecodeDecoder::fill_row in Phase 6(b).
-    #[inline]
-    pub fn bias(&self) -> f64 {
-        self.bias
     }
 
     /// How this file encodes an `f64` on disk.
@@ -686,6 +689,30 @@ mod tests {
         assert_eq!(layout.variables().len(), 2);
         assert_eq!(layout.variables()[1].segments().len(), 1);
         assert_eq!(layout.variables()[1].contiguous_range(), Some(8..263));
+    }
+
+    /// The row source gets a strict subset of the layout: enough to
+    /// fill a row, with no way to reach the variable table.
+    #[test]
+    fn row_coding_carries_what_a_row_source_needs() {
+        let (layout, _) = layout_of(
+            &[
+                ("ID", VariableType::Numeric),
+                ("NAME", VariableType::String(4)),
+            ],
+            None,
+        );
+        let coding = layout.row_coding();
+        assert_eq!(coding.row_len(), layout.row_len());
+        assert_eq!(coding.float_encoding(), layout.float_encoding());
+        assert_eq!(
+            coding.system_missing(),
+            layout.sentinels().system_missing(),
+            "command 255 writes exactly this pattern",
+        );
+        // The other two sentinels are declaration-side and no command
+        // emits them, so they are deliberately absent.
+        assert_ne!(coding.system_missing(), layout.sentinels().highest());
     }
 
     // ---- case count -------------------------------------------------

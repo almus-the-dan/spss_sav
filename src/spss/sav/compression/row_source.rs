@@ -14,8 +14,8 @@ use std::io::Read;
 use crate::spss::sav::compression::bytecode_decoder::BytecodeDecoder;
 use crate::spss::sav::compression::compression_kind::CompressionKind;
 use crate::spss::sav::compression::file_units::FileUnits;
+use crate::spss::sav::compression::row_coding::RowCoding;
 use crate::spss::sav::compression::zlib_blocks::ZlibBlocks;
-use crate::spss::sav::data_layout::DataLayout;
 use crate::spss::sav::reader_state::ReaderState;
 use crate::spss::sav::sav_error::{Result, Section};
 
@@ -67,7 +67,7 @@ impl RowSource {
         }
     }
 
-    /// Fills `row` with the next row's `layout.row_len()` bytes.
+    /// Fills `row` with the next row's `coding.row_len()` bytes.
     ///
     /// Returns `false` at a clean end of the data section. A file that
     /// stops partway through a row is truncated and errors.
@@ -80,7 +80,7 @@ impl RowSource {
     pub fn next_row<R: Read>(
         &mut self,
         state: &mut ReaderState<R>,
-        layout: &DataLayout,
+        coding: RowCoding,
         row: &mut Vec<u8>,
     ) -> Result<bool> {
         match self {
@@ -88,11 +88,11 @@ impl RowSource {
                 // Resizing rather than clearing and extending keeps the
                 // one allocation for the whole file; after the first row
                 // this is a no-op.
-                row.resize(layout.row_len(), 0);
+                row.resize(coding.row_len(), 0);
                 state.read_into(row, Section::Records)
             }
-            Self::Bytecode { units, decoder } => decoder.fill_row(units, state, layout, row),
-            Self::Zlib { blocks, decoder } => decoder.fill_row(blocks, state, layout, row),
+            Self::Bytecode { units, decoder } => decoder.fill_row(units, state, coding, row),
+            Self::Zlib { blocks, decoder } => decoder.fill_row(blocks, state, coding, row),
         }
     }
 }

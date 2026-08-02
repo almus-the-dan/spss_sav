@@ -15,6 +15,8 @@ pub mod compression_kind;
 pub(crate) mod data_unit_source;
 /// Command units read straight from the file.
 pub(crate) mod file_units;
+/// What producing a row's bytes depends on.
+pub(crate) mod row_coding;
 /// Producing raw row bytes, whichever way the file is compressed.
 pub(crate) mod row_source;
 /// The ZSAV block container.

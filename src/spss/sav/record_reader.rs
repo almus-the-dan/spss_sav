@@ -9,6 +9,7 @@
 
 use std::io::Read;
 
+use crate::spss::sav::compression::row_coding::RowCoding;
 use crate::spss::sav::compression::row_source::RowSource;
 use crate::spss::sav::data_layout::DataLayout;
 use crate::spss::sav::encoding_provenance::EncodingProvenance;
@@ -36,6 +37,11 @@ pub struct RecordReader<R> {
     schema: SavSchema,
     /// Fills [`row`](Self::row) according to the file's compression.
     source: RowSource,
+    /// What filling a row depends on. A file constant, derived from
+    /// [`layout`](Self::layout) once — and deliberately narrower than
+    /// it, so the compressed decoders cannot reach variable boundaries
+    /// the command stream does not have.
+    coding: RowCoding,
     /// The most recently read row, at full uncompressed width. Reused
     /// across reads, which is what lets a cell borrow rather than
     /// allocate — and what invalidates the previous record.
@@ -65,9 +71,10 @@ impl<R: Read> RecordReader<R> {
         if !self.advance_row()? {
             return Ok(None);
         }
-        let mut values = Vec::with_capacity(self.layout.variables().len());
-        for variable in self.layout.variables() {
-            let Some(value) = parse_cell(&self.row, variable, &self.layout) else {
+        let count = self.layout.variables().len();
+        let mut values = Vec::with_capacity(count);
+        for index in 0..count {
+            let Some(value) = parse_cell(&self.layout, &self.row, index) else {
                 return Err(self.short_row());
             };
             values.push(value);
@@ -116,7 +123,7 @@ impl<R: Read> RecordReader<R> {
         self.state.warnings_mut().clear();
         let read = self
             .source
-            .next_row(&mut self.state, &self.layout, &mut self.row)?;
+            .next_row(&mut self.state, self.coding, &mut self.row)?;
         if read {
             self.rows_read = self.rows_read.saturating_add(1);
             return Ok(true);
@@ -171,6 +178,7 @@ impl<R> RecordReader<R> {
         schema: SavSchema,
     ) -> Self {
         let source = RowSource::new(layout.compression());
+        let coding = layout.row_coding();
         let row = Vec::with_capacity(layout.row_len());
         Self {
             state,
@@ -179,6 +187,7 @@ impl<R> RecordReader<R> {
             layout,
             schema,
             source,
+            coding,
             row,
             rows_read: 0,
         }

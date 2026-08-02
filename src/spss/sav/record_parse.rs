@@ -10,7 +10,6 @@ use std::borrow::Cow;
 use crate::spss::missing_value::MissingValue;
 use crate::spss::numeric::Numeric;
 use crate::spss::sav::data_layout::DataLayout;
-use crate::spss::sav::extensions::float_sentinels::FloatSentinels;
 use crate::spss::sav::float_encoding::FloatEncoding;
 use crate::spss::sav::missing_value_specification::MissingValueSpecification;
 use crate::spss::sav::segment_layout::DATA_UNIT_LEN;
@@ -21,18 +20,26 @@ use crate::spss::sav::value::Value;
 use crate::spss::sav::variable_layout::VariableLayout;
 use crate::spss::sav::variable_type::VariableType;
 
-/// Splits one cell out of a filled row.
+/// Splits the cell at `index` out of a filled row.
 ///
-/// `None` only when `row` is shorter than the layout says it is, which
-/// the row sources guarantee against — every one of them fills exactly
-/// [`DataLayout::row_len`] bytes. Returning an `Option` rather than
-/// indexing keeps a library bug from becoming a panic in a caller's
-/// process.
+/// Takes the layout and an index rather than a
+/// [`VariableLayout`](crate::spss::sav::variable_layout::VariableLayout)
+/// alongside it: a variable only means anything relative to the layout
+/// it came from, and a signature accepting both invites pairing one
+/// file's variable with another file's layout — which would decode
+/// something plausible and wrong.
+///
+/// `None` when `index` is past the last variable, or — unreachably —
+/// when `row` is shorter than the layout says it is. Every row source
+/// fills exactly [`DataLayout::row_len`] bytes, so the second case is a
+/// library bug; returning an `Option` rather than indexing keeps it from
+/// becoming a panic in a caller's read loop.
 pub(crate) fn parse_cell<'a>(
-    row: &'a [u8],
-    variable: &VariableLayout,
     layout: &DataLayout,
+    row: &'a [u8],
+    index: usize,
 ) -> Option<Value<'a>> {
+    let variable = layout.variables().get(index)?;
     match variable.variable_type() {
         VariableType::Numeric => {
             let offset = variable.segments().first()?.offset();
@@ -40,7 +47,7 @@ pub(crate) fn parse_cell<'a>(
             let numeric = parse_numeric_cell(
                 bytes,
                 layout.float_encoding(),
-                layout.sentinels(),
+                layout.sentinels().system_missing(),
                 variable.missing(),
             );
             let value = Value::Numeric(numeric);
@@ -79,15 +86,20 @@ pub(crate) fn parse_cell<'a>(
 /// their system-missing and `LOWEST` patterns decode to the same number
 /// even though only one of them means missing.
 ///
+/// Takes the one pattern rather than the whole
+/// [`FloatSentinels`](crate::spss::sav::extensions::float_sentinels::FloatSentinels)
+/// triple so that reaching for `LOWEST` or `HIGHEST` here is not
+/// possible. That was a real bug, not a hypothetical one.
+///
 /// User-defined missing values are not detected here — see [`Value`]
 /// for why they stay a schema-level question.
 pub(crate) fn parse_numeric_cell(
     bytes: [u8; DATA_UNIT_LEN],
     encoding: FloatEncoding,
-    sentinels: &FloatSentinels,
+    system_missing: [u8; DATA_UNIT_LEN],
     missing: &MissingValueSpecification,
 ) -> Numeric {
-    if bytes == sentinels.system_missing() {
+    if bytes == system_missing {
         return Numeric::Missing(MissingValue::System);
     }
     let decoded = encoding.decode(bytes);
@@ -139,6 +151,7 @@ pub(crate) fn parse_string_cell<'a>(
 mod tests {
     use super::*;
     use crate::spss::sav::byte_order::ByteOrder;
+    use crate::spss::sav::extensions::float_sentinels::FloatSentinels;
     use crate::spss::sav::float_format::FloatFormat;
     use crate::spss::sav::segment_layout::SegmentLayout;
 
@@ -155,7 +168,7 @@ mod tests {
     }
 
     fn numeric_with(bytes: [u8; 8], missing: &MissingValueSpecification) -> Numeric {
-        parse_numeric_cell(bytes, ieee(), &sentinels(), missing)
+        parse_numeric_cell(bytes, ieee(), sentinels().system_missing(), missing)
     }
 
     #[test]

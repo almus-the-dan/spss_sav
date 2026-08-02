@@ -55,7 +55,6 @@ impl<'a> LazySavRecord<'a> {
     /// either way.
     #[must_use]
     pub fn value(&self, index: usize) -> Option<Value<'a>> {
-        let variable = self.layout.variables().get(index)?;
-        parse_cell(self.row, variable, self.layout)
+        parse_cell(self.layout, self.row, index)
     }
 }
