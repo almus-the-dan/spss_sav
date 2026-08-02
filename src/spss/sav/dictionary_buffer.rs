@@ -441,8 +441,8 @@ impl<R: Read> Scan<'_, R> {
             Field::VariableLabel,
         )?;
         let padded_len = label_len.div_ceil(VARIABLE_LABEL_PADDING) * VARIABLE_LABEL_PADDING;
-        let bytes = self.state.read_exact(padded_len, Section::Dictionary)?;
-        let label_bytes = bytes[..label_len].to_vec();
+        let mut label_bytes = self.state.read_vec(padded_len, Section::Dictionary)?;
+        label_bytes.truncate(label_len);
         Ok(label_bytes)
     }
 
@@ -571,8 +571,8 @@ impl<R: Read> Scan<'_, R> {
                 self.state.skip(padded_len, Section::Dictionary)?;
                 continue;
             }
-            let padded = self.state.read_exact(padded_len, Section::Dictionary)?;
-            let label = padded[..usize::from(unpadded_len)].to_vec();
+            let mut label = self.state.read_vec(padded_len, Section::Dictionary)?;
+            label.truncate(usize::from(unpadded_len));
 
             if !seen_keys.insert(value) {
                 self.state
@@ -694,10 +694,9 @@ impl<R: Read> Scan<'_, R> {
 
     /// Reads the payload `header` declared and completes the envelope.
     fn read_extension_payload(&mut self, header: ExtensionHeader) -> Result<ExtensionEnvelope> {
-        let payload_bytes = self
+        let payload = self
             .state
-            .read_exact(header.payload_len, Section::Dictionary)?;
-        let payload = payload_bytes.to_vec();
+            .read_vec(header.payload_len, Section::Dictionary)?;
         let envelope = ExtensionEnvelope {
             subtype: header.subtype,
             element_size: header.element_size,

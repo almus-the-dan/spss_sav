@@ -1,12 +1,12 @@
 //! Shared per-reader state used by every SAV reader phase.
 //!
-//! `ReaderState<R>` owns the underlying reader, the scratch buffer,
-//! the running byte position, the detected byte order (filled in by
-//! the header reader), and the warnings vec. It deliberately does not
-//! own an encoding: the file's encoding is not resolvable until the
-//! whole dictionary has been walked, so state that held one would only
-//! ever hold a stale guess. Pure parsing functions in `*_parse.rs` operate on
-//! byte slices; the I/O primitives that fill those slices live here.
+//! `ReaderState<R>` owns the underlying reader, the running byte
+//! position, the detected byte order (filled in by the header reader),
+//! and the warnings vec. It deliberately does not own an encoding: the
+//! file's encoding is not resolvable until the whole dictionary has
+//! been walked, so state that held one would only ever hold a stale
+//! guess. Pure parsing functions in `*_parse.rs` operate on byte
+//! slices; the I/O primitives that produce those slices live here.
 //!
 //! Compression-related state (bytecode codes block, ZLIB decoder
 //! wrapper) is intentionally absent. It will be added when the
@@ -20,20 +20,23 @@ use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::sav_error::{Field, FormatErrorKind, Result, SavError, Section};
 use crate::spss::sav::sav_warning::SavWarning;
 
-/// Largest chunk [`ReaderState::skip`] reads at once. Bounds how far
-/// the shared scratch buffer can grow on behalf of bytes nobody
-/// wanted, without making the discard loop chatty for the small skips
-/// (record filler, padding) that dominate.
-const SKIP_WINDOW_LEN: usize = 64 * 1024;
+/// Bytes [`ReaderState::skip`] discards at a time.
+///
+/// The chunk lives on the stack, so this is a stack-frame budget rather
+/// than a bound on anything retained — which is why it is kilobytes and
+/// not the tens of kilobytes a heap window would justify. Chunk size
+/// barely shows up in any case: `SavReader::from_path` and `from_file`
+/// wrap the file in a [`BufReader`](std::io::BufReader), so a discard
+/// read is a copy out of that buffer rather than a syscall.
+const SKIP_CHUNK_LEN: usize = 1024;
 
 /// Crate-internal state threaded through the reader typestate
-/// chain. The same allocation is moved from one phase to the next
-/// via the `into_*()` consuming transitions, so the warnings vec
-/// and scratch buffer keep their capacity across phases.
+/// chain, moved from one phase to the next via the `into_*()`
+/// consuming transitions so the warnings vec keeps its capacity
+/// across phases.
 #[derive(Debug)]
 pub(crate) struct ReaderState<R> {
     reader: R,
-    buffer: Vec<u8>,
     position: u64,
     byte_order: Option<ByteOrder>,
     warnings: Vec<SavWarning>,
@@ -43,7 +46,6 @@ impl<R> ReaderState<R> {
     pub fn new(reader: R) -> Self {
         Self {
             reader,
-            buffer: Vec::new(),
             position: 0,
             byte_order: None,
             warnings: Vec::new(),
@@ -81,25 +83,47 @@ impl<R> ReaderState<R> {
         &mut self.warnings
     }
 
-    /// Internal scratch buffer, populated by the most recent
-    /// `read_exact`-style call.
-    #[allow(dead_code)] // exercised once the record reader phase lands.
-    pub fn buffer(&self) -> &[u8] {
-        &self.buffer
+    /// Advances the running byte offset by `len` bytes just read.
+    ///
+    /// Fallible only in the two ways that are unreachable on real
+    /// input: a `usize` too wide for a `u64`, and a file long enough to
+    /// overflow the offset itself. Both are errors rather than panics
+    /// so that reading a SAV file has no documented panic path — see
+    /// [`FormatErrorKind::PositionOverflow`].
+    fn advance(&mut self, len: usize, section: Section) -> Result<()> {
+        let advanced = u64::try_from(len)
+            .ok()
+            .and_then(|len| self.position.checked_add(len));
+        let Some(position) = advanced else {
+            let kind = FormatErrorKind::PositionOverflow;
+            return Err(SavError::format(section, self.position, kind));
+        };
+        self.position = position;
+        Ok(())
     }
 }
 
 impl<R: Read> ReaderState<R> {
-    /// Resizes the internal buffer to `len`, reads exactly `len`
-    /// bytes into it, and returns the filled slice. The same
-    /// allocation is reused across calls.
-    pub fn read_exact(&mut self, len: usize, section: Section) -> Result<&[u8]> {
-        self.buffer.resize(len, 0);
+    /// Reads exactly `len` bytes into a fresh [`Vec`] and returns it.
+    ///
+    /// Hands back ownership rather than a borrow of shared scratch
+    /// because every caller needs owned bytes regardless: the file's
+    /// encoding is not known until the dictionary ends, so records are
+    /// retained undecoded and outlive any buffer the reader could hold.
+    /// Reading straight into the destination is therefore one
+    /// allocation and no copy, where a shared buffer was a copy on top
+    /// of the same allocation.
+    ///
+    /// A caller wanting only a prefix — a padded field, say — should
+    /// read the full on-disk length and then
+    /// [`truncate`](Vec::truncate), which costs nothing.
+    pub fn read_vec(&mut self, len: usize, section: Section) -> Result<Vec<u8>> {
+        let mut out = vec![0_u8; len];
         self.reader
-            .read_exact(&mut self.buffer)
+            .read_exact(&mut out)
             .map_err(|e| SavError::io(section, e))?;
-        self.position += u64::try_from(len).expect("buffer length exceeds u64");
-        Ok(&self.buffer)
+        self.advance(len, section)?;
+        Ok(out)
     }
 
     /// Reads exactly `N` bytes into a stack-allocated array.
@@ -108,25 +132,29 @@ impl<R: Read> ReaderState<R> {
         self.reader
             .read_exact(&mut out)
             .map_err(|e| SavError::io(section, e))?;
-        self.position += u64::try_from(N).expect("array length exceeds u64");
+        self.advance(N, section)?;
         Ok(out)
     }
 
     /// Reads `len` bytes and discards them.
     ///
-    /// Discards through a bounded window rather than one
-    /// [`read_exact`](Self::read_exact) of `len` bytes. There is no
-    /// [`Seek`](std::io::Seek) bound to seek past the data with, so the
-    /// bytes have to be read either way — but reading them into the
-    /// shared scratch buffer would size that buffer to the largest
-    /// record ever skipped and keep it there for the rest of the read,
-    /// which is the opposite of what skipping a large record is for.
+    /// There is no [`Seek`](std::io::Seek) bound to jump past the data
+    /// with, so the bytes have to be read either way. They go into a
+    /// stack chunk rather than anything owned: discarding needs a place
+    /// to *throw* bytes, not a place to keep them, so the destination
+    /// should not outlive the call — and skipping a large record must
+    /// not leave a large allocation behind, which is the opposite of
+    /// what skipping it was for.
     pub fn skip(&mut self, len: usize, section: Section) -> Result<()> {
+        let mut chunk = [0_u8; SKIP_CHUNK_LEN];
         let mut remaining = len;
         while remaining > 0 {
-            let chunk = remaining.min(SKIP_WINDOW_LEN);
-            self.read_exact(chunk, section)?;
-            remaining -= chunk;
+            let take = remaining.min(SKIP_CHUNK_LEN);
+            self.reader
+                .read_exact(&mut chunk[..take])
+                .map_err(|e| SavError::io(section, e))?;
+            self.advance(take, section)?;
+            remaining -= take;
         }
         Ok(())
     }

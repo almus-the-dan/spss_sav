@@ -208,6 +208,14 @@ pub enum FormatErrorKind {
         /// Record-type tag observed in violation.
         saw: i32,
     },
+    /// Advancing the running byte offset would exceed what a `u64` can
+    /// represent.
+    ///
+    /// Unreachable for any real file — it takes a stream of more than
+    /// sixteen exbibytes, or a platform whose `usize` is wider than a
+    /// `u64`. It exists so that tracking the read position has no
+    /// panicking path, rather than because the condition is expected.
+    PositionOverflow,
 }
 
 impl fmt::Display for FormatErrorKind {
@@ -237,6 +245,7 @@ impl fmt::Display for FormatErrorKind {
             Self::UnpairedValueLabelRecord { saw } => {
                 write!(f, "unpaired value-label record (saw record type {saw})")
             }
+            Self::PositionOverflow => f.write_str("byte offset exceeds the representable range"),
         }
     }
 }
@@ -448,6 +457,15 @@ mod tests {
             actual: 5,
         };
         assert_eq!(kind.to_string(), "truncated: expected 10 bytes, got 5");
+    }
+
+    #[test]
+    fn format_error_kind_display_position_overflow() {
+        let kind = FormatErrorKind::PositionOverflow;
+        assert_eq!(
+            kind.to_string(),
+            "byte offset exceeds the representable range"
+        );
     }
 
     #[test]

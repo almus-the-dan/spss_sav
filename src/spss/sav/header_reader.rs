@@ -117,10 +117,7 @@ impl<R: Read> HeaderReader<R> {
             usize::try_from(product_name_position).unwrap(),
             PRODUCT_NAME_OFFSET
         );
-        let product_name_bytes = self
-            .state
-            .read_exact(PRODUCT_NAME_LEN, Section::Header)?
-            .to_vec();
+        let product_name_bytes = self.state.read_vec(PRODUCT_NAME_LEN, Section::Header)?;
 
         let layout_code_position = self.state.position();
         debug_assert_eq!(
@@ -190,10 +187,7 @@ impl<R: Read> HeaderReader<R> {
             usize::try_from(self.state.position()).unwrap(),
             FILE_LABEL_OFFSET
         );
-        let file_label_bytes = self
-            .state
-            .read_exact(FILE_LABEL_LEN, Section::Header)?
-            .to_vec();
+        let file_label_bytes = self.state.read_vec(FILE_LABEL_LEN, Section::Header)?;
 
         self.state.skip(TRAILING_PADDING_LEN, Section::Header)?;
 
