@@ -36,6 +36,7 @@ use spss_sav::spss::sav::sav_reader::SavReader;
 use spss_sav::spss::sav::sav_record::SavRecord;
 use spss_sav::spss::sav::sav_variable_header::SavVariableHeader;
 use spss_sav::spss::sav::sav_warning::SavWarning;
+use spss_sav::spss::sav::text::Text;
 use spss_sav::spss::sav::value::Value;
 use spss_sav::spss::sav::variable_type::VariableType;
 
@@ -965,9 +966,32 @@ const COMPRESSION_ROWS: [[&str; 8]; 3] = [
         "\"alpha\"",
     ],
     [
-        "2", "151", "-999999", "-0.25", ".", "\"\"", "\"bb\"", "\"beta\"",
+        "2",
+        // MISSING VALUES small (151) -- a discrete numeric value.
+        "user(151)",
+        // MISSING VALUES big (LOWEST THRU 0) -- an open-ended range.
+        "user(-999999)",
+        "-0.25",
+        ".",
+        "\"\"",
+        "\"bb\"",
+        // MISSING VALUES longstr ('beta') -- reaches us through
+        // extension subtype 22, keyed by the LONG name.
+        "missing(\"beta\")",
     ],
-    ["3", "-100", "0", "0", ".", "\"xy\"", "\"cc\"", "\"gamma\""],
+    [
+        "3",
+        "-100",
+        // The range is inclusive at its closed end, so 0 is missing.
+        "user(0)",
+        "0",
+        ".",
+        "\"xy\"",
+        // MISSING VALUES text ('cc') -- a short-string value, whose key
+        // PSPP NUL-pads to eight bytes.
+        "missing(\"cc\")",
+        "\"gamma\"",
+    ],
 ];
 
 fn record_reader(path: &str) -> RecordReader<BufReader<File>> {
@@ -988,7 +1012,8 @@ fn describe_value(value: &Value<'_>) -> String {
         Value::Numeric(Numeric::Missing(MissingValue::UserDefined(number))) => {
             format!("user({number})")
         }
-        Value::String(string) => format!("{:?}", string.text()),
+        Value::String(Text::Present(string)) => format!("{:?}", string.text()),
+        Value::String(Text::Missing(string)) => format!("missing({:?})", string.text()),
     }
 }
 
@@ -1025,9 +1050,10 @@ fn a_very_long_string_cell_reassembles_from_both_segments() {
 
     let record = reader.read_record().expect("read").expect("a row");
     let cell = record.values()[longstr.index()]
-        .string()
+        .text()
         .expect("a string cell");
-    assert_eq!(cell.text(), "alpha");
+    assert_eq!(cell.value().text(), "alpha");
+    assert!(!cell.is_missing(), "row 1's longstr is 'alpha', not 'beta'");
 }
 
 /// Reading past the last row reports the end rather than erroring: PSPP
@@ -1085,9 +1111,9 @@ fn skipping_rows_advances_without_decoding_them() {
 fn string_cells_expose_the_raw_bytes_behind_the_text() {
     let mut reader = record_reader(COMPRESSION_NONE);
     let record = reader.read_record().expect("read").expect("a row");
-    let text = record.values()[6].string().expect("the text cell");
-    assert_eq!(text.raw(), b"aa", "padding is already trimmed");
-    assert_eq!(text.text(), "aa");
+    let text = record.values()[6].text().expect("the text cell");
+    assert_eq!(text.value().raw(), b"aa", "padding is already trimmed");
+    assert_eq!(text.value().text(), "aa");
 }
 
 /// Bytes in one uncompressed row of the compression fixture: five
@@ -1164,4 +1190,64 @@ fn a_row_cut_in_half_is_a_truncation_error() {
         }
         other => panic!("expected a format error, got {other:?}"),
     }
+}
+
+/// The reason the missing-value specs live on `DataLayout` rather than
+/// only on `SavSchema`: with schema building switched off there is no
+/// `SavVariable` to consult, and a row that reported a declared-missing
+/// cell as present would be lying in a way the caller could not detect.
+#[test]
+fn missing_values_are_tagged_even_with_no_schema() {
+    let mut reader = SavReader::new()
+        .build_schema(false)
+        .from_path(COMPRESSION_NONE)
+        .expect("open fixture")
+        .read_header()
+        .expect("read header")
+        .into_record_reader()
+        .expect("finalize");
+    assert!(reader.schema().is_none(), "schema building is off");
+
+    let mut rows = Vec::new();
+    while let Some(record) = reader.read_record().expect("read record") {
+        rows.push(describe_row(&record));
+    }
+    for (row, expected) in rows.iter().zip(COMPRESSION_ROWS) {
+        assert_eq!(row.as_slice(), expected.as_slice());
+    }
+}
+
+/// The schema and the row reader derive missing values *independently*
+/// — `SavSchemaBuilder` from the type-2 records plus subtype 22 keyed
+/// through its own name index, `DataLayoutBuilder` from the skeleton
+/// plus subtype 22 keyed through subtype 13. They agree on every
+/// well-formed file, and this is what keeps them from drifting.
+#[test]
+fn the_schema_and_the_row_reader_agree_on_what_is_missing() {
+    let mut reader = record_reader(COMPRESSION_NONE);
+    let schema = reader.schema().expect("schema").clone();
+    let mut checked = 0;
+    while let Some(record) = reader.read_record().expect("read record") {
+        for (index, value) in record.values().iter().enumerate() {
+            let variable = &schema.variables()[index];
+            let spec = variable.missing_value_spec();
+            let by_schema = match value {
+                // System-missing is a property of the cell, so no
+                // declaration can rule it out.
+                Value::Numeric(Numeric::Missing(MissingValue::System)) => true,
+                Value::Numeric(
+                    Numeric::Missing(MissingValue::UserDefined(number)) | Numeric::Present(number),
+                ) => spec.matches_number(*number),
+                Value::String(text) => spec.matches_bytes(text.value().raw()),
+            };
+            assert_eq!(
+                by_schema,
+                value.is_missing(),
+                "variable {} disagrees on {value:?}",
+                variable.full_name(),
+            );
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, 24, "three rows of eight variables");
 }

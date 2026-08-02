@@ -12,8 +12,10 @@ use crate::spss::numeric::Numeric;
 use crate::spss::sav::data_layout::DataLayout;
 use crate::spss::sav::extensions::float_sentinels::FloatSentinels;
 use crate::spss::sav::float_encoding::FloatEncoding;
+use crate::spss::sav::missing_value_specification::MissingValueSpecification;
 use crate::spss::sav::segment_layout::DATA_UNIT_LEN;
 use crate::spss::sav::string_value::StringValue;
+use crate::spss::sav::text::Text;
 use crate::spss::sav::text_field::trim_trailing_padding;
 use crate::spss::sav::value::Value;
 use crate::spss::sav::variable_layout::VariableLayout;
@@ -35,14 +37,20 @@ pub(crate) fn parse_cell<'a>(
         VariableType::Numeric => {
             let offset = variable.segments().first()?.offset();
             let bytes = *row.get(offset..)?.first_chunk::<DATA_UNIT_LEN>()?;
-            let numeric = parse_numeric_cell(bytes, layout.float_encoding(), layout.sentinels());
+            let numeric = parse_numeric_cell(
+                bytes,
+                layout.float_encoding(),
+                layout.sentinels(),
+                variable.missing(),
+            );
             let value = Value::Numeric(numeric);
             Some(value)
         }
         VariableType::String(_) => {
             let raw = parse_string_cell(row, variable)?;
             let string_value = StringValue::new(raw, layout.encoding());
-            let value = Value::String(string_value);
+            let text = Text::classify(string_value, variable.missing());
+            let value = Value::String(text);
             Some(value)
         }
     }
@@ -77,11 +85,16 @@ pub(crate) fn parse_numeric_cell(
     bytes: [u8; DATA_UNIT_LEN],
     encoding: FloatEncoding,
     sentinels: &FloatSentinels,
+    missing: &MissingValueSpecification,
 ) -> Numeric {
     if bytes == sentinels.system_missing() {
         return Numeric::Missing(MissingValue::System);
     }
     let decoded = encoding.decode(bytes);
+    if missing.matches_number(decoded) {
+        let missing_value = MissingValue::UserDefined(decoded);
+        return Numeric::Missing(missing_value);
+    }
     Numeric::Present(decoded)
 }
 
@@ -138,7 +151,11 @@ mod tests {
     }
 
     fn numeric(bytes: [u8; 8]) -> Numeric {
-        parse_numeric_cell(bytes, ieee(), &sentinels())
+        numeric_with(bytes, &MissingValueSpecification::None)
+    }
+
+    fn numeric_with(bytes: [u8; 8], missing: &MissingValueSpecification) -> Numeric {
+        parse_numeric_cell(bytes, ieee(), &sentinels(), missing)
     }
 
     #[test]
@@ -201,6 +218,7 @@ mod tests {
         VariableLayout::new(
             variable_type,
             vec![SegmentLayout::new(offset, variable_type)],
+            MissingValueSpecification::None,
         )
     }
 
@@ -233,6 +251,7 @@ mod tests {
                 SegmentLayout::new(0, VariableType::String(255)),
                 SegmentLayout::new(256, VariableType::String(48)),
             ],
+            MissingValueSpecification::None,
         )
     }
 

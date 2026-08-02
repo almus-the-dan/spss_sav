@@ -47,6 +47,7 @@ use crate::spss::sav::dictionary_record_kind::DictionaryRecordKind;
 use crate::spss::sav::extension_envelope::ExtensionEnvelope;
 use crate::spss::sav::extensions::extension_subtype::ExtensionSubtype;
 use crate::spss::sav::extensions::{character_encoding, machine_integer_info};
+use crate::spss::sav::raw_missing_values::RawMissingValues;
 use crate::spss::sav::reader_options::ReaderOptions;
 use crate::spss::sav::reader_state::{ReaderState, u32_as_usize};
 use crate::spss::sav::sav_error::{Field, FormatErrorKind, Result, SavError, Section};
@@ -79,16 +80,15 @@ pub(crate) struct DictionaryBuffer {
 /// break a data read" from a rule someone has to remember into
 /// something the types make true.
 ///
-/// It costs ten bytes per variable plus a copy of at most three tiny
-/// extension records.
+/// It costs a short name, a type and a raw missing-value slot per
+/// variable, plus a copy of at most five tiny extension records.
 #[derive(Debug, Default)]
 pub(crate) struct LayoutSkeleton {
-    /// `(short name, declared type)` per type-2 primary, in order. The
-    /// name stays undecoded: the encoding is not resolved yet.
-    variables: Vec<([u8; VARIABLE_SHORT_NAME_LEN], VariableType)>,
+    /// One entry per type-2 primary, in order.
+    variables: Vec<SkeletonVariable>,
     /// Copies of the extension records the layout depends on —
-    /// subtypes 4, 14 and 16. Subtypes 3 and 20 are absorbed during the
-    /// scan itself and need no copy.
+    /// subtypes 4, 13, 14, 16 and 22. Subtypes 3 and 20 are absorbed
+    /// during the scan itself and need no copy.
     envelopes: Vec<ExtensionEnvelope>,
     /// Physical position of each segment's type-2 record, continuations
     /// included. The header's weight index is a physical one, so
@@ -96,9 +96,22 @@ pub(crate) struct LayoutSkeleton {
     primaries: Vec<u32>,
 }
 
+/// What one type-2 primary record contributes to the data layout.
+///
+/// The short name stays undecoded because the encoding is not resolved
+/// until the dictionary ends. The missing values stay raw because
+/// interpreting them needs the variable's logical type, which very long
+/// strings only settle once subtype 14 is in hand.
+#[derive(Debug, Clone)]
+pub(crate) struct SkeletonVariable {
+    pub short_name: [u8; VARIABLE_SHORT_NAME_LEN],
+    pub variable_type: VariableType,
+    pub missing_values: RawMissingValues,
+}
+
 impl LayoutSkeleton {
-    /// `(short name, declared type)` per type-2 primary, in order.
-    pub fn variables(&self) -> &[([u8; VARIABLE_SHORT_NAME_LEN], VariableType)] {
+    /// One entry per type-2 primary, in order.
+    pub fn variables(&self) -> &[SkeletonVariable] {
         &self.variables
     }
 
@@ -120,12 +133,21 @@ impl LayoutSkeleton {
 ///
 /// Subtypes 3 and 20 are load-bearing too, but for the *encoding*, and
 /// the scan absorbs those directly rather than deferring them.
+///
+/// Subtypes 13 and 22 are here because a row must not report a
+/// declared-missing cell as present. Subtype 22 carries the missing
+/// values of every very long string, and keys them by **long** name —
+/// so resolving it needs subtype 13's short-to-long map as well. (14
+/// keys by short name; the two extensions disagree, which is measurable
+/// on any PSPP file carrying both.)
 fn is_layout_bearing(subtype: ExtensionSubtype) -> bool {
     matches!(
         subtype,
         ExtensionSubtype::FloatInfo
+            | ExtensionSubtype::LongVariableNames
             | ExtensionSubtype::VeryLongStrings
             | ExtensionSubtype::ExtendedNumberOfCases
+            | ExtensionSubtype::LongMissingValues
     )
 }
 
@@ -419,7 +441,12 @@ impl<R: Read> Scan<'_, R> {
         self.primaries.push(self.physical_variable_count);
         self.physical_variable_count += 1;
         self.variable_count += 1;
-        self.skeleton.variables.push((short_name, variable_type));
+        let variable = SkeletonVariable {
+            short_name,
+            variable_type,
+            missing_values: missing_values.clone(),
+        };
+        self.skeleton.variables.push(variable);
 
         let record = BufferedVariableRecord {
             short_name,

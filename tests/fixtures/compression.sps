@@ -28,6 +28,19 @@ END DATA.
 
 VARIABLE LABELS id 'Identifier' longstr 'A long string variable'.
 
+* User-defined missing values, one of each shape the format allows, so
+* the record reader can be checked on all of them:
+*   small   -- a discrete numeric value (row 2)
+*   big     -- an open-ended range, LOWEST THRU 0 (rows 2 and 3)
+*   text    -- a short-string value (row 3)
+*   longstr -- a very-long-string value, which PSPP writes to extension
+*              subtype 22 keyed by the LONG name and truncated to eight
+*              bytes (row 2)
+MISSING VALUES small (151).
+MISSING VALUES big (LOWEST THRU 0).
+MISSING VALUES text ('cc').
+MISSING VALUES longstr ('beta').
+
 SAVE OUTFILE='compression_none.sav' /UNCOMPRESSED.
 SAVE OUTFILE='compression_bytecode.sav' /COMPRESSED.
 SAVE OUTFILE='compression_zlib.sav' /ZCOMPRESSED.

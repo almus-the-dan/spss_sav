@@ -2,6 +2,7 @@
 
 use std::ops::Range;
 
+use crate::spss::sav::missing_value_specification::MissingValueSpecification;
 use crate::spss::sav::segment_layout::SegmentLayout;
 use crate::spss::sav::variable_type::VariableType;
 
@@ -12,7 +13,7 @@ use crate::spss::sav::variable_type::VariableType;
 /// `VariableLayout` spanning several
 /// [`SegmentLayout`]s, matching how
 /// [`SavSchema`](crate::spss::sav::sav_schema::SavSchema) presents it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct VariableLayout {
     /// The variable's logical storage type — for a very long string,
     /// the width the file declared in subtype 14, not any segment's.
@@ -20,15 +21,35 @@ pub(crate) struct VariableLayout {
     /// Which segments hold this variable's bytes, in order. Always at
     /// least one.
     segments: Vec<SegmentLayout>,
+    /// The values this variable declares missing.
+    ///
+    /// Lives on the layout rather than only on
+    /// [`SavVariable`](crate::spss::sav::sav_variable::SavVariable)
+    /// because a decoded row must not report a declared-missing cell as
+    /// present, and the schema is optional — see
+    /// [`SavReader::build_schema`](crate::spss::sav::sav_reader::SavReader::build_schema).
+    /// Tagging has to work whether one was built.
+    missing: MissingValueSpecification,
 }
 
 impl VariableLayout {
-    pub fn new(variable_type: VariableType, segments: Vec<SegmentLayout>) -> Self {
+    pub fn new(
+        variable_type: VariableType,
+        segments: Vec<SegmentLayout>,
+        missing: MissingValueSpecification,
+    ) -> Self {
         debug_assert!(!segments.is_empty(), "a variable owns at least one segment");
         Self {
             variable_type,
             segments,
+            missing,
         }
+    }
+
+    /// The values this variable declares missing.
+    #[inline]
+    pub fn missing(&self) -> &MissingValueSpecification {
+        &self.missing
     }
 
     /// The variable's logical storage type.

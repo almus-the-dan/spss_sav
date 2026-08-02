@@ -85,11 +85,18 @@ impl<'a> StringValue<'a> {
     }
 }
 
+/// Wraps borrowed UTF-8 text as a string cell, for building expected
+/// values in tests.
+///
+/// **Test-only on purpose.** A cell's encoding is a property of the file
+/// it came from, and this one picks UTF-8 with nothing to justify it —
+/// which is wrong for every windows-1252 file, and wrong invisibly,
+/// since `.into()` shows no encoding at the call site. A cell read from
+/// a file carries the encoding the file declared; a caller assembling
+/// one by hand should say which encoding it is in, through
+/// [`StringValue::new`].
+#[cfg(test)]
 impl<'a> From<&'a str> for StringValue<'a> {
-    /// Wraps borrowed UTF-8 text as a string cell. Provided for
-    /// building expected values in tests and for callers assembling a
-    /// record by hand; a cell read from a file gets the file's own
-    /// encoding instead.
     #[inline]
     fn from(text: &'a str) -> Self {
         Self::new(Cow::Borrowed(text.as_bytes()), encoding_rs::UTF_8)
@@ -124,6 +131,8 @@ mod tests {
         assert_eq!(value.text(), "café");
     }
 
+    /// Pins what the test helper assumes, so the UTF-8 choice stays a
+    /// deliberate one rather than something a reader has to infer.
     #[test]
     fn from_str_borrows_and_reads_back_as_utf8() {
         let value = StringValue::from("hello");

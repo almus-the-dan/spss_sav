@@ -114,6 +114,8 @@ pub mod string_value;
 /// streams.
 #[cfg(test)]
 mod test_support;
+/// A string cell, classified against its variable's missing values.
+pub mod text;
 /// Shared helpers for decoding fixed-width text fields.
 mod text_field;
 /// A single SAV cell value.

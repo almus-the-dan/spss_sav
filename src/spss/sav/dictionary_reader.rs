@@ -516,12 +516,16 @@ impl<R: Read> DictionaryReader<R> {
     /// Rebuilds the data layout from the buffer's skeleton.
     fn build_layout(&mut self, encoding: &'static Encoding) -> Result<DataLayout> {
         let mut builder = DataLayoutBuilder::default();
-        for (short_name, variable_type) in self.buffer.skeleton().variables() {
-            let short_name = parse_short_name(*short_name, encoding);
-            builder.add_variable(short_name, *variable_type);
+        for variable in self.buffer.skeleton().variables() {
+            let short_name = parse_short_name(variable.short_name, encoding);
+            builder.add_variable(
+                short_name,
+                variable.variable_type,
+                variable.missing_values.clone(),
+            );
         }
         // Cloned so the borrow of the buffer ends before the builder is
-        // fed; there are at most three of these, and they are tiny.
+        // fed; there are at most five of these, and they are tiny.
         let envelopes: Vec<_> = self.buffer.skeleton().envelopes().to_vec();
         for envelope in &envelopes {
             match ExtensionSubtype::from_code(envelope.subtype) {
@@ -537,6 +541,20 @@ impl<R: Read> DictionaryReader<R> {
                         very_long_strings::read(envelope, encoding)?
                     {
                         builder.set_very_long_strings(&strings);
+                    }
+                }
+                ExtensionSubtype::LongVariableNames => {
+                    if let DictionaryRecord::Extension(ExtensionRecord::LongVariableNames(names)) =
+                        long_variable_names::read(envelope, encoding)?
+                    {
+                        builder.set_long_variable_names(&names);
+                    }
+                }
+                ExtensionSubtype::LongMissingValues => {
+                    if let DictionaryRecord::Extension(ExtensionRecord::LongMissingValues(values)) =
+                        long_missing_values::read(envelope, encoding)?
+                    {
+                        builder.set_long_missing_values(&values);
                     }
                 }
                 ExtensionSubtype::ExtendedNumberOfCases => {

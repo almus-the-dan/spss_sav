@@ -5,8 +5,13 @@ use encoding_rs::Encoding;
 use crate::spss::sav::compression::compression_kind::CompressionKind;
 use crate::spss::sav::extensions::extension_subtype::ExtensionSubtype;
 use crate::spss::sav::extensions::float_sentinels::FloatSentinels;
+use crate::spss::sav::extensions::long_missing_values::LongMissingValues;
+use crate::spss::sav::extensions::long_variable_names::LongVariableNames;
 use crate::spss::sav::extensions::very_long_strings::VeryLongStrings;
 use crate::spss::sav::float_encoding::FloatEncoding;
+use crate::spss::sav::missing_value_reconcile;
+use crate::spss::sav::missing_value_specification::MissingValueSpecification;
+use crate::spss::sav::raw_missing_values::RawMissingValues;
 use crate::spss::sav::sav_header::SavHeader;
 use crate::spss::sav::sav_warning::SavWarning;
 use crate::spss::sav::segment_layout::{SegmentLayout, segment_count, segment_width};
@@ -115,6 +120,7 @@ impl DataLayout {
 struct Segment {
     short_name: String,
     layout: SegmentLayout,
+    missing: RawMissingValues,
 }
 
 /// Builds a [`DataLayout`] from the buffer's layout skeleton.
@@ -131,16 +137,57 @@ pub(crate) struct DataLayoutBuilder {
     sentinels: Option<FloatSentinels>,
     very_long_strings: Vec<(String, u32)>,
     extended_case_count: Option<i64>,
+    /// Subtype 13's short-to-long name map, needed only to resolve
+    /// subtype 22, which keys by long name where subtype 14 keys by
+    /// short name.
+    long_names: Vec<(String, String)>,
+    /// Subtype 22's per-variable missing values, keyed by long name.
+    long_missing_values: Vec<(String, Vec<Box<[u8]>>)>,
 }
 
 impl DataLayoutBuilder {
     /// Records one type-2 primary record. Continuation records are
     /// already collapsed away by the time they reach here, so every
     /// call is a new segment.
-    pub fn add_variable(&mut self, short_name: String, variable_type: VariableType) {
+    pub fn add_variable(
+        &mut self,
+        short_name: String,
+        variable_type: VariableType,
+        missing: RawMissingValues,
+    ) {
         let layout = SegmentLayout::new(self.row_len, variable_type);
         self.row_len += layout.stride();
-        self.segments.push(Segment { short_name, layout });
+        let segment = Segment {
+            short_name,
+            layout,
+            missing,
+        };
+        self.segments.push(segment);
+    }
+
+    /// Records the subtype-13 long variable names.
+    pub fn set_long_variable_names(&mut self, names: &LongVariableNames) {
+        self.long_names = names
+            .mappings()
+            .iter()
+            .map(|entry| (entry.short_name().to_owned(), entry.long_name().to_owned()))
+            .collect();
+    }
+
+    /// Records the subtype-22 very-long-string missing values.
+    pub fn set_long_missing_values(&mut self, values: &LongMissingValues) {
+        self.long_missing_values = values
+            .records()
+            .iter()
+            .map(|record| {
+                let entries = record
+                    .values()
+                    .iter()
+                    .map(|value| value.clone().into_boxed_slice())
+                    .collect();
+                (record.variable_name().to_owned(), entries)
+            })
+            .collect();
     }
 
     /// Records the subtype-4 sentinel triple.
@@ -175,8 +222,8 @@ impl DataLayoutBuilder {
         warnings: &mut Vec<SavWarning>,
     ) -> DataLayout {
         let spans = self.resolve_spans(warnings);
-        let variables = self.resolve_variables(&spans);
         let sentinels = self.resolve_sentinels(header);
+        let variables = self.resolve_variables(&spans, header.float_encoding(), &sentinels);
         let case_count = self.resolve_case_count(header, warnings);
 
         DataLayout {
@@ -287,18 +334,68 @@ impl DataLayoutBuilder {
         true
     }
 
-    fn variable_layout(&self, span: &Span) -> VariableLayout {
-        let segments = self.segments[span.start..span.start + span.len]
-            .iter()
-            .map(|segment| segment.layout)
-            .collect();
-        VariableLayout::new(span.variable_type, segments)
+    fn variable_layout(
+        &self,
+        span: &Span,
+        encoding: FloatEncoding,
+        sentinels: &FloatSentinels,
+    ) -> VariableLayout {
+        let owned = &self.segments[span.start..span.start + span.len];
+        let segments = owned.iter().map(|segment| segment.layout).collect();
+        let missing = self.resolve_missing(owned, span.variable_type, encoding, sentinels);
+        VariableLayout::new(span.variable_type, segments, missing)
     }
 
-    fn resolve_variables(&self, spans: &[Span]) -> Vec<VariableLayout> {
+    /// The missing values of the variable owning `segments`.
+    ///
+    /// A very long string declares its own in subtype 22 rather than in
+    /// its type-2 record, because an eight-byte record slot cannot hold
+    /// a key for a 300-wide variable — so that record wins where it
+    /// exists. Everything else takes what its primary segment carried.
+    ///
+    /// A subtype-22 entry naming no variable in this file is simply not
+    /// found here; the schema builder warns about it, and warning twice
+    /// for one record would be noise.
+    fn resolve_missing(
+        &self,
+        segments: &[Segment],
+        variable_type: VariableType,
+        encoding: FloatEncoding,
+        sentinels: &FloatSentinels,
+    ) -> MissingValueSpecification {
+        let Some(primary) = segments.first() else {
+            return MissingValueSpecification::None;
+        };
+        if let Some(values) = self.long_missing_values_for(&primary.short_name) {
+            return MissingValueSpecification::String(values);
+        }
+        missing_value_reconcile::decode(&primary.missing, variable_type, encoding, sentinels)
+    }
+
+    /// Subtype 22's values for the variable whose *short* name is
+    /// `short_name`, translating through subtype 13 because the two
+    /// records key by different names.
+    fn long_missing_values_for(&self, short_name: &str) -> Option<Vec<Box<[u8]>>> {
+        let long_name = self
+            .long_names
+            .iter()
+            .find(|(short, _)| short.eq_ignore_ascii_case(short_name))
+            .map_or(short_name, |(_, long)| long.as_str());
+        self.long_missing_values
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(long_name))
+            .map(|(_, values)| values.clone())
+    }
+
+    fn resolve_variables(
+        &self,
+        spans: &[Span],
+        encoding: FloatEncoding,
+        sentinels: &FloatSentinels,
+    ) -> Vec<VariableLayout> {
         spans
             .iter()
-            .map(|span| self.variable_layout(span))
+            .map(|span| self.variable_layout(span, encoding, sentinels))
             .collect()
     }
 
@@ -371,7 +468,7 @@ mod tests {
     ) -> (DataLayout, Vec<SavWarning>) {
         let mut builder = DataLayoutBuilder::default();
         for (name, variable_type) in segments {
-            builder.add_variable((*name).to_owned(), *variable_type);
+            builder.add_variable((*name).to_owned(), *variable_type, RawMissingValues::None);
         }
         if let Some(strings) = strings {
             builder.set_very_long_strings(&strings);
