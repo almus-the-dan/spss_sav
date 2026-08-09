@@ -1,9 +1,5 @@
 //! Where the bytecode decoder's command units come from.
 
-// Shell module: the shape lands now for review, the implementations
-// with Phase 6(b) and 6(c).
-#![allow(dead_code)]
-
 use crate::spss::sav::reader_state::ReaderState;
 use crate::spss::sav::sav_error::Result;
 use crate::spss::sav::segment_layout::DATA_UNIT_LEN;

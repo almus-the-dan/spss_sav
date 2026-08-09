@@ -3,9 +3,6 @@
 pub mod category_label_source;
 /// Declared character encoding (subtype 20).
 pub mod character_encoding;
-/// SPSS Data Entry product information (subtype 15 per the spec
-/// md; not confirmed against PSPP or `ReadStat`).
-pub mod data_entry;
 /// Extended number of cases (subtype 16).
 pub mod extended_number_of_cases;
 /// Parsing helpers shared across extension subtypes.

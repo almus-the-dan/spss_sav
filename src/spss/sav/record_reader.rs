@@ -3,9 +3,12 @@
 //! Third and final phase of the reader typestate chain, reached from
 //! [`DictionaryReader::into_record_reader`](crate::spss::sav::dictionary_reader::DictionaryReader::into_record_reader).
 //!
-//! Row decoding itself lands with Phase 6, alongside the bytecode and
-//! ZLIB decoders. What exists now is the boundary: the reader holds
-//! everything a row read needs, and the dictionary phase is finished.
+//! Row bytes are produced by
+//! [`RowSource`](crate::spss::sav::compression::row_source::RowSource),
+//! which is the one place the three compression schemes differ.
+//! Everything from a filled row buffer onward — splitting it into cells,
+//! tagging the values a variable declared missing — is identical
+//! whichever scheme wrote the file.
 
 use std::io::Read;
 
@@ -49,9 +52,9 @@ pub struct RecordReader<R> {
     /// Rows handed out so far, for the cross-check against the
     /// declared case count.
     ///
-    /// Deliberately not exposed yet. Reporting it only becomes useful
-    /// alongside the rest of a progress/position story, and settling
-    /// that is not what Phase 6 is for.
+    /// Deliberately not exposed. Reporting it only becomes useful
+    /// alongside the rest of a progress/position story, and that has not
+    /// been designed.
     rows_read: u64,
 }
 
@@ -178,8 +181,7 @@ impl<R> RecordReader<R> {
         schema: SavSchema,
     ) -> Self {
         let coding = layout.row_coding();
-        let encoding = coding.float_encoding();
-        let source = RowSource::new(layout.compression(), encoding.byte_order());
+        let source = RowSource::new(layout.compression(), layout.byte_order());
         let row = Vec::with_capacity(layout.row_len());
         Self {
             state,

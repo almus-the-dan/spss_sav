@@ -31,9 +31,12 @@ use crate::spss::sav::dictionary_format::{
 /// and grouping them means a caller can skip every unrecognized
 /// extension with a single entry.
 ///
-/// Subtype 15 (SPSS Data Entry) is deliberately absent: the reader has
-/// no parser for it, so it reads as `Unrecognized` like any other
-/// unhandled code. Naming it here would break the correspondence above.
+/// Subtypes PSPP records as observed in the wild but does not parse —
+/// 6 (date info, probably related to `USE`) and 24 (XML describing
+/// on-screen display) — are deliberately absent, and read as
+/// `Unrecognized` like any other unhandled code. Naming them here would
+/// break the correspondence above without gaining anything: their codes
+/// survive on `UnknownExtension` either way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ExtensionSubtype {
@@ -193,8 +196,10 @@ mod tests {
 
     #[test]
     fn unparsed_subtypes_are_unrecognized() {
-        // 15 is a known SPSS subtype the reader has no parser for; 6,
-        // 8, 23, 24 are unassigned or unhandled. All read the same way.
+        // 6 and 24 are subtypes PSPP has observed but does not parse;
+        // 8, 15 and 23 have no evidence behind them at all. All read
+        // the same way, which is the point — the reader does not have
+        // to know which is which.
         for code in [6, 8, 15, 23, 24, 0, -1, i32::MAX] {
             assert_eq!(
                 ExtensionSubtype::from_code(code),

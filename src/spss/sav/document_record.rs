@@ -13,8 +13,11 @@
 /// Multiple type-6 records may appear in a single file in the
 /// wild; the streaming reader yields one
 /// [`DictionaryRecord::Document`](crate::spss::sav::dictionary_record::DictionaryRecord::Document)
-/// per occurrence. The dictionary finalizer (Phase 5(e)) decides
-/// how to reconcile multiple records into the final schema.
+/// per occurrence, and nothing merges them. Documents are annotation:
+/// no row read and no schema field depends on one, so they are
+/// surfaced by streaming and never carried onto
+/// [`SavSchema`](crate::spss::sav::sav_schema::SavSchema). A caller
+/// that wants them collects them as they go by.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DocumentRecord {
     lines: Vec<String>,

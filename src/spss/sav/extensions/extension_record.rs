@@ -1,7 +1,6 @@
 //! Top-level extension record enum.
 
 use crate::spss::sav::extensions::character_encoding::CharacterEncoding;
-use crate::spss::sav::extensions::data_entry::DataEntry;
 use crate::spss::sav::extensions::extended_number_of_cases::ExtendedNumberOfCases;
 use crate::spss::sav::extensions::extension_subtype::ExtensionSubtype;
 use crate::spss::sav::extensions::extra_product_info::ExtraProductInfo;
@@ -66,10 +65,6 @@ pub enum ExtensionRecord {
     /// Subtype 14 — very-long-string widths for variables wider
     /// than 255 bytes.
     VeryLongStrings(VeryLongStrings),
-    /// Subtype 15 — SPSS Data Entry product information. Subtype
-    /// assignment is from the (unreliable) spec md and is not
-    /// confirmed against PSPP or `ReadStat`; treat with caution.
-    DataEntry(DataEntry),
     /// Subtype 16 — extended number of cases, authoritative when
     /// the header's 32-bit `case_count` field is `-1`.
     ExtendedNumberOfCases(ExtendedNumberOfCases),
@@ -122,10 +117,7 @@ impl ExtensionRecord {
             Self::CharacterEncoding(_) => ExtensionSubtype::CharacterEncoding,
             Self::LongValueLabels(_) => ExtensionSubtype::LongValueLabels,
             Self::LongMissingValues(_) => ExtensionSubtype::LongMissingValues,
-            // Subtype 15 has no parser, so this variant is never
-            // produced by the reader; it exists for the writer and for
-            // round-tripping a record a caller built by hand.
-            Self::DataEntry(_) | Self::Unknown(_) => ExtensionSubtype::Unrecognized,
+            Self::Unknown(_) => ExtensionSubtype::Unrecognized,
         }
     }
 }

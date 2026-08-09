@@ -2,6 +2,7 @@
 
 use encoding_rs::Encoding;
 
+use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::compression::compression_kind::CompressionKind;
 use crate::spss::sav::compression::row_coding::RowCoding;
 use crate::spss::sav::extensions::extension_subtype::ExtensionSubtype;
@@ -100,6 +101,18 @@ impl DataLayout {
     #[inline]
     pub fn float_encoding(&self) -> FloatEncoding {
         self.float_encoding
+    }
+
+    /// Byte order of the file's multibyte fields.
+    ///
+    /// Carried by [`float_encoding`](Self::float_encoding), since a
+    /// double's on-disk layout depends on it, but asked for in its own
+    /// right by the ZSAV block container — whose header fields are
+    /// multibyte and follow the file's order, while the command stream
+    /// they frame has no multibyte fields at all.
+    #[inline]
+    pub fn byte_order(&self) -> ByteOrder {
+        self.float_encoding.byte_order()
     }
 
     /// The sentinel values marking system-missing, highest and lowest,
