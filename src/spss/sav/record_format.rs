@@ -28,9 +28,8 @@
 //! decoder that reads a fresh group per row is wrong.
 
 // The layout constants land as one set so the format is documented in
-// one place; the decoders that consume them arrive with Phase 6(b) and
-// 6(c). The tests below already exercise the relationships between
-// them.
+// one place. The command codes are consumed by the bytecode decoder.
+// The tests below already exercise the relationships between them.
 #![allow(dead_code)]
 
 use crate::spss::sav::segment_layout::DATA_UNIT_LEN;

@@ -5,10 +5,6 @@
 //! identical (see [`record_parse`](crate::spss::sav::record_parse)).
 //! This is where that difference is confined.
 
-// Shell module: the shapes land now for review, the bodies with
-// Phase 6(a) through 6(c).
-#![allow(dead_code)]
-
 use std::io::Read;
 
 use crate::spss::sav::compression::bytecode_decoder::BytecodeDecoder;

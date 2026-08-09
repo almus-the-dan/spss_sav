@@ -81,6 +81,17 @@ pub enum SavWarning {
         /// Rows the data section actually yielded.
         actual: u64,
     },
+    /// A bytecode `252` end-of-data command appeared partway through a
+    /// row. The incomplete row is discarded and the data section ends
+    /// there; every row handed out before it stands.
+    ///
+    /// PSPP writes no `252` at all, so no file it produces can raise this.
+    EndOfDataInsideRow {
+        /// Bytes the discarded row had produced.
+        bytes_produced: u64,
+        /// Bytes a complete row holds.
+        row_len: u64,
+    },
     /// A `(format-kind, width, decimals)` triple does not match any
     /// valid SPSS display-format combination. The triple is preserved
     /// verbatim; the writer's `finish()` surfaces accumulated

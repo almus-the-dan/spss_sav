@@ -52,7 +52,6 @@ impl RowCoding {
 
     /// What an inline command code is measured against: code `c` stands
     /// for `c - bias`.
-    #[allow(dead_code)] // read by BytecodeDecoder::fill_row in Phase 6(b).
     #[inline]
     pub fn bias(self) -> f64 {
         self.bias
@@ -60,7 +59,6 @@ impl RowCoding {
 
     /// How to lay an `f64` out on disk, for the values an inline code
     /// synthesizes rather than copies.
-    #[allow(dead_code)] // read by BytecodeDecoder::fill_row in Phase 6(b).
     #[inline]
     pub fn float_encoding(self) -> FloatEncoding {
         self.float_encoding
@@ -71,7 +69,6 @@ impl RowCoding {
     /// Just the one pattern, not the whole sentinel triple: `LOWEST` and
     /// `HIGHEST` belong to missing-value *declarations* and no command
     /// emits them.
-    #[allow(dead_code)] // read by BytecodeDecoder::fill_row in Phase 6(b).
     #[inline]
     pub fn system_missing(self) -> [u8; DATA_UNIT_LEN] {
         self.system_missing
