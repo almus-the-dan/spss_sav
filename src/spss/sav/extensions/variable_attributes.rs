@@ -174,7 +174,8 @@ mod tests {
     use crate::spss::sav::byte_order::ByteOrder;
     use crate::spss::sav::sav_error::{FormatErrorKind, SavError};
     use crate::spss::sav::test_support::{
-        assert_unexpected_value_error, build_header, open, write_extension_record, write_terminator,
+        assert_unexpected_value_error, build_header, open, write_extension_record,
+        write_numeric_variable, write_terminator,
     };
 
     #[test]
@@ -286,6 +287,43 @@ mod tests {
         assert_eq!(records[1].variable_name(), "height");
         assert_eq!(records[1].attributes()[0].values(), &["cm".to_string()]);
         assert!(dict.warnings().is_empty());
+    }
+
+    /// A file may carry more than one subtype-18 record. PSPP names the
+    /// producer: "Stata 14.1/-savespss- 1.77 by S.Radyakin" writes one
+    /// per variable that has attributes. Finalization has to accumulate
+    /// them — replacing kept only the last variable's and dropped the
+    /// rest in silence.
+    #[test]
+    fn attributes_from_several_records_all_reach_the_schema() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_numeric_variable(&mut bytes, byte_order, *b"WEIGHT  ");
+        write_numeric_variable(&mut bytes, byte_order, *b"HEIGHT  ");
+        for payload in [b"WEIGHT:units('kg'\n)".as_slice(), b"HEIGHT:units('cm'\n)"] {
+            write_extension_record(
+                &mut bytes,
+                byte_order,
+                18,
+                1,
+                u32::try_from(payload.len()).unwrap(),
+                payload,
+            );
+        }
+        write_terminator(&mut bytes, byte_order);
+
+        let reader = open(bytes).into_record_reader().unwrap();
+        let schema = reader.schema();
+        let units = |name: &str| {
+            let variable = schema.variable_by_name(name).expect("the variable");
+            variable
+                .attributes()
+                .iter()
+                .find(|attribute| attribute.name() == "units")
+                .map(|attribute| attribute.values().to_vec())
+        };
+        assert_eq!(units("WEIGHT"), Some(vec!["kg".to_owned()]));
+        assert_eq!(units("HEIGHT"), Some(vec!["cm".to_owned()]));
     }
 
     #[test]

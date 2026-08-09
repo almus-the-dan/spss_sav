@@ -214,15 +214,18 @@ impl SavSchemaBuilder {
 
     /// Records the subtype-18 per-variable attributes, collapsing any
     /// `name[n]` runs into single array-valued attributes.
-    pub fn set_variable_attributes(&mut self, attributes: &VariableAttributes) {
-        self.attributes = attributes
-            .records()
-            .iter()
-            .map(|record| {
-                let collapsed = variable_attribute_reconcile::collapse(record.attributes());
-                (record.variable_name().to_owned(), collapsed)
-            })
-            .collect();
+    ///
+    /// **Appends rather than replaces**, because a file may carry more
+    /// than one subtype-18 record. PSPP names the producer: system files
+    /// written by "Stata 14.1/-savespss- 1.77 by S.Radyakin" include one
+    /// record per variable that has attributes. Replacing would keep
+    /// only the last variable's and drop the rest without a word.
+    pub fn add_variable_attributes(&mut self, attributes: &VariableAttributes) {
+        let records = attributes.records().iter().map(|record| {
+            let collapsed = variable_attribute_reconcile::collapse(record.attributes());
+            (record.variable_name().to_owned(), collapsed)
+        });
+        self.attributes.extend(records);
     }
 
     /// Records the subtype-21 long-string value labels.

@@ -92,6 +92,19 @@ pub enum SavWarning {
         /// Bytes a complete row holds.
         row_len: u64,
     },
+    /// A subtype-22 record repeated its `int32` value length before
+    /// every missing value rather than writing it once. The extra
+    /// lengths are skipped and the values read normally.
+    ///
+    /// Old versions of PSPP wrote this shape, following an earlier
+    /// version of its own format documentation; PSPP now describes it as
+    /// a mistake readers may tolerate "by noticing and skipping the
+    /// extra `int32` values, which wouldn't ordinarily occur in
+    /// strings". `ReadStat` does not tolerate it.
+    RepeatedLongMissingValueLength {
+        /// Long name of the variable whose block used the legacy shape.
+        variable_name: String,
+    },
     /// A `(format-kind, width, decimals)` triple does not match any
     /// valid SPSS display-format combination. The triple is preserved
     /// verbatim; the writer's `finish()` surfaces accumulated

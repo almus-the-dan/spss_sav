@@ -776,7 +776,8 @@ mod tests {
     use crate::spss::sav::skippable_content::SkippableContent;
     use crate::spss::sav::test_support::{
         build_header, open, open_skipping, try_open_skipping, write_character_code_record,
-        write_extension_record, write_rec_type, write_terminator, write_u32,
+        write_extension_record, write_numeric_variable, write_rec_type, write_terminator,
+        write_u32,
     };
     use crate::spss::sav::value_label_set::ValueLabelSet;
 
@@ -784,20 +785,6 @@ mod tests {
 
     /// Packs a `(kind_byte, width, decimals)` triple into the on-disk
     /// 4-byte format code.
-    fn pack_format(kind: u8, width: u8, decimals: u8) -> u32 {
-        u32::from_le_bytes([decimals, width, kind, 0])
-    }
-
-    fn write_numeric_variable(buf: &mut Vec<u8>, name: [u8; 8]) {
-        write_rec_type(buf, LE, 2);
-        for value in [0_i32, 0, 0] {
-            write_rec_type(buf, LE, value);
-        }
-        write_u32(buf, LE, pack_format(5, 8, 2));
-        write_u32(buf, LE, pack_format(5, 8, 2));
-        buf.extend_from_slice(&name);
-    }
-
     fn write_value_label_pair(buf: &mut Vec<u8>, labels: &[(f64, &[u8])], targets: &[u32]) {
         write_rec_type(buf, LE, 3);
         write_u32(buf, LE, u32::try_from(labels.len()).unwrap());
@@ -829,7 +816,7 @@ mod tests {
     /// record, and a UUID extension — one of every skippable kind.
     fn one_of_each() -> Vec<u8> {
         let mut bytes = build_header(LE);
-        write_numeric_variable(&mut bytes, *b"V1      ");
+        write_numeric_variable(&mut bytes, LE, *b"V1      ");
         write_value_label_pair(&mut bytes, &[(1.0, b"one")], &[1]);
         write_document(&mut bytes, &["a documentary line"]);
         let uuid = b"3f2504e0-4f89-11d3-9a0c-0305e82c3301";
@@ -930,7 +917,7 @@ mod tests {
     #[test]
     fn skipped_value_labels_still_validate_their_indices() {
         let mut bytes = build_header(LE);
-        write_numeric_variable(&mut bytes, *b"V1      ");
+        write_numeric_variable(&mut bytes, LE, *b"V1      ");
         // Index 2 is past the only variable.
         write_value_label_pair(&mut bytes, &[(1.0, b"one")], &[2]);
         write_terminator(&mut bytes, LE);
@@ -949,7 +936,7 @@ mod tests {
     #[test]
     fn skipping_the_character_code_record_still_resolves_the_encoding() {
         let mut bytes = build_header(LE);
-        write_numeric_variable(&mut bytes, *b"V1      ");
+        write_numeric_variable(&mut bytes, LE, *b"V1      ");
         write_character_code_record(&mut bytes, LE, 65001); // UTF-8
         write_terminator(&mut bytes, LE);
 
@@ -972,7 +959,7 @@ mod tests {
     #[test]
     fn skipping_the_character_encoding_record_still_resolves_the_encoding() {
         let mut bytes = build_header(LE);
-        write_numeric_variable(&mut bytes, *b"V1      ");
+        write_numeric_variable(&mut bytes, LE, *b"V1      ");
         let label = b"UTF-8";
         write_extension_record(
             &mut bytes,
@@ -1002,7 +989,7 @@ mod tests {
     #[test]
     fn skipped_records_raise_no_warnings() {
         let mut bytes = build_header(LE);
-        write_numeric_variable(&mut bytes, *b"V1      ");
+        write_numeric_variable(&mut bytes, LE, *b"V1      ");
         // Duplicate value-label keys warn when retained.
         write_value_label_pair(&mut bytes, &[(1.0, b"one"), (1.0, b"uno")], &[1]);
         write_terminator(&mut bytes, LE);

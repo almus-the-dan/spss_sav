@@ -66,6 +66,18 @@ impl<'a> ByteCursor<'a> {
         Ok(byte_order.read_u32(bytes))
     }
 
+    /// Reads a `u32` in `byte_order` **without** advancing the cursor,
+    /// or `None` when fewer than four bytes remain.
+    ///
+    /// For deciding whether bytes ahead are a field at all — which is
+    /// what tolerating a legacy record shape needs, and the one case
+    /// where a parser has to look before it commits.
+    pub fn peek_u32(&self, byte_order: ByteOrder) -> Option<u32> {
+        let bytes: [u8; 4] = self.data.get(..4)?.try_into().ok()?;
+        let value = byte_order.read_u32(bytes);
+        Some(value)
+    }
+
     /// Splits `len` bytes off the front, advancing the cursor. Errors
     /// (tagged `field`) when fewer than `len` bytes remain.
     pub fn take_bytes(&mut self, len: usize, field: Field) -> Result<&'a [u8]> {

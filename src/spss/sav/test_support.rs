@@ -10,7 +10,7 @@ use crate::spss::sav::dictionary_format::{
     DICTIONARY_TERMINATOR_FILLER_LEN, ENDIANNESS_BIG_ENDIAN, ENDIANNESS_LITTLE_ENDIAN,
     EXTENSION_SUBTYPE_MACHINE_INTEGER_INFO, FLOATING_POINT_REPRESENTATION_IEEE,
     MACHINE_INTEGER_INFO_ELEMENT_COUNT, MACHINE_INTEGER_INFO_ELEMENT_SIZE,
-    RECORD_TYPE_DICTIONARY_TERMINATOR, RECORD_TYPE_EXTENSION,
+    RECORD_TYPE_DICTIONARY_TERMINATOR, RECORD_TYPE_EXTENSION, RECORD_TYPE_VARIABLE,
 };
 use crate::spss::sav::dictionary_reader::DictionaryReader;
 use crate::spss::sav::encoding_strategy::EncodingStrategy;
@@ -188,6 +188,25 @@ pub(crate) fn write_extension_record(
 pub(crate) fn write_terminator(buf: &mut Vec<u8>, byte_order: ByteOrder) {
     write_rec_type(buf, byte_order, RECORD_TYPE_DICTIONARY_TERMINATOR);
     buf.extend_from_slice(&[0u8; DICTIONARY_TERMINATOR_FILLER_LEN]);
+}
+
+/// Packs a `(kind_byte, width, decimals)` triple into the on-disk
+/// 4-byte format code (byte 0 = decimals, byte 1 = width, byte 2 =
+/// kind, byte 3 = 0).
+pub(crate) fn pack_format(kind: u8, width: u8, decimals: u8) -> u32 {
+    u32::from_le_bytes([decimals, width, kind, 0])
+}
+
+/// Appends a complete type-2 record for one numeric variable: no label,
+/// no missing values, an `F8.2` format on both sides.
+pub(crate) fn write_numeric_variable(buf: &mut Vec<u8>, byte_order: ByteOrder, name: [u8; 8]) {
+    write_rec_type(buf, byte_order, RECORD_TYPE_VARIABLE);
+    for value in [0_i32, 0, 0] {
+        write_rec_type(buf, byte_order, value);
+    }
+    write_u32(buf, byte_order, pack_format(5, 8, 2));
+    write_u32(buf, byte_order, pack_format(5, 8, 2));
+    buf.extend_from_slice(&name);
 }
 
 /// Appends a `u32`-length-prefixed byte string in `byte_order`.

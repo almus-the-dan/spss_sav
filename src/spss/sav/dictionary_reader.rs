@@ -265,7 +265,7 @@ impl<R> DictionaryReader<R> {
                     self.schema.set_display_parameters(parameters);
                 }
                 ExtensionRecord::VariableAttributes(attributes) => {
-                    self.schema.set_variable_attributes(attributes);
+                    self.schema.add_variable_attributes(attributes);
                 }
                 ExtensionRecord::LongValueLabels(labels) => {
                     self.schema.set_long_value_labels(labels);
@@ -309,7 +309,9 @@ impl<R> DictionaryReader<R> {
             ExtensionSubtype::FileAttributes => file_attributes::read(&envelope, encoding),
             ExtensionSubtype::VariableAttributes => variable_attributes::read(&envelope, encoding),
             ExtensionSubtype::LongValueLabels => long_value_labels::read(&envelope, encoding),
-            ExtensionSubtype::LongMissingValues => long_missing_values::read(&envelope, encoding),
+            ExtensionSubtype::LongMissingValues => {
+                long_missing_values::read(&envelope, encoding, self.state.warnings_mut())
+            }
             ExtensionSubtype::Unrecognized => {
                 let unknown = self.decode_unknown_extension(envelope);
                 Ok(unknown)
@@ -513,7 +515,7 @@ impl<R: Read> DictionaryReader<R> {
                 }
                 ExtensionSubtype::LongMissingValues => {
                     if let DictionaryRecord::Extension(ExtensionRecord::LongMissingValues(values)) =
-                        long_missing_values::read(envelope, encoding)?
+                        long_missing_values::read(envelope, encoding, self.state.warnings_mut())?
                     {
                         builder.set_long_missing_values(&values);
                     }
@@ -655,18 +657,11 @@ mod tests {
     use crate::spss::sav::sav_format_kind::SavFormatKind;
     use crate::spss::sav::sav_warning::SavWarning;
     use crate::spss::sav::test_support::{
-        assert_unexpected_value_error, build_header, open, open_with, try_open,
+        assert_unexpected_value_error, build_header, open, open_with, pack_format, try_open,
         write_character_code_record, write_extension_record, write_rec_type, write_terminator,
         write_u32,
     };
     use crate::spss::sav::variable_type::VariableType;
-
-    /// Packs a `(kind_byte, width, decimals)` triple into the
-    /// on-disk 4-byte format code (byte 0 = decimals, byte 1 =
-    /// width, byte 2 = kind, byte 3 = 0).
-    fn pack_format(kind: u8, width: u8, decimals: u8) -> u32 {
-        u32::from_le_bytes([decimals, width, kind, 0])
-    }
 
     /// Builds one variable record body (28 bytes) — caller appends
     /// any label and missing-value blocks themselves.

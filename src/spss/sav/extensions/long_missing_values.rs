@@ -13,6 +13,7 @@ use crate::spss::sav::extensions::extension_parse::unexpected_value_error;
 use crate::spss::sav::extensions::extension_record::ExtensionRecord;
 use crate::spss::sav::extensions::long_missing_value_record::LongMissingValueRecord;
 use crate::spss::sav::sav_error::{Field, Result, Section};
+use crate::spss::sav::sav_warning::SavWarning;
 
 /// Reads a subtype-22 record from `envelope`, yielding the
 /// [`LongMissingValues`]. Forwards the envelope's fields and `encoding` to [`parse`].
@@ -20,6 +21,7 @@ use crate::spss::sav::sav_error::{Field, Result, Section};
 pub(crate) fn read(
     envelope: &ExtensionEnvelope,
     encoding: &'static Encoding,
+    warnings: &mut Vec<SavWarning>,
 ) -> Result<DictionaryRecord> {
     let records = parse(
         envelope.element_size,
@@ -27,6 +29,7 @@ pub(crate) fn read(
         envelope.byte_order,
         encoding,
         envelope.element_size_position,
+        warnings,
     )?;
     let values = LongMissingValues::builder().add_records(records).build();
     let record = ExtensionRecord::LongMissingValues(values);
@@ -121,6 +124,7 @@ fn parse(
     byte_order: ByteOrder,
     encoding: &'static Encoding,
     position: u64,
+    warnings: &mut Vec<SavWarning>,
 ) -> Result<Vec<LongMissingValueRecord>> {
     if actual_size != LONG_STRING_MISSING_VALUES_ELEMENT_SIZE {
         return Err(unexpected_value_error(
@@ -131,7 +135,7 @@ fn parse(
     let mut cursor = ByteCursor::new(payload, Section::Dictionary, position);
     let mut records: Vec<LongMissingValueRecord> = Vec::new();
     while !cursor.is_empty() {
-        let record = parse_long_missing_value_record(&mut cursor, byte_order, encoding)?;
+        let record = parse_long_missing_value_record(&mut cursor, byte_order, encoding, warnings)?;
         records.push(record);
     }
     Ok(records)
@@ -147,6 +151,7 @@ fn parse_long_missing_value_record(
     cursor: &mut ByteCursor<'_>,
     byte_order: ByteOrder,
     encoding: &'static Encoding,
+    warnings: &mut Vec<SavWarning>,
 ) -> Result<LongMissingValueRecord> {
     let field = Field::LongMissingValue;
     let name_bytes = cursor.take_length_prefixed(byte_order, field)?;
@@ -155,15 +160,36 @@ fn parse_long_missing_value_record(
         return Err(cursor.unexpected_value(Field::LongMissingValueCount));
     }
     let width = cursor.take_u32_as_usize(byte_order, field)?;
+    let repeated_length = u32::try_from(width).ok();
     let mut values: Vec<Vec<u8>> = Vec::new();
-    for _ in 0..count {
+    let mut repeated = false;
+    for index in 0..count {
+        // Old PSPP wrote the width again before every value after the
+        // first, following an earlier version of its own format
+        // documentation. PSPP now calls that a mistake and suggests
+        // exactly this recovery, on the grounds that the byte pattern
+        // "wouldn't ordinarily occur in strings". A value's first four
+        // bytes being the width as an integer means a NUL run, which
+        // text does not contain.
+        if index > 0 && repeated_length.is_some() && cursor.peek_u32(byte_order) == repeated_length
+        {
+            cursor.take_u32(byte_order, field)?;
+            repeated = true;
+        }
         let value_bytes = cursor.take_bytes(width, field)?;
         let value = value_bytes.to_vec();
         values.push(value);
     }
     let (variable_name, _, _) = encoding.decode(name_bytes);
+    let variable_name = variable_name.into_owned();
+    if repeated {
+        let warning = SavWarning::RepeatedLongMissingValueLength {
+            variable_name: variable_name.clone(),
+        };
+        warnings.push(warning);
+    }
     let record = LongMissingValueRecord::builder()
-        .variable_name(variable_name.into_owned())
+        .variable_name(variable_name)
         .add_values(values)
         .build();
     Ok(record)
@@ -188,10 +214,94 @@ mod tests {
         payload.extend_from_slice(b"XXX");
         payload.extend_from_slice(b"YYY");
 
-        let result = parse(1, &payload, byte_order, encoding_rs::WINDOWS_1252, 0).unwrap();
+        let result = parse(
+            1,
+            &payload,
+            byte_order,
+            encoding_rs::WINDOWS_1252,
+            0,
+            &mut Vec::new(),
+        )
+        .unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].variable_name(), "longvar");
         assert_eq!(result[0].values(), &[b"XXX".to_vec(), b"YYY".to_vec()]);
+    }
+
+    /// The legacy shape old PSPP wrote: the `int32` width repeated
+    /// before every value after the first. PSPP calls it a mistake and
+    /// suggests skipping the extras, which is what we do — the values
+    /// come out identical to the modern spelling, plus a warning.
+    #[test]
+    fn parse_tolerates_the_width_repeated_before_every_value() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut payload = Vec::new();
+        push_prefixed(&mut payload, b"longvar", byte_order);
+        payload.push(3); // n_missing
+        push_u32(&mut payload, 8, byte_order); // width
+        payload.extend_from_slice(b"aaaaaaaa");
+        push_u32(&mut payload, 8, byte_order); // the extra length
+        payload.extend_from_slice(b"bbbbbbbb");
+        push_u32(&mut payload, 8, byte_order); // and again
+        payload.extend_from_slice(b"cccccccc");
+
+        let mut warnings = Vec::new();
+        let result = parse(
+            1,
+            &payload,
+            byte_order,
+            encoding_rs::WINDOWS_1252,
+            0,
+            &mut warnings,
+        )
+        .unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result[0].values(),
+            &[
+                b"aaaaaaaa".to_vec(),
+                b"bbbbbbbb".to_vec(),
+                b"cccccccc".to_vec()
+            ],
+        );
+        assert!(
+            matches!(
+                warnings.as_slice(),
+                [SavWarning::RepeatedLongMissingValueLength { variable_name }]
+                    if variable_name == "longvar",
+            ),
+            "{warnings:?}",
+        );
+    }
+
+    /// The modern shape must not trip the recovery. A width of 8 with
+    /// eight-byte values is the case most likely to false-positive, so
+    /// it is the one worth pinning: no warning, no bytes skipped.
+    #[test]
+    fn parse_leaves_the_modern_shape_alone() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut payload = Vec::new();
+        push_prefixed(&mut payload, b"longvar", byte_order);
+        payload.push(2);
+        push_u32(&mut payload, 8, byte_order);
+        payload.extend_from_slice(b"aaaaaaaa");
+        payload.extend_from_slice(b"bbbbbbbb");
+
+        let mut warnings = Vec::new();
+        let result = parse(
+            1,
+            &payload,
+            byte_order,
+            encoding_rs::WINDOWS_1252,
+            0,
+            &mut warnings,
+        )
+        .unwrap();
+        assert_eq!(
+            result[0].values(),
+            &[b"aaaaaaaa".to_vec(), b"bbbbbbbb".to_vec()],
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
     }
 
     #[test]
@@ -207,7 +317,15 @@ mod tests {
         push_u32(&mut payload, 1, byte_order);
         payload.extend_from_slice(b"xyz");
 
-        let result = parse(1, &payload, byte_order, encoding_rs::WINDOWS_1252, 0).unwrap();
+        let result = parse(
+            1,
+            &payload,
+            byte_order,
+            encoding_rs::WINDOWS_1252,
+            0,
+            &mut Vec::new(),
+        )
+        .unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].values(), &[b"ab".to_vec()]);
         assert_eq!(
@@ -223,7 +341,15 @@ mod tests {
         push_prefixed(&mut payload, b"v", byte_order);
         payload.push(0);
         push_u32(&mut payload, 1, byte_order);
-        let err = parse(1, &payload, byte_order, encoding_rs::WINDOWS_1252, 0).unwrap_err();
+        let err = parse(
+            1,
+            &payload,
+            byte_order,
+            encoding_rs::WINDOWS_1252,
+            0,
+            &mut Vec::new(),
+        )
+        .unwrap_err();
         assert_unexpected_value_error(&err, Field::LongMissingValueCount);
     }
 
@@ -235,7 +361,15 @@ mod tests {
         payload.push(4);
         push_u32(&mut payload, 1, byte_order);
         payload.extend_from_slice(b"abcd");
-        let err = parse(1, &payload, byte_order, encoding_rs::WINDOWS_1252, 0).unwrap_err();
+        let err = parse(
+            1,
+            &payload,
+            byte_order,
+            encoding_rs::WINDOWS_1252,
+            0,
+            &mut Vec::new(),
+        )
+        .unwrap_err();
         assert_unexpected_value_error(&err, Field::LongMissingValueCount);
     }
 
@@ -247,6 +381,7 @@ mod tests {
             ByteOrder::LittleEndian,
             encoding_rs::WINDOWS_1252,
             0,
+            &mut Vec::new(),
         )
         .unwrap_err();
         assert_unexpected_value_error(&err, Field::ExtensionElementSize);
@@ -260,7 +395,15 @@ mod tests {
         payload.push(2);
         push_u32(&mut payload, 3, byte_order); // width 3, but only 3 bytes for one value
         payload.extend_from_slice(b"XXX");
-        let err = parse(1, &payload, byte_order, encoding_rs::WINDOWS_1252, 0).unwrap_err();
+        let err = parse(
+            1,
+            &payload,
+            byte_order,
+            encoding_rs::WINDOWS_1252,
+            0,
+            &mut Vec::new(),
+        )
+        .unwrap_err();
         assert_unexpected_value_error(&err, Field::LongMissingValue);
     }
 
@@ -272,6 +415,7 @@ mod tests {
             ByteOrder::LittleEndian,
             encoding_rs::WINDOWS_1252,
             0,
+            &mut Vec::new(),
         )
         .unwrap();
         assert!(result.is_empty());
