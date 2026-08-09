@@ -136,6 +136,36 @@ pub(crate) fn segment_width(width: u16, index: usize) -> Option<u16> {
     width.checked_sub(consumed)
 }
 
+/// Whether `actual` — a segment's declared width, as its type-2 record
+/// spells it — is acceptable where [`segment_width`] computes
+/// `expected`.
+///
+/// Exact for every segment but the last. **The last is allowed to be
+/// wider**, up to the next multiple of eight, because PSPP documents
+/// that "the last segment has width `W - (N - 1) * 252`; some versions
+/// of SPSS make it slightly wider, but not wide enough to make the last
+/// segment require another 8 bytes of data" — its worked example of a
+/// 20 000-wide string gives a last segment of 92 bytes "or slightly
+/// wider (up to 96 bytes, the next multiple of 8)".
+///
+/// Accepting the wider spelling costs nothing and changes no offset.
+/// The extra width lies inside padding the segment already occupies, so
+/// [`stride`](SegmentLayout::stride) is identical either way and the row
+/// layout does not move; reassembly truncates to the variable's logical
+/// width regardless of how much each segment contributes. Demanding
+/// equality, by contrast, would reject such a file's very long string
+/// and leave it split across N variables.
+#[must_use]
+pub(crate) fn segment_width_accepted(expected: u16, actual: u16, is_last: bool) -> bool {
+    if !is_last {
+        return actual == expected;
+    }
+    let expected = usize::from(expected);
+    let actual = usize::from(actual);
+    let padded = expected.div_ceil(DATA_UNIT_LEN) * DATA_UNIT_LEN;
+    (expected..=padded).contains(&actual)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

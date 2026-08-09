@@ -16,7 +16,9 @@ use crate::spss::sav::missing_value_specification::MissingValueSpecification;
 use crate::spss::sav::raw_missing_values::RawMissingValues;
 use crate::spss::sav::sav_header::SavHeader;
 use crate::spss::sav::sav_warning::SavWarning;
-use crate::spss::sav::segment_layout::{SegmentLayout, segment_count, segment_width};
+use crate::spss::sav::segment_layout::{
+    SegmentLayout, segment_count, segment_width, segment_width_accepted,
+};
 use crate::spss::sav::variable_layout::VariableLayout;
 use crate::spss::sav::variable_type::VariableType;
 
@@ -340,7 +342,8 @@ impl DataLayoutBuilder {
     ///
     /// Checks the count and every declared width, so a subtype-14 record
     /// that disagrees with the dictionary is caught rather than silently
-    /// mis-slicing the row.
+    /// mis-slicing the row. The last segment's width is checked with the
+    /// tolerance [`segment_width_accepted`] documents.
     fn segments_agree(&self, start: usize, width: u16) -> bool {
         let count = segment_count(width);
         for offset in 0..count {
@@ -353,7 +356,10 @@ impl DataLayoutBuilder {
             let Some(segment) = self.segments.get(index) else {
                 return false;
             };
-            if segment.layout.variable_type() != VariableType::String(expected) {
+            let VariableType::String(actual) = segment.layout.variable_type() else {
+                return false;
+            };
+            if !segment_width_accepted(expected, actual, offset + 1 == count) {
                 return false;
             }
         }
@@ -555,6 +561,64 @@ mod tests {
         assert_eq!(longstr.content_len(), 300);
 
         assert_eq!(layout.row_len(), 256 + 48 + 8);
+    }
+
+    /// PSPP's own worked example: a 20 000-wide string is 80 segments,
+    /// 79 of them 255 wide and the last `20000 - 79 * 252 == 92` — but
+    /// "some versions of SPSS make it slightly wider", up to 96, the
+    /// next multiple of 8. Every spelling in that range has to collapse,
+    /// and the row layout must come out identical, since the extra width
+    /// lies inside padding the segment already occupies.
+    #[test]
+    fn a_last_segment_padded_to_the_next_unit_still_collapses() {
+        for last in [92, 93, 96] {
+            let mut segments: Vec<(String, VariableType)> = (0..79)
+                .map(|index| (format!("WIDE_{index:02}"), VariableType::String(255)))
+                .collect();
+            segments.push(("WIDE_79".to_owned(), VariableType::String(last)));
+            let borrowed: Vec<(&str, VariableType)> = segments
+                .iter()
+                .map(|(name, variable_type)| (name.as_str(), *variable_type))
+                .collect();
+
+            let (layout, warnings) =
+                layout_of(&borrowed, Some(very_long_strings(&[("WIDE_00", 20_000)])));
+            assert!(warnings.is_empty(), "last {last}: {warnings:?}");
+            assert_eq!(layout.variables().len(), 1, "last {last}");
+            let wide = &layout.variables()[0];
+            assert_eq!(wide.variable_type(), VariableType::String(20_000));
+            assert_eq!(wide.segments().len(), 80, "last {last}");
+            assert_eq!(wide.content_len(), 20_000);
+            // 79 segments of 256 bytes apiece, then the last one's 96 —
+            // the same row whichever width the writer spelled.
+            assert_eq!(layout.row_len(), 79 * 256 + 96, "last {last}");
+        }
+    }
+
+    /// The tolerance stops at the unit boundary. A last segment one byte
+    /// past it would need another 8 bytes of row, which is exactly what
+    /// PSPP says cannot happen.
+    #[test]
+    fn a_last_segment_past_the_next_unit_is_still_a_mismatch() {
+        let mut segments: Vec<(String, VariableType)> = (0..79)
+            .map(|index| (format!("WIDE_{index:02}"), VariableType::String(255)))
+            .collect();
+        segments.push(("WIDE_79".to_owned(), VariableType::String(97)));
+        let borrowed: Vec<(&str, VariableType)> = segments
+            .iter()
+            .map(|(name, variable_type)| (name.as_str(), *variable_type))
+            .collect();
+
+        let (layout, warnings) =
+            layout_of(&borrowed, Some(very_long_strings(&[("WIDE_00", 20_000)])));
+        assert_eq!(layout.variables().len(), 80, "left uncollapsed");
+        assert!(
+            matches!(
+                warnings.as_slice(),
+                [SavWarning::VeryLongStringSegmentMismatch { .. }],
+            ),
+            "{warnings:?}",
+        );
     }
 
     /// A subtype-14 entry naming a variable the dictionary does not have
