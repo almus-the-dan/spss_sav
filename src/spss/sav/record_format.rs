@@ -28,8 +28,13 @@
 //! decoder that reads a fresh group per row is wrong.
 
 // The layout constants land as one set so the format is documented in
-// one place. The command codes are consumed by the bytecode decoder.
-// The tests below already exercise the relationships between them.
+// one place. What this #![allow(dead_code)] still covers, now that both
+// decoders are written: the inline-range bounds, which state the range
+// the tests check rather than being matched against; and the trailer's
+// *interior* field offsets, which no reader touches — the reader needs
+// only the trailer's position and length, both of which the ZSAV header
+// gives. Those are for the writer, and for a `Seek`-bound row index if
+// one is ever built.
 #![allow(dead_code)]
 
 use crate::spss::sav::segment_layout::DATA_UNIT_LEN;

@@ -177,8 +177,9 @@ impl<R> RecordReader<R> {
         layout: DataLayout,
         schema: SavSchema,
     ) -> Self {
-        let source = RowSource::new(layout.compression());
         let coding = layout.row_coding();
+        let encoding = coding.float_encoding();
+        let source = RowSource::new(layout.compression(), encoding.byte_order());
         let row = Vec::with_capacity(layout.row_len());
         Self {
             state,

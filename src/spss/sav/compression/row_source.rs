@@ -7,6 +7,7 @@
 
 use std::io::Read;
 
+use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::compression::bytecode_decoder::BytecodeDecoder;
 use crate::spss::sav::compression::compression_kind::CompressionKind;
 use crate::spss::sav::compression::file_units::FileUnits;
@@ -49,7 +50,9 @@ impl RowSource {
     /// reader should not be able to fail on a file nobody is going to
     /// read. The ZSAV data-section header is consequently read by
     /// [`ZlibBlocks`] on its first refill rather than here.
-    pub fn new(compression: CompressionKind) -> Self {
+    /// `byte_order` is the file's, for the ZSAV container's own fields;
+    /// the command stream inside it has no multibyte fields of its own.
+    pub fn new(compression: CompressionKind, byte_order: ByteOrder) -> Self {
         match compression {
             CompressionKind::None => Self::Uncompressed,
             CompressionKind::Bytecode => Self::Bytecode {
@@ -57,7 +60,7 @@ impl RowSource {
                 decoder: BytecodeDecoder::default(),
             },
             CompressionKind::Zlib => Self::Zlib {
-                blocks: ZlibBlocks::default(),
+                blocks: ZlibBlocks::new(byte_order),
                 decoder: BytecodeDecoder::default(),
             },
         }

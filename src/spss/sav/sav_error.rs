@@ -104,6 +104,12 @@ pub enum Field {
     LongMissingValueCount,
     /// Cell value within a record.
     CellValue,
+    /// The ZSAV data-section header's self-referential position field.
+    ZsavHeaderPosition,
+    /// The trailer position recorded in the ZSAV data-section header.
+    ZsavTrailerPosition,
+    /// The trailer length recorded in the ZSAV data-section header.
+    ZsavTrailerLength,
 }
 
 impl fmt::Display for Field {
@@ -139,6 +145,9 @@ impl fmt::Display for Field {
             Self::LongMissingValue => "long missing value",
             Self::LongMissingValueCount => "long missing value count",
             Self::CellValue => "cell value",
+            Self::ZsavHeaderPosition => "ZSAV header position",
+            Self::ZsavTrailerPosition => "ZSAV trailer position",
+            Self::ZsavTrailerLength => "ZSAV trailer length",
         })
     }
 }
@@ -208,6 +217,10 @@ pub enum FormatErrorKind {
         /// Record-type tag observed in violation.
         saw: i32,
     },
+    /// A ZSAV block did not inflate: either it is not a valid zlib
+    /// stream, or the block region held a different number of streams
+    /// than the header's trailer length accounts for.
+    InvalidCompressedBlock,
     /// Advancing the running byte offset would exceed what a `u64` can
     /// represent.
     ///
@@ -245,6 +258,7 @@ impl fmt::Display for FormatErrorKind {
             Self::UnpairedValueLabelRecord { saw } => {
                 write!(f, "unpaired value-label record (saw record type {saw})")
             }
+            Self::InvalidCompressedBlock => f.write_str("ZSAV block did not inflate"),
             Self::PositionOverflow => f.write_str("byte offset exceeds the representable range"),
         }
     }
