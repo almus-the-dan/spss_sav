@@ -187,10 +187,6 @@ pub enum FormatErrorKind {
     /// The header's `layout_code` field decoded to neither `2` nor
     /// `3` under either little-endian or big-endian interpretation.
     UnreadableLayoutCode,
-    /// The header's `bias` field could not be decoded as the
-    /// canonical value (`100.0`) under any of the recognized
-    /// floating-point formats (IEEE 754, IBM HFP, VAX).
-    UnknownFloatFormat,
     /// The dictionary section yielded a record-type tag outside the
     /// recognized set (`2`, `3`, `4`, `6`, `7`, `999`).
     UnknownRecordType {
@@ -246,7 +242,6 @@ impl fmt::Display for FormatErrorKind {
             Self::DanglingValueLabel => f.write_str("value-label references a missing variable"),
             Self::InvalidCompressionBias => f.write_str("bytecode compression bias mismatch"),
             Self::UnreadableLayoutCode => f.write_str("unreadable layout code"),
-            Self::UnknownFloatFormat => f.write_str("unknown floating-point format"),
             Self::UnknownRecordType { value } => write!(f, "unknown record type {value}"),
             Self::UnexpectedContinuationRecord => {
                 f.write_str("continuation record when none was expected")

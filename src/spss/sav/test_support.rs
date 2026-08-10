@@ -13,13 +13,17 @@ use crate::spss::sav::dictionary_format::{
     RECORD_TYPE_DICTIONARY_TERMINATOR, RECORD_TYPE_EXTENSION, RECORD_TYPE_VARIABLE,
 };
 use crate::spss::sav::dictionary_reader::DictionaryReader;
+use crate::spss::sav::dictionary_record::DictionaryRecord;
 use crate::spss::sav::encoding_strategy::EncodingStrategy;
+use crate::spss::sav::extensions::extension_record::ExtensionRecord;
+use crate::spss::sav::extensions::extension_subtype::ExtensionSubtype;
 use crate::spss::sav::header_format::{
     CANONICAL_BIAS, FILE_LABEL_LEN, HEADER_LEN, LAYOUT_CODE_VALUES, MAGIC_FL2, PRODUCT_NAME_LEN,
     TRAILING_PADDING_LEN,
 };
 use crate::spss::sav::sav_error::{Field, FormatErrorKind, SavError};
 use crate::spss::sav::sav_reader::SavReader;
+use crate::spss::sav::sav_warning::SavWarning;
 use crate::spss::sav::skippable_content::SkippableContent;
 
 /// Asserts that `err` is a dictionary `UnexpectedValue` format error
@@ -32,6 +36,38 @@ pub(crate) fn assert_unexpected_value_error(err: &SavError, expected: Field) {
         ),
         _ => panic!("expected Format error, got {err:?}"),
     }
+}
+
+/// Asserts that a malformed extension record of `subtype` was kept as
+/// [`ExtensionRecord::Unknown`] with a warning, rather than failing the
+/// read.
+///
+/// The shape every `reader_*_degrades` test shares: an extension record
+/// provides nonessential information, so a payload the parser cannot
+/// make sense of costs that record and nothing more.
+pub(crate) fn assert_degraded_extension(
+    dictionary: &mut DictionaryReader<Cursor<Vec<u8>>>,
+    subtype: ExtensionSubtype,
+) {
+    let record = dictionary
+        .read_record()
+        .expect("a malformed extension record must not fail the read")
+        .expect("a record");
+    assert!(
+        matches!(
+            record,
+            DictionaryRecord::Extension(ExtensionRecord::Unknown(_))
+        ),
+        "expected the record to degrade to Unknown, got {record:?}",
+    );
+    assert!(
+        matches!(
+            dictionary.warnings(),
+            [SavWarning::UnreadableExtensionRecord { subtype: seen }] if *seen == subtype,
+        ),
+        "{:?}",
+        dictionary.warnings(),
+    );
 }
 
 /// Builds a minimal valid fixed header (uncompressed, little-endian,

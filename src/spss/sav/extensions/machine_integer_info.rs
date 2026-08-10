@@ -437,9 +437,10 @@ fn cross_check(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spss::sav::sav_error::{Field, FormatErrorKind, SavError};
+    use crate::spss::sav::extensions::extension_subtype::ExtensionSubtype;
+
     use crate::spss::sav::test_support::{
-        build_header, open, write_extension_record, write_terminator,
+        assert_degraded_extension, build_header, open, write_extension_record, write_terminator,
     };
 
     /// Builds a 32-byte subtype-3 payload from 8 i32 fields in the
@@ -573,42 +574,24 @@ mod tests {
     }
 
     #[test]
-    fn reader_wrong_element_size_errors() {
+    fn reader_wrong_element_size_degrades() {
         let byte_order = ByteOrder::LittleEndian;
         let mut bytes = build_header(byte_order);
         write_extension_record(&mut bytes, byte_order, 3, 8, 8, &[0; 64]);
         write_terminator(&mut bytes, byte_order);
 
         let mut dict = open(bytes);
-        let err = dict.read_record().unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: Field::ExtensionElementSize,
-                }
-            ),
-            _ => panic!("expected Format error, got {err:?}"),
-        }
+        assert_degraded_extension(&mut dict, ExtensionSubtype::MachineIntegerInfo);
     }
 
     #[test]
-    fn reader_wrong_element_count_errors() {
+    fn reader_wrong_element_count_degrades() {
         let byte_order = ByteOrder::LittleEndian;
         let mut bytes = build_header(byte_order);
         write_extension_record(&mut bytes, byte_order, 3, 4, 4, &[0; 16]);
         write_terminator(&mut bytes, byte_order);
 
         let mut dict = open(bytes);
-        let err = dict.read_record().unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: Field::ExtensionElementCount,
-                }
-            ),
-            _ => panic!("expected Format error, got {err:?}"),
-        }
+        assert_degraded_extension(&mut dict, ExtensionSubtype::MachineIntegerInfo);
     }
 }

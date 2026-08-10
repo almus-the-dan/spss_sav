@@ -220,15 +220,22 @@ impl<R> DictionaryReader<R> {
             return Ok(Some(kind));
         }
         self.state.warnings_mut().extend(buffered.warnings);
-        let record = self.decode(buffered.payload)?;
+        let record = self.decode(buffered.payload);
         self.accumulate(&record);
         Ok(Some(kind))
     }
 
     /// Decodes one buffered payload into the record a caller sees.
-    fn decode(&mut self, payload: BufferedRecordPayload) -> Result<DictionaryRecord> {
+    ///
+    /// Total: every way a dictionary record can be malformed is caught
+    /// during buffering, where the bytes are still being framed. Once a
+    /// payload has been set aside, interpreting it cannot fail — an
+    /// extension record whose payload defeats its parser degrades to
+    /// `Unknown` rather than erroring, and nothing else here is
+    /// fallible.
+    fn decode(&mut self, payload: BufferedRecordPayload) -> DictionaryRecord {
         let encoding = self.encoding_provenance.encoding();
-        let record = match payload {
+        match payload {
             BufferedRecordPayload::Variable(variable) => {
                 let record = decode_variable_record(variable, encoding);
                 DictionaryRecord::Variable(record)
@@ -242,10 +249,9 @@ impl<R> DictionaryReader<R> {
                 DictionaryRecord::Document(record)
             }
             BufferedRecordPayload::Extension(envelope) => {
-                self.decode_extension_record(envelope, encoding)?
+                self.decode_extension_record(envelope, encoding)
             }
-        };
-        Ok(record)
+        }
     }
 
     /// Folds a decoded record into the in-progress schema.
@@ -283,40 +289,85 @@ impl<R> DictionaryReader<R> {
     /// [`decode_unknown_extension`](Self::decode_unknown_extension),
     /// which preserves the payload verbatim and pushes a
     /// [`SavWarning::UnknownExtensionSubtype`].
+    /// Infallible by construction, and that is the point: PSPP advises
+    /// that "because extension records provide nonessential
+    /// information, it is generally better to ignore an extension record
+    /// entirely than to refuse to read a system file". A payload the
+    /// parser cannot make sense of is kept verbatim on `Unknown`
+    /// instead, so nothing is lost that was not already unreadable and a
+    /// caller can still inspect the bytes that defeated it.
     fn decode_extension_record(
         &mut self,
         envelope: ExtensionEnvelope,
         encoding: &'static Encoding,
-    ) -> Result<DictionaryRecord> {
+    ) -> DictionaryRecord {
         self.warn_if_override_disagrees(envelope.subtype);
-        match ExtensionSubtype::from_code(envelope.subtype) {
+        let subtype = ExtensionSubtype::from_code(envelope.subtype);
+        if subtype == ExtensionSubtype::Unrecognized {
+            return self.decode_unknown_extension(envelope);
+        }
+        let parsed = self.decode_known_extension(&envelope, subtype, encoding);
+        match parsed {
+            Ok(record) => record,
+            Err(_) => self.degrade_to_unknown(envelope, subtype),
+        }
+    }
+
+    /// Parses one extension record of a subtype this crate knows.
+    fn decode_known_extension(
+        &mut self,
+        envelope: &ExtensionEnvelope,
+        subtype: ExtensionSubtype,
+        encoding: &'static Encoding,
+    ) -> Result<DictionaryRecord> {
+        match subtype {
             ExtensionSubtype::MachineIntegerInfo => {
-                machine_integer_info::read(&envelope, &self.header, self.state.warnings_mut())
+                machine_integer_info::read(envelope, &self.header, self.state.warnings_mut())
             }
-            ExtensionSubtype::FloatInfo => float_sentinels::read(&envelope),
-            ExtensionSubtype::ExtendedNumberOfCases => extended_number_of_cases::read(&envelope),
-            ExtensionSubtype::CharacterEncoding => character_encoding::read(&envelope),
-            ExtensionSubtype::LongVariableNames => long_variable_names::read(&envelope, encoding),
-            ExtensionSubtype::VeryLongStrings => very_long_strings::read(&envelope, encoding),
-            ExtensionSubtype::DisplayParameters => raw_display_parameters::read(&envelope),
-            ExtensionSubtype::VariableSets => variable_sets::read(&envelope, encoding),
+            ExtensionSubtype::FloatInfo => float_sentinels::read(envelope),
+            ExtensionSubtype::ExtendedNumberOfCases => extended_number_of_cases::read(envelope),
+            ExtensionSubtype::CharacterEncoding => character_encoding::read(envelope),
+            ExtensionSubtype::LongVariableNames => long_variable_names::read(envelope, encoding),
+            ExtensionSubtype::VeryLongStrings => very_long_strings::read(envelope, encoding),
+            ExtensionSubtype::DisplayParameters => raw_display_parameters::read(envelope),
+            ExtensionSubtype::VariableSets => variable_sets::read(envelope, encoding),
             ExtensionSubtype::MultipleResponseSets
             | ExtensionSubtype::MultipleResponseSetsExtended => {
-                multiple_response_sets::read(&envelope, encoding)
+                multiple_response_sets::read(envelope, encoding)
             }
-            ExtensionSubtype::ExtraProductInfo => extra_product_info::read(&envelope, encoding),
-            ExtensionSubtype::Uuid => uuid::read(&envelope, encoding),
-            ExtensionSubtype::FileAttributes => file_attributes::read(&envelope, encoding),
-            ExtensionSubtype::VariableAttributes => variable_attributes::read(&envelope, encoding),
-            ExtensionSubtype::LongValueLabels => long_value_labels::read(&envelope, encoding),
+            ExtensionSubtype::ExtraProductInfo => extra_product_info::read(envelope, encoding),
+            ExtensionSubtype::Uuid => uuid::read(envelope, encoding),
+            ExtensionSubtype::FileAttributes => file_attributes::read(envelope, encoding),
+            ExtensionSubtype::VariableAttributes => variable_attributes::read(envelope, encoding),
+            ExtensionSubtype::LongValueLabels => long_value_labels::read(envelope, encoding),
             ExtensionSubtype::LongMissingValues => {
-                long_missing_values::read(&envelope, encoding, self.state.warnings_mut())
+                long_missing_values::read(envelope, encoding, self.state.warnings_mut())
             }
             ExtensionSubtype::Unrecognized => {
-                let unknown = self.decode_unknown_extension(envelope);
-                Ok(unknown)
+                unreachable!("handled before dispatch")
             }
         }
+    }
+
+    /// Keeps a malformed record's bytes as an
+    /// [`ExtensionRecord::Unknown`], warning that its subtype was
+    /// recognized but its payload would not parse.
+    fn degrade_to_unknown(
+        &mut self,
+        envelope: ExtensionEnvelope,
+        subtype: ExtensionSubtype,
+    ) -> DictionaryRecord {
+        self.state
+            .warnings_mut()
+            .push(SavWarning::UnreadableExtensionRecord { subtype });
+        let unknown = UnknownExtension::builder()
+            .subtype(envelope.subtype.cast_unsigned())
+            .element_size(envelope.element_size_usize)
+            .element_count(envelope.element_count_usize)
+            .payload(envelope.payload)
+            .build();
+        let record = ExtensionRecord::Unknown(unknown);
+        DictionaryRecord::Extension(record)
     }
 
     /// Raises [`SavWarning::EncodingOverridden`] when the reader is
@@ -410,7 +461,7 @@ impl<R: Read> DictionaryReader<R> {
         // `warnings()` still reports per-call results.
         self.state.warnings_mut().extend(buffered.warnings);
 
-        let record = self.decode(buffered.payload)?;
+        let record = self.decode(buffered.payload);
         self.accumulate(&record);
         Ok(Some(record))
     }
@@ -652,12 +703,13 @@ mod tests {
     use crate::spss::sav::encoding_provenance::EncodingProvenance;
     use crate::spss::sav::encoding_strategy::EncodingStrategy;
     use crate::spss::sav::extensions::extension_record::ExtensionRecord;
+    use crate::spss::sav::extensions::extension_subtype::ExtensionSubtype;
     use crate::spss::sav::raw_missing_values::RawMissingValues;
-    use crate::spss::sav::sav_error::{Field, FormatErrorKind, SavError};
+    use crate::spss::sav::sav_error::{FormatErrorKind, SavError};
     use crate::spss::sav::sav_format_kind::SavFormatKind;
     use crate::spss::sav::sav_warning::SavWarning;
     use crate::spss::sav::test_support::{
-        assert_unexpected_value_error, build_header, open, open_with, pack_format, try_open,
+        assert_degraded_extension, build_header, open, open_with, pack_format, try_open,
         write_character_code_record, write_extension_record, write_rec_type, write_terminator,
         write_u32,
     };
@@ -814,6 +866,70 @@ mod tests {
         }
         // The three continuation records are consumed silently;
         // the next read_record sees the terminator.
+        assert!(dict.read_record().unwrap().is_none());
+    }
+
+    /// PSPP: "A few system files have been encountered that include a
+    /// variable label on dummy variable records, so readers should take
+    /// care to parse dummy variable records in the same way as other
+    /// variable records." The label's contents mean nothing, but its
+    /// bytes still have to be consumed — read past them and everything
+    /// after is parsed at the wrong offset, which fails the whole file
+    /// rather than losing one label.
+    #[test]
+    fn a_continuation_record_carrying_a_label_stays_in_step() {
+        let byte_order = ByteOrder::LittleEndian;
+        let mut bytes = build_header(byte_order);
+        write_rec_type(&mut bytes, byte_order, 2);
+        bytes.extend(build_variable_body(
+            byte_order,
+            16,
+            0,
+            0,
+            pack_format(1, 16, 0),
+            pack_format(1, 16, 0),
+            *b"DESC    ",
+        ));
+        // The one continuation the width-16 string needs, carrying a
+        // label no well-formed writer would put there.
+        write_rec_type(&mut bytes, byte_order, 2);
+        bytes.extend(build_variable_body(
+            byte_order, -1, 1, // has_var_label
+            0, 0, 0, [0; 8],
+        ));
+        let label = b"stray label on a dummy record";
+        write_u32(&mut bytes, byte_order, u32::try_from(label.len()).unwrap());
+        let mut padded = label.to_vec();
+        padded.resize(label.len().div_ceil(4) * 4, b' ');
+        bytes.extend_from_slice(&padded);
+        // A second variable, which only reads correctly if the label
+        // above was consumed.
+        write_rec_type(&mut bytes, byte_order, 2);
+        bytes.extend(build_variable_body(
+            byte_order,
+            0,
+            0,
+            0,
+            pack_format(5, 8, 2),
+            pack_format(5, 8, 2),
+            *b"AFTER   ",
+        ));
+        write_terminator(&mut bytes, byte_order);
+
+        let mut dict = open(bytes);
+        let first = dict.read_record().unwrap().unwrap();
+        let DictionaryRecord::Variable(header) = first else {
+            panic!("expected Variable, got {first:?}");
+        };
+        assert_eq!(header.short_name(), "DESC");
+        assert_eq!(header.variable_type(), VariableType::String(16));
+
+        let second = dict.read_record().unwrap().unwrap();
+        let DictionaryRecord::Variable(header) = second else {
+            panic!("expected Variable, got {second:?}");
+        };
+        assert_eq!(header.short_name(), "AFTER");
+        assert_eq!(header.variable_type(), VariableType::Numeric);
         assert!(dict.read_record().unwrap().is_none());
     }
 
@@ -1949,9 +2065,10 @@ mod tests {
             dict.encoding_provenance(),
             EncodingProvenance::Unspecified(encoding_rs::WINDOWS_1252)
         );
-        // The record itself is still rejected when handed to the caller.
-        let err = dict.read_record().unwrap_err();
-        assert_unexpected_value_error(&err, Field::ExtensionElementSize);
+        // The record itself still reaches the caller, as `Unknown` with
+        // its bytes intact — a record we cannot interpret costs that
+        // record, not the file.
+        assert_degraded_extension(&mut dict, ExtensionSubtype::MachineIntegerInfo);
     }
 
     /// A file that declares its encoding only through subtype 3 must

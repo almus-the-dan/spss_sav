@@ -180,8 +180,9 @@ mod tests {
     use crate::spss::sav::byte_order::ByteOrder;
     use crate::spss::sav::dictionary_record::DictionaryRecord;
     use crate::spss::sav::extensions::extension_record::ExtensionRecord;
+    use crate::spss::sav::extensions::extension_subtype::ExtensionSubtype;
     use crate::spss::sav::test_support::{
-        build_header, open, write_extension_record, write_terminator,
+        assert_degraded_extension, build_header, open, write_extension_record, write_terminator,
     };
 
     #[test]
@@ -441,7 +442,7 @@ mod tests {
     }
 
     #[test]
-    fn reader_missing_equals_errors() {
+    fn reader_missing_equals_degrades() {
         let byte_order = ByteOrder::LittleEndian;
         let mut bytes = build_header(byte_order);
         let payload = b"V1=ok\tBADPAIR";
@@ -456,35 +457,17 @@ mod tests {
         write_terminator(&mut bytes, byte_order);
 
         let mut dict = open(bytes);
-        let err = dict.read_record().unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: Field::LongVariableNamePair,
-                }
-            ),
-            _ => panic!("expected Format error, got {err:?}"),
-        }
+        assert_degraded_extension(&mut dict, ExtensionSubtype::LongVariableNames);
     }
 
     #[test]
-    fn reader_wrong_element_size_errors() {
+    fn reader_wrong_element_size_degrades() {
         let byte_order = ByteOrder::LittleEndian;
         let mut bytes = build_header(byte_order);
         write_extension_record(&mut bytes, byte_order, 13, 4, 2, &[0; 8]);
         write_terminator(&mut bytes, byte_order);
 
         let mut dict = open(bytes);
-        let err = dict.read_record().unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: Field::ExtensionElementSize,
-                }
-            ),
-            _ => panic!("expected Format error, got {err:?}"),
-        }
+        assert_degraded_extension(&mut dict, ExtensionSubtype::LongVariableNames);
     }
 }

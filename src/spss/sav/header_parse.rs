@@ -141,19 +141,27 @@ pub(super) fn parse_nominal_case_size(value: i32) -> Option<u32> {
 }
 
 /// Identifies the file's float format from its 8-byte `bias` field,
-/// which every writer sets to the canonical `100.0`. Returns the
-/// recognized [`FloatFormat`] alongside the decoded bias, or
-/// [`FormatErrorKind::UnknownFloatFormat`] when no candidate decodes to
-/// `100.0`.
+/// returning the format alongside the decoded bias.
 ///
-/// This is the only thing that distinguishes VAX `D_float` from
-/// `G_float`: subtype 3 declares a single "VAX" code for both.
+/// The probe works by assuming the bias *is* the canonical `100.0` and
+/// asking which format encodes it that way — which is the only thing
+/// that distinguishes VAX `D_float` from `G_float`, since subtype 3
+/// declares a single "VAX" code for both.
+///
+/// A bias that is not `100.0` therefore leaves the format
+/// undetectable. That is not a corrupt file — the header spec says the
+/// bias is only "ordinarily set to 100". The format falls back to
+/// IEEE 754 in the byte order the integers already established, and the
+/// bias to whatever it decodes to there. PSPP does exactly this and
+/// notes it "is correct for all known system files". The assumption is
+/// reported as [`SavWarning::FloatFormatAssumed`], since nothing about
+/// the file confirms it.
 #[allow(clippy::float_cmp)] // canonical bias compares against the spec's exact `100.0` sentinel
 pub(super) fn parse_bias(
     bytes: [u8; 8],
     byte_order: ByteOrder,
-    position: u64,
-) -> Result<(FloatFormat, f64)> {
+    warnings: &mut Vec<SavWarning>,
+) -> (FloatFormat, f64) {
     // Probe each format's encoding of the canonical bias, the way
     // PSPP's `float_identify` does. The encodings of `100.0` are
     // pairwise distinct (asserted by float_encoding's
@@ -167,15 +175,13 @@ pub(super) fn parse_bias(
     ];
     for format in formats {
         if FloatEncoding::new(format, byte_order).decode(bytes) == CANONICAL_BIAS {
-            return Ok((format, CANONICAL_BIAS));
+            return (format, CANONICAL_BIAS);
         }
     }
-    let error = SavError::format(
-        Section::Header,
-        position,
-        FormatErrorKind::UnknownFloatFormat,
-    );
-    Err(error)
+    let default_encoding = FloatEncoding::new(FloatFormat::Ieee754, byte_order);
+    let bias = default_encoding.decode(bytes);
+    warnings.push(SavWarning::FloatFormatAssumed { bias });
+    (FloatFormat::Ieee754, bias)
 }
 
 /// Decodes the 64-byte `file_label` field through the supplied
@@ -198,9 +204,19 @@ mod tests {
     const VAX_G: [u8; 8] = [0x79, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
 
     fn identify(bytes: [u8; 8], byte_order: ByteOrder) -> FloatFormat {
-        let (format, bias) = parse_bias(bytes, byte_order, 0).expect("recognized bias");
+        let mut warnings = Vec::new();
+        let (format, bias) = parse_bias(bytes, byte_order, &mut warnings);
         assert_eq!(bias.to_bits(), CANONICAL_BIAS.to_bits());
+        assert!(warnings.is_empty(), "{warnings:?}");
         format
+    }
+
+    /// The fallback: format and bias as they come out, plus whatever
+    /// was warned about.
+    fn assume(bytes: [u8; 8], byte_order: ByteOrder) -> (FloatFormat, f64, Vec<SavWarning>) {
+        let mut warnings = Vec::new();
+        let (format, bias) = parse_bias(bytes, byte_order, &mut warnings);
+        (format, bias, warnings)
     }
 
     #[test]
@@ -252,21 +268,38 @@ mod tests {
         );
     }
 
+    /// Read in the wrong byte order, the canonical bias is no longer
+    /// 100.0 under any format — so the probe finds nothing and the
+    /// fallback takes over, rather than the read failing.
     #[test]
-    fn ieee_in_the_wrong_byte_order_is_not_recognized() {
-        let err = parse_bias(IEEE_LITTLE, ByteOrder::BigEndian, 0).unwrap_err();
-        assert!(matches!(
-            err,
-            SavError::Format(ref e) if e.kind() == FormatErrorKind::UnknownFloatFormat
-        ));
+    fn ieee_in_the_wrong_byte_order_falls_back() {
+        let (format, bias, warnings) = assume(IEEE_LITTLE, ByteOrder::BigEndian);
+        assert_eq!(format, FloatFormat::Ieee754);
+        assert!(
+            matches!(warnings.as_slice(), [SavWarning::FloatFormatAssumed { .. }]),
+            "{warnings:?}",
+        );
+        // Whatever those bytes mean big-endian is what the file says the
+        // bias is, and the decoder will use exactly that.
+        assert_eq!(bias.to_bits(), f64::from_be_bytes(IEEE_LITTLE).to_bits());
     }
 
+    /// A bias no format decodes to 100.0 is legal — the spec says only
+    /// that it is "ordinarily" 100 — so IEEE is assumed and the value
+    /// kept.
     #[test]
-    fn an_unrecognizable_bias_errors() {
-        let err = parse_bias([0xAB; 8], ByteOrder::LittleEndian, 0).unwrap_err();
-        assert!(matches!(
-            err,
-            SavError::Format(ref e) if e.kind() == FormatErrorKind::UnknownFloatFormat
-        ));
+    fn an_unrecognizable_bias_assumes_ieee() {
+        let bytes = 99.0_f64.to_le_bytes();
+        let (format, bias, warnings) = assume(bytes, ByteOrder::LittleEndian);
+        assert_eq!(format, FloatFormat::Ieee754);
+        assert_eq!(bias.to_bits(), 99.0_f64.to_bits());
+        assert!(
+            matches!(
+                warnings.as_slice(),
+                [SavWarning::FloatFormatAssumed { bias }]
+                    if bias.to_bits() == 99.0_f64.to_bits(),
+            ),
+            "{warnings:?}",
+        );
     }
 }

@@ -160,9 +160,8 @@ impl<R: Read> HeaderReader<R> {
         let case_count_value = self.state.read_i32(byte_order, Section::Header)?;
         let case_count = parse_case_count(case_count_value);
 
-        let bias_position = self.state.position();
         let bias_bytes = self.state.read_array::<BIAS_LEN>(Section::Header)?;
-        let (float_format, bias) = parse_bias(bias_bytes, byte_order, bias_position)?;
+        let (float_format, bias) = parse_bias(bias_bytes, byte_order, self.state.warnings_mut());
 
         debug_assert_eq!(
             usize::try_from(self.state.position()).unwrap(),
@@ -604,15 +603,25 @@ mod tests {
         ));
     }
 
+    /// A bias that is not 100 leaves nothing to probe the float format
+    /// with, so IEEE 754 is assumed rather than the read refused. PSPP
+    /// does the same. The bias itself is kept as written — the bytecode
+    /// decoder honors it, so the file decodes correctly.
     #[test]
-    fn unknown_float_format_fails() {
+    fn a_non_canonical_bias_assumes_ieee_and_warns() {
         let mut h = HeaderBytes::new();
         h.bias = 99.0;
-        let err = read(h.build()).unwrap_err();
-        assert!(matches!(
-            err,
-            SavError::Format(ref e) if e.kind() == FormatErrorKind::UnknownFloatFormat
-        ));
+        let dictionary = read(h.build()).expect("must still read");
+        assert_eq!(dictionary.header().float_format(), FloatFormat::Ieee754);
+        let warnings = dictionary.warnings();
+        assert!(
+            matches!(
+                warnings,
+                [SavWarning::FloatFormatAssumed { bias }]
+                    if bias.to_bits() == 99.0_f64.to_bits(),
+            ),
+            "{warnings:?}",
+        );
     }
 
     #[test]

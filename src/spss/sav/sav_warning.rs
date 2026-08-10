@@ -92,6 +92,20 @@ pub enum SavWarning {
         /// Bytes a complete row holds.
         row_len: u64,
     },
+    /// The header's compression bias was not the canonical `100.0`, so
+    /// the file's floating-point format could not be identified from it.
+    /// IEEE 754 is assumed, in the byte order the integer fields
+    /// established.
+    ///
+    /// The bias is the only field whose expected value is known in
+    /// advance, which is what makes it the format probe; a different
+    /// value is legal — the spec says the bias is "ordinarily" 100 — but
+    /// leaves nothing to probe with. PSPP assumes the same and reports
+    /// it "correct for all known system files".
+    FloatFormatAssumed {
+        /// The bias as IEEE 754 decodes it.
+        bias: f64,
+    },
     /// A subtype-22 record repeated its `int32` value length before
     /// every missing value rather than writing it once. The extra
     /// lengths are skipped and the values read normally.
@@ -124,6 +138,20 @@ pub enum SavWarning {
         declared: &'static str,
         /// Encoding label actually used by the reader.
         used: &'static str,
+    },
+    /// An extension record of a recognized subtype had a payload that
+    /// would not parse. The record is surfaced as
+    /// [`ExtensionRecord::Unknown`](crate::spss::sav::extensions::extension_record::ExtensionRecord::Unknown)
+    /// with its bytes intact, and whatever it would have contributed is
+    /// left unapplied.
+    ///
+    /// Dropping the record rather than the file is PSPP's own advice:
+    /// "because extension records provide nonessential information, it
+    /// is generally better to ignore an extension record entirely than
+    /// to refuse to read a system file."
+    UnreadableExtensionRecord {
+        /// The subtype whose payload could not be parsed.
+        subtype: ExtensionSubtype,
     },
     /// An extension subtype this library does not yet recognize was
     /// preserved verbatim in

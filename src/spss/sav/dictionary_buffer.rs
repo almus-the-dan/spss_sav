@@ -350,6 +350,18 @@ impl<R: Read> Scan<'_, R> {
             .read_i32(four_bytes(&body, VARIABLE_TYPE_OFFSET));
         let type_code = parse_variable_type(type_value, position)?;
 
+        // Read before the continuation branch: a dummy record carries
+        // these two fields like any other, and they say whether more
+        // blocks follow it on disk.
+        let has_label = self
+            .byte_order
+            .read_i32(four_bytes(&body, VARIABLE_HAS_LABEL_OFFSET));
+        let has_label = parse_has_label(has_label);
+
+        let missing_count = self
+            .byte_order
+            .read_i32(four_bytes(&body, VARIABLE_MISSING_VALUE_COUNT_OFFSET));
+
         if matches!(type_code, VariableTypeCode::Continuation) {
             if self.pending_continuations == 0 {
                 return Err(SavError::format(
@@ -358,6 +370,15 @@ impl<R: Read> Scan<'_, R> {
                     FormatErrorKind::UnexpectedContinuationRecord,
                 ));
             }
+            // A dummy record's field *values* are ignored — but its
+            // blocks still have to be consumed, or everything after it
+            // is read at the wrong offset. PSPP: "A few system files
+            // have been encountered that include a variable label on
+            // dummy variable records, so readers should take care to
+            // parse dummy variable records in the same way as other
+            // variable records." Well-formed files zero both fields, so
+            // this ordinarily consumes nothing.
+            self.skip_variable_blocks(has_label, missing_count, position)?;
             self.pending_continuations -= 1;
             self.physical_variable_count += 1;
             return Ok(None);
@@ -375,14 +396,6 @@ impl<R: Read> Scan<'_, R> {
             ));
         }
 
-        let has_label = self
-            .byte_order
-            .read_i32(four_bytes(&body, VARIABLE_HAS_LABEL_OFFSET));
-        let has_label = parse_has_label(has_label);
-
-        let missing_count = self
-            .byte_order
-            .read_i32(four_bytes(&body, VARIABLE_MISSING_VALUE_COUNT_OFFSET));
         if missing_count == -1 {
             let variable_index = u32::try_from(self.variable_count).unwrap_or(u32::MAX);
             self.state
@@ -457,6 +470,27 @@ impl<R: Read> Scan<'_, R> {
             write_format,
         };
         Ok(Some(record))
+    }
+
+    /// Consumes the optional label and missing-value blocks that follow
+    /// a variable record's fixed body, discarding both.
+    ///
+    /// For dummy (continuation) records, whose contents mean nothing but
+    /// whose length still determines where the next record starts.
+    fn skip_variable_blocks(
+        &mut self,
+        has_label: bool,
+        missing_count: i32,
+        position: u64,
+    ) -> Result<()> {
+        if has_label {
+            self.read_variable_label()?;
+        }
+        let missing_count = parse_missing_value_count(missing_count, position)?;
+        for _ in 0..missing_count.entry_count() {
+            let _: [u8; MISSING_VALUE_ENTRY_LEN] = self.state.read_array(Section::Dictionary)?;
+        }
+        Ok(())
     }
 
     /// Reads the 4-byte `label_len` field followed by the padded label

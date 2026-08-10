@@ -172,10 +172,11 @@ fn parse_variable_attribute(
 mod tests {
     use super::*;
     use crate::spss::sav::byte_order::ByteOrder;
-    use crate::spss::sav::sav_error::{FormatErrorKind, SavError};
+    use crate::spss::sav::extensions::extension_subtype::ExtensionSubtype;
+
     use crate::spss::sav::test_support::{
-        assert_unexpected_value_error, build_header, open, write_extension_record,
-        write_numeric_variable, write_terminator,
+        assert_degraded_extension, assert_unexpected_value_error, build_header, open,
+        write_extension_record, write_numeric_variable, write_terminator,
     };
 
     #[test]
@@ -327,22 +328,13 @@ mod tests {
     }
 
     #[test]
-    fn reader_wrong_element_size_errors() {
+    fn reader_wrong_element_size_degrades() {
         let byte_order = ByteOrder::LittleEndian;
         let mut bytes = build_header(byte_order);
         write_extension_record(&mut bytes, byte_order, 18, 4, 2, &[0; 8]);
         write_terminator(&mut bytes, byte_order);
 
         let mut dict = open(bytes);
-        let err = dict.read_record().unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: Field::ExtensionElementSize,
-                }
-            ),
-            _ => panic!("expected Format error, got {err:?}"),
-        }
+        assert_degraded_extension(&mut dict, ExtensionSubtype::VariableAttributes);
     }
 }

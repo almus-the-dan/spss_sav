@@ -154,9 +154,10 @@ fn parse(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spss::sav::sav_error::{Field, FormatErrorKind, SavError};
+    use crate::spss::sav::extensions::extension_subtype::ExtensionSubtype;
+
     use crate::spss::sav::test_support::{
-        build_header, open, write_extension_record, write_terminator,
+        assert_degraded_extension, build_header, open, write_extension_record, write_terminator,
     };
 
     fn build_payload(byte_order: ByteOrder, version: i64, count: i64) -> Vec<u8> {
@@ -207,42 +208,24 @@ mod tests {
     }
 
     #[test]
-    fn reader_wrong_element_size_errors() {
+    fn reader_wrong_element_size_degrades() {
         let byte_order = ByteOrder::LittleEndian;
         let mut bytes = build_header(byte_order);
         write_extension_record(&mut bytes, byte_order, 16, 4, 2, &[0; 8]);
         write_terminator(&mut bytes, byte_order);
 
         let mut dict = open(bytes);
-        let err = dict.read_record().unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: Field::ExtensionElementSize,
-                }
-            ),
-            _ => panic!("expected Format error, got {err:?}"),
-        }
+        assert_degraded_extension(&mut dict, ExtensionSubtype::ExtendedNumberOfCases);
     }
 
     #[test]
-    fn reader_wrong_element_count_errors() {
+    fn reader_wrong_element_count_degrades() {
         let byte_order = ByteOrder::LittleEndian;
         let mut bytes = build_header(byte_order);
         write_extension_record(&mut bytes, byte_order, 16, 8, 1, &[0; 8]);
         write_terminator(&mut bytes, byte_order);
 
         let mut dict = open(bytes);
-        let err = dict.read_record().unwrap_err();
-        match err {
-            SavError::Format(e) => assert_eq!(
-                e.kind(),
-                FormatErrorKind::UnexpectedValue {
-                    field: Field::ExtensionElementCount,
-                }
-            ),
-            _ => panic!("expected Format error, got {err:?}"),
-        }
+        assert_degraded_extension(&mut dict, ExtensionSubtype::ExtendedNumberOfCases);
     }
 }
