@@ -35,15 +35,21 @@ use crate::spss::sav::variable_type::VariableType;
 /// nor
 /// [`skip_record`](crate::spss::sav::dictionary_reader::DictionaryReader::skip_record)
 /// can leave the record reader unable to do its job, and nothing has to
-/// be kept in sync for that to hold. The schema is skip-safe too, but by
-/// discipline rather than structure — `schema_draws_on` has to name
-/// every record kind that `accumulate` consumes, and missing one loses
-/// data silently.
+/// be kept in sync for that to hold.
+///
+/// The schema is skip-safe too, but only partly by the same structure.
+/// Everything the skeleton already carries — the variable names from
+/// subtype 13, a very long string's missing values from subtype 22 — is
+/// handed to the schema from here, so no filtering choice can lose it.
+/// The rest is skip-safe by discipline: `schema_draws_on` has to name
+/// every record kind that `accumulate` still consumes, and missing one
+/// loses data silently. Content whose payload an up-front skip declines
+/// to retain is gone either way, which is what that option is for.
 ///
 /// The two overlap on the declared missing values, which a correct read
-/// needs and the schema also presents. The rest of the schema — names,
-/// labels, value labels, display parameters, attributes — a data read
-/// never consults.
+/// needs and the schema also presents. The rest of the schema — labels,
+/// value labels, display parameters, attributes — a data read never
+/// consults.
 ///
 /// It is copied into the record reader rather than borrowed because
 /// [`into_record_reader`](crate::spss::sav::dictionary_reader::DictionaryReader::into_record_reader)

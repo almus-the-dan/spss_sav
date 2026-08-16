@@ -256,17 +256,19 @@ impl<R> DictionaryReader<R> {
 
     /// Folds a decoded record into the in-progress schema.
     ///
-    /// A no-op when the caller turned schema building off. The data
-    /// layout is deliberately not fed here — it comes from the buffer's
-    /// own skeleton at finalization, so it cannot depend on which
-    /// records were pulled.
+    /// The data layout is deliberately not fed here — it comes from the
+    /// buffer's own skeleton at finalization, so it cannot depend on which
+    /// records were pulled. Subtypes 13 and 22 are absent for the same
+    /// reason: they are absorbed into that skeleton whatever a caller
+    /// skips, so
+    /// [`finalize_from_skeleton`](Self::finalize_from_skeleton) sets them
+    /// instead.
     fn accumulate(&mut self, record: &DictionaryRecord) {
         match record {
             DictionaryRecord::Variable(header) => self.schema.add_variable(header),
             DictionaryRecord::ValueLabelSet(set) => self.schema.add_value_labels(set),
             DictionaryRecord::Document(_) => {}
             DictionaryRecord::Extension(extension) => match extension {
-                ExtensionRecord::LongVariableNames(names) => self.schema.set_long_names(names),
                 ExtensionRecord::DisplayParameters(parameters) => {
                     self.schema.set_display_parameters(parameters);
                 }
@@ -275,9 +277,6 @@ impl<R> DictionaryReader<R> {
                 }
                 ExtensionRecord::LongValueLabels(labels) => {
                     self.schema.set_long_value_labels(labels);
-                }
-                ExtensionRecord::LongMissingValues(values) => {
-                    self.schema.set_long_missing_values(values);
                 }
                 _ => {}
             },
@@ -488,13 +487,22 @@ impl<R: Read> DictionaryReader<R> {
     /// which is why finalization has to drive them through the same path
     /// rather than making a second pass.
     ///
-    /// The data layout is the exception, and deliberately so. It is
-    /// derived from a compact skeleton the buffering pass kept aside —
-    /// each variable's short name and declared type, plus copies of the
-    /// three extension records the layout depends on. That is what makes
-    /// the layout independent of every filtering choice: pull the
-    /// records, skip them, exclude them up front, or never touch the
-    /// reader, and the rows still read the same.
+    /// What the skeleton supplies is the exception, and deliberately so.
+    /// The buffering pass keeps a compact one aside — each variable's
+    /// short name and declared type, plus copies of the five extension
+    /// records (subtypes 4, 13, 14, 16 and 22) that the layout depends
+    /// on. That is what makes the layout independent of every filtering
+    /// choice: pull the records, skip them, exclude them up front, or
+    /// never touch the reader, and the rows still read the same.
+    ///
+    /// Two of those five, subtypes 13 and 22, feed the schema as well, and
+    /// [`finalize_from_skeleton`](Self::finalize_from_skeleton) sets them
+    /// from the skeleton for the same reason. So a caller who excludes
+    /// everything skippable still gets long variable names and a very
+    /// long string's declared missing values; what such a caller does
+    /// lose is the content of the records whose payloads were never
+    /// retained — value labels, documents, display parameters,
+    /// attributes, and long-string value labels.
     pub fn into_record_reader(mut self) -> Result<RecordReader<R>> {
         self.state.warnings_mut().clear();
         while self.read_record()?.is_some() {
@@ -503,7 +511,7 @@ impl<R: Read> DictionaryReader<R> {
         self.state.warnings_mut().clear();
 
         let encoding = self.encoding_provenance.encoding();
-        let layout = self.build_layout(encoding)?;
+        let layout = self.finalize_from_skeleton(encoding)?;
 
         let weight = self.weight_variable_index(&layout);
         let mut warnings = Vec::new();
@@ -527,8 +535,18 @@ impl<R: Read> DictionaryReader<R> {
         Ok(reader)
     }
 
-    /// Rebuilds the data layout from the buffer's skeleton.
-    fn build_layout(&mut self, encoding: &'static Encoding) -> Result<DataLayout> {
+    /// Rebuilds everything finalization must not let depend on which
+    /// records the caller pulled: the data layout, and the two records
+    /// the schema draws on that come from the same skeleton.
+    ///
+    /// Subtypes 13 and 22 are folded into the schema here rather than in
+    /// [`accumulate`](Self::accumulate) because they are the only records
+    /// that both feed the schema and are absorbed before any skip
+    /// decision is made. Sourcing them here is free — they are decoded
+    /// anyway, for the layout — and it is what lets a caller exclude them
+    /// up front without the schema losing its long variable names or a
+    /// very long string's declared missing values.
+    fn finalize_from_skeleton(&mut self, encoding: &'static Encoding) -> Result<DataLayout> {
         let mut builder = DataLayoutBuilder::default();
         for variable in self.buffer.skeleton().variables() {
             let short_name = parse_short_name(variable.short_name, encoding);
@@ -562,6 +580,7 @@ impl<R: Read> DictionaryReader<R> {
                         long_variable_names::read(envelope, encoding)?
                     {
                         builder.set_long_variable_names(&names);
+                        self.schema.set_long_names(&names);
                     }
                 }
                 ExtensionSubtype::LongMissingValues => {
@@ -569,6 +588,7 @@ impl<R: Read> DictionaryReader<R> {
                         long_missing_values::read(envelope, encoding, self.state.warnings_mut())?
                     {
                         builder.set_long_missing_values(&values);
+                        self.schema.set_long_missing_values(&values);
                     }
                 }
                 ExtensionSubtype::ExtendedNumberOfCases => {
@@ -679,17 +699,20 @@ fn decode_document_record(
 /// does something with has to be listed here. The data layout is
 /// deliberately absent: it is built from the buffer's skeleton rather
 /// than from these records, so no answer here can affect a data read.
+///
+/// Subtypes 13 and 22 are absent for a second reason. They feed the
+/// schema, but from the skeleton rather than from the record handed out,
+/// so passing one over costs the schema nothing —
+/// [`DictionaryReader::finalize_from_skeleton`] has already supplied it.
 fn schema_draws_on(kind: DictionaryRecordKind) -> bool {
     match kind {
         DictionaryRecordKind::Variable | DictionaryRecordKind::ValueLabelSet => true,
         DictionaryRecordKind::Document => false,
         DictionaryRecordKind::Extension(subtype) => matches!(
             subtype,
-            ExtensionSubtype::LongVariableNames
-                | ExtensionSubtype::DisplayParameters
+            ExtensionSubtype::DisplayParameters
                 | ExtensionSubtype::VariableAttributes
                 | ExtensionSubtype::LongValueLabels
-                | ExtensionSubtype::LongMissingValues
         ),
     }
 }

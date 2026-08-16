@@ -24,18 +24,22 @@ use spss_sav::spss::sav::encoding_provenance::EncodingProvenance;
 use spss_sav::spss::sav::encoding_strategy::EncodingStrategy;
 use spss_sav::spss::sav::extensions::category_label_source::CategoryLabelSource;
 use spss_sav::spss::sav::extensions::extension_record::ExtensionRecord;
+use spss_sav::spss::sav::extensions::extension_subtype::ExtensionSubtype;
 use spss_sav::spss::sav::extensions::float_sentinels::FloatSentinels;
 use spss_sav::spss::sav::extensions::multiple_response_set::MultipleResponseSet;
 use spss_sav::spss::sav::extensions::multiple_response_set_kind::MultipleResponseSetKind;
 use spss_sav::spss::sav::float_format::FloatFormat;
+use spss_sav::spss::sav::missing_value_specification::MissingValueSpecification;
 use spss_sav::spss::sav::raw_missing_values::RawMissingValues;
 use spss_sav::spss::sav::raw_value_label_set::RawValueLabelSet;
 use spss_sav::spss::sav::record_reader::RecordReader;
 use spss_sav::spss::sav::sav_error::{FormatErrorKind, SavError, Section};
 use spss_sav::spss::sav::sav_reader::SavReader;
 use spss_sav::spss::sav::sav_record::SavRecord;
+use spss_sav::spss::sav::sav_variable::SavVariable;
 use spss_sav::spss::sav::sav_variable_header::SavVariableHeader;
 use spss_sav::spss::sav::sav_warning::SavWarning;
+use spss_sav::spss::sav::skippable_content::SkippableContent;
 use spss_sav::spss::sav::text::Text;
 use spss_sav::spss::sav::value::Value;
 use spss_sav::spss::sav::variable_type::VariableType;
@@ -76,6 +80,42 @@ const ENCODING_WINDOWS_1252: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/encoding_windows1252.sav"
 );
+
+/// A reader with every category of dictionary content excluded up front
+/// — all sixteen recognized extension subtypes, the unrecognized ones as
+/// a group, the value-label sets, and the documents.
+///
+/// Shared by the tests that assert what survives a maximal skip, so the
+/// list cannot drift between them. Nothing here can be omitted quietly:
+/// `SkippableContent` is `#[non_exhaustive]`, so a category added later
+/// has to be added here deliberately.
+fn skipping_all_dictionary_content() -> SavReader {
+    let mut reader = SavReader::new()
+        .skip_dictionary_content(SkippableContent::Documents)
+        .skip_dictionary_content(SkippableContent::ValueLabels);
+    for subtype in [
+        ExtensionSubtype::MachineIntegerInfo,
+        ExtensionSubtype::FloatInfo,
+        ExtensionSubtype::VariableSets,
+        ExtensionSubtype::MultipleResponseSets,
+        ExtensionSubtype::ExtraProductInfo,
+        ExtensionSubtype::DisplayParameters,
+        ExtensionSubtype::Uuid,
+        ExtensionSubtype::LongVariableNames,
+        ExtensionSubtype::VeryLongStrings,
+        ExtensionSubtype::ExtendedNumberOfCases,
+        ExtensionSubtype::FileAttributes,
+        ExtensionSubtype::VariableAttributes,
+        ExtensionSubtype::MultipleResponseSetsExtended,
+        ExtensionSubtype::CharacterEncoding,
+        ExtensionSubtype::LongValueLabels,
+        ExtensionSubtype::LongMissingValues,
+        ExtensionSubtype::Unrecognized,
+    ] {
+        reader = reader.skip_dictionary_content(SkippableContent::Extension(subtype));
+    }
+    reader
+}
 
 /// Reads every dictionary record from `path`, asserting the header
 /// along the way, and returns the records.
@@ -708,8 +748,6 @@ fn long_value_labels_attach_with_full_width_keys() {
 /// ('alpha')` goes through subtype 22 and stays raw bytes.
 #[test]
 fn missing_values_decode_per_variable_type() {
-    use spss_sav::spss::sav::missing_value_specification::MissingValueSpecification;
-
     let reader = finalize_comprehensive();
     let schema = reader.schema();
 
@@ -779,32 +817,7 @@ fn case_count_comes_through_finalization() {
 /// anything the data reader depends on.
 #[test]
 fn skipping_everything_skippable_leaves_the_data_layout_intact() {
-    use spss_sav::spss::sav::extensions::extension_subtype::ExtensionSubtype;
-    use spss_sav::spss::sav::skippable_content::SkippableContent;
-
-    let mut reader = SavReader::new().skip_dictionary_content(SkippableContent::Documents);
-    reader = reader.skip_dictionary_content(SkippableContent::ValueLabels);
-    for subtype in [
-        ExtensionSubtype::MachineIntegerInfo,
-        ExtensionSubtype::FloatInfo,
-        ExtensionSubtype::VariableSets,
-        ExtensionSubtype::MultipleResponseSets,
-        ExtensionSubtype::MultipleResponseSetsExtended,
-        ExtensionSubtype::DisplayParameters,
-        ExtensionSubtype::LongVariableNames,
-        ExtensionSubtype::VeryLongStrings,
-        ExtensionSubtype::ExtendedNumberOfCases,
-        ExtensionSubtype::FileAttributes,
-        ExtensionSubtype::VariableAttributes,
-        ExtensionSubtype::CharacterEncoding,
-        ExtensionSubtype::LongValueLabels,
-        ExtensionSubtype::LongMissingValues,
-        ExtensionSubtype::Unrecognized,
-    ] {
-        reader = reader.skip_dictionary_content(SkippableContent::Extension(subtype));
-    }
-
-    let stripped = reader
+    let stripped = skipping_all_dictionary_content()
         .from_path(COMPREHENSIVE)
         .expect("open fixture")
         .read_header()
@@ -827,6 +840,71 @@ fn skipping_everything_skippable_leaves_the_data_layout_intact() {
     assert_eq!(longstr.variable_type(), VariableType::String(300));
     assert_eq!(schema.variable_count(), 6);
     assert_eq!(stripped.case_count(), Some(2));
+}
+
+/// Subtypes 13 and 22 are absorbed into the buffer's skeleton before any
+/// skip decision, so the schema takes them from there rather than from
+/// the record handed out. Excluding them up front therefore costs the
+/// schema nothing — the long names and the very long string's declared
+/// missing values survive a maximal skip.
+///
+/// This is what makes a value reader able to name its columns while
+/// retaining none of the dictionary: without it `full_name` degrades to
+/// the eight-byte short name, silently.
+#[test]
+fn skipping_everything_skippable_keeps_the_names_and_long_missing_values() {
+    let stripped = skipping_all_dictionary_content()
+        .from_path(COMPREHENSIVE)
+        .expect("open fixture")
+        .read_header()
+        .expect("read header")
+        .into_record_reader()
+        .expect("finalize");
+    let plain = finalize_comprehensive();
+
+    // Subtype 13: the long names, not the uppercase short ones.
+    let names = |reader: &RecordReader<BufReader<File>>| -> Vec<String> {
+        reader
+            .schema()
+            .variables()
+            .iter()
+            .map(|variable| variable.full_name().to_owned())
+            .collect()
+    };
+    assert_eq!(
+        names(&stripped),
+        ["id", "q1", "q2", "q3", "longstr", "shortstr"]
+    );
+    assert_eq!(names(&stripped), names(&plain));
+
+    // And the lookup those names drive still resolves.
+    assert_eq!(
+        stripped
+            .schema()
+            .variable_by_name("longstr")
+            .map(SavVariable::index),
+        Some(4),
+    );
+
+    // Subtype 22: `MISSING VALUES longstr ('alpha')`, keyed by long name.
+    let spec = |reader: &RecordReader<BufReader<File>>| -> MissingValueSpecification {
+        reader
+            .schema()
+            .variable_by_name("longstr")
+            .expect("longstr present")
+            .missing_value_spec()
+            .clone()
+    };
+    let MissingValueSpecification::String(values) = spec(&stripped) else {
+        panic!("expected string missing values, got {:?}", spec(&stripped));
+    };
+    assert_eq!(values.len(), 1);
+    assert!(
+        values[0].starts_with(b"alpha"),
+        "unexpected missing value {:?}",
+        values[0],
+    );
+    assert_eq!(spec(&stripped), spec(&plain));
 }
 
 /// The header declares the weight as an offset into the data row, which
@@ -866,7 +944,6 @@ fn a_file_without_a_weight_reports_none() {
     assert!(schema.weight_variable().is_none());
 }
 
-/// The weight lives on the schema, so turning schema building off takes
 /// The strongest form of the rule: on a real file, passing over every
 /// record must produce exactly the schema that reading every record
 /// does. `skip_record` withholds records from the caller; it does not
@@ -1404,22 +1481,7 @@ fn the_schema_and_the_row_reader_agree_on_what_is_missing() {
 /// is what proves that: the rows come back identical to a plain read.
 #[test]
 fn skipping_the_whole_dictionary_leaves_missing_tagging_intact() {
-    use spss_sav::spss::sav::extensions::extension_subtype::ExtensionSubtype;
-    use spss_sav::spss::sav::skippable_content::SkippableContent;
-
-    let mut reader = SavReader::new()
-        .skip_dictionary_content(SkippableContent::Documents)
-        .skip_dictionary_content(SkippableContent::ValueLabels);
-    for subtype in [
-        ExtensionSubtype::LongVariableNames,
-        ExtensionSubtype::VeryLongStrings,
-        ExtensionSubtype::LongMissingValues,
-        ExtensionSubtype::FloatInfo,
-    ] {
-        reader = reader.skip_dictionary_content(SkippableContent::Extension(subtype));
-    }
-
-    let mut reader = reader
+    let mut reader = skipping_all_dictionary_content()
         .from_path(COMPRESSION_NONE)
         .expect("open fixture")
         .read_header()

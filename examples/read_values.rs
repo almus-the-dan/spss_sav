@@ -8,12 +8,10 @@
 //!
 //! Three points it exists to make:
 //!
-//! 1. **Only the dictionary content that influences reading is worth
-//!    retaining.** Every skippable category is skipped but one — see
-//!    [`UNNEEDED`] for the list and for why the long variable names are
-//!    the sole exception. Nothing about that can change how a row reads:
-//!    the records the data layout depends on are absorbed whatever a
-//!    caller asks to skip. See
+//! 1. **None of the dictionary needs retaining.** Every category is
+//!    skipped — see [`UNNEEDED`] — and the reader still names its
+//!    columns and reads its rows correctly, because everything a correct
+//!    read depends on is absorbed before any skip decision is made. See
 //!    [`SkippableContent`](spss_sav::spss::sav::skippable_content::SkippableContent).
 //! 2. **The row loop allocates nothing per cell.** String cells borrow
 //!    the reader's row buffer, and a cell already valid in the file's
@@ -60,26 +58,29 @@ const DEFAULT_PATH: &str = concat!(
     "/tests/fixtures/compression_bytecode.sav"
 );
 
-/// Every category of dictionary content a value reader does not need,
-/// stated outright — there is deliberately no "skip everything"
-/// shorthand.
+/// Every category of dictionary content there is — a value reader needs
+/// none of it retained. Stated outright because there is deliberately no
+/// "skip everything" shorthand.
 ///
-/// One extension is missing from the list, and the omission is the point:
-/// **subtype 13, the long variable names.** Skip it and the schema falls
-/// back to the eight-byte uppercase short names, so a variable declared
-/// `household_income` arrives as `HOUSEHOL`. It is the only dictionary
-/// record besides the variable records themselves that a consumer reading
-/// nothing but values still depends on.
+/// Skipping all of it still leaves the reader able to name its columns
+/// and read its rows, which is worth being precise about. What a skip
+/// costs is that record's *contribution to the schema*, since the schema
+/// is accumulated from records as they are handed out and a skipped
+/// record is never handed out. Three records lose something that way —
+/// subtypes 11, 18 and 21, plus the value-label sets — and this consumer
+/// reads none of it.
 ///
-/// The rest divides in two. Presentation content — value labels,
-/// documents, attributes, multiple response sets, display parameters,
-/// the product and UUID strings — is dropped outright. The
-/// layout-bearing subtypes (3, 4, 14, 16, 20 and 22) are absorbed
-/// whatever a caller asks to skip, so naming them here stops them being
-/// decoded and handed over without changing anything about how a row
-/// reads: row count, widths, encoding, and missing tagging come out
-/// identical either way.
-const UNNEEDED: [SkippableContent; 18] = [
+/// The two the schema would miss most, subtypes 13 (long variable names)
+/// and 22 (a very long string's missing values), do not go through that
+/// path at all. They are absorbed into the reader's layout skeleton
+/// before any skip decision, and the schema takes them from there, so
+/// `full_name()` still reports `household_income` rather than the
+/// eight-byte `HOUSEHOL`.
+///
+/// The read itself is untouched no matter what: the layout-bearing
+/// subtypes (3, 4, 13, 14, 16, 20 and 22) are absorbed regardless, so
+/// row count, widths, encoding and missing tagging come out identical.
+const UNNEEDED: [SkippableContent; 19] = [
     SkippableContent::ValueLabels,
     SkippableContent::Documents,
     SkippableContent::Extension(ExtensionSubtype::MachineIntegerInfo),
@@ -89,6 +90,7 @@ const UNNEEDED: [SkippableContent; 18] = [
     SkippableContent::Extension(ExtensionSubtype::ExtraProductInfo),
     SkippableContent::Extension(ExtensionSubtype::DisplayParameters),
     SkippableContent::Extension(ExtensionSubtype::Uuid),
+    SkippableContent::Extension(ExtensionSubtype::LongVariableNames),
     SkippableContent::Extension(ExtensionSubtype::VeryLongStrings),
     SkippableContent::Extension(ExtensionSubtype::ExtendedNumberOfCases),
     SkippableContent::Extension(ExtensionSubtype::FileAttributes),
