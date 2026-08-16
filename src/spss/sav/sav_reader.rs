@@ -9,6 +9,13 @@
 //! to obtain a
 //! [`HeaderReader`](crate::spss::sav::header_reader::HeaderReader) — the
 //! first phase of the reader typestate chain.
+//!
+//! From there the chain forks, and which fork is taken is how a caller
+//! says whether the dictionary's content is wanted:
+//! [`HeaderReader::into_record_reader`](crate::spss::sav::header_reader::HeaderReader::into_record_reader)
+//! goes straight to the rows and retains none of it, while
+//! [`HeaderReader::read_header`](crate::spss::sav::header_reader::HeaderReader::read_header)
+//! hands out every dictionary record first.
 
 use std::fs::File;
 use std::io::BufReader;
@@ -18,21 +25,43 @@ use crate::spss::sav::encoding_strategy::EncodingStrategy;
 use crate::spss::sav::header_reader::HeaderReader;
 use crate::spss::sav::reader_options::ReaderOptions;
 use crate::spss::sav::sav_error::{Result, SavError, Section};
-use crate::spss::sav::skippable_content::SkippableContent;
 
 /// Builder for configuring and opening a SAV file reader.
 ///
 /// Chain configuration setters, then call a terminal `from_*`
-/// method to begin reading.
+/// method to begin reading. From the
+/// [`HeaderReader`] that returns, two paths lead onward: reading the
+/// values only, or walking the dictionary first.
 ///
 /// # Examples
+///
+/// Values only — the common case, and the cheaper one, since no
+/// dictionary record is retained:
 ///
 /// ```no_run
 /// use spss_sav::spss::sav::sav_reader::SavReader;
 ///
-/// let header_reader = SavReader::new()
-///     .from_path("data.sav")
-///     .unwrap();
+/// let mut reader = SavReader::new()
+///     .from_path("data.sav")?
+///     .into_record_reader()?;
+/// # Ok::<(), spss_sav::spss::sav::sav_error::SavError>(())
+/// ```
+///
+/// Or the dictionary first, when its content is wanted — value labels,
+/// documents, attributes:
+///
+/// ```no_run
+/// use spss_sav::spss::sav::sav_reader::SavReader;
+///
+/// let mut dictionary = SavReader::new()
+///     .from_path("data.sav")?
+///     .read_header()?;
+///
+/// while let Some(record) = dictionary.read_record()? {
+///     // ...
+/// }
+/// let mut reader = dictionary.into_record_reader()?;
+/// # Ok::<(), spss_sav::spss::sav::sav_error::SavError>(())
 /// ```
 #[derive(Debug, Clone)]
 pub struct SavReader {
@@ -58,39 +87,6 @@ impl SavReader {
     #[inline]
     pub fn encoding_strategy(mut self, strategy: EncodingStrategy) -> Self {
         self.options.set_encoding_strategy(strategy);
-        self
-    }
-
-    /// Asks the reader not to retain one category of dictionary
-    /// content. Call once per category; nothing is skipped by default.
-    ///
-    /// See [`SkippableContent`] for what skipping does and does not
-    /// change — in short, it drops retention and decoding but not the
-    /// read, and it can never make a well-formed file fail to parse or
-    /// a data read come out wrong.
-    ///
-    /// There is deliberately no "skip everything" shorthand: the set of
-    /// content a caller does not want is worth stating outright.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use spss_sav::spss::sav::extensions::extension_subtype::ExtensionSubtype;
-    /// use spss_sav::spss::sav::sav_reader::SavReader;
-    /// use spss_sav::spss::sav::skippable_content::SkippableContent;
-    ///
-    /// let header_reader = SavReader::new()
-    ///     .skip_dictionary_content(SkippableContent::Documents)
-    ///     .skip_dictionary_content(SkippableContent::Extension(
-    ///         ExtensionSubtype::LongValueLabels,
-    ///     ))
-    ///     .from_path("data.sav")
-    ///     .unwrap();
-    /// ```
-    #[must_use]
-    #[inline]
-    pub fn skip_dictionary_content(mut self, content: SkippableContent) -> Self {
-        self.options.skip(content);
         self
     }
 

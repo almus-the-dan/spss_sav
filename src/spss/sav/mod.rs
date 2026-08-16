@@ -32,6 +32,8 @@ pub mod dictionary_reader;
 pub mod dictionary_record;
 /// Which kind of record a dictionary record is, without its payload.
 pub mod dictionary_record_kind;
+/// How much of the dictionary the buffering pass keeps.
+mod dictionary_retention;
 /// Free-text document lines from a SAV file.
 pub mod document_record;
 /// Where the text encoding the reader applied came from.
@@ -106,8 +108,6 @@ pub mod sav_variable_header;
 pub mod sav_warning;
 /// On-disk placement of one variable's bytes within a data row.
 mod segment_layout;
-/// Dictionary content a reader can be told not to retain.
-pub mod skippable_content;
 /// A string cell's value: raw bytes, decoded on demand.
 pub mod string_value;
 /// Shared `#[cfg(test)]` helpers for building on-disk SAV byte

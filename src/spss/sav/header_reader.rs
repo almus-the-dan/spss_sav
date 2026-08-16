@@ -2,10 +2,15 @@
 //!
 //! First phase of the SAV reader typestate chain. Created via
 //! [`SavReader::from_path`](crate::spss::sav::sav_reader::SavReader::from_path)
-//! (or the other `from_*` entry points). Call
+//! (or the other `from_*` entry points).
+//!
+//! Two methods lead onward, and choosing between them is how a caller
+//! declares whether the dictionary's content is wanted:
 //! [`read_header`](crate::spss::sav::header_reader::HeaderReader::read_header)
-//! to parse the header
-//! and advance to the dictionary phase.
+//! advances to the dictionary phase and hands out every record, while
+//! [`into_record_reader`](crate::spss::sav::header_reader::HeaderReader::into_record_reader)
+//! skips that phase and retains none of them. They read the same rows;
+//! see the latter for what is and is not given up.
 
 use std::io::Read;
 
@@ -13,6 +18,7 @@ use crate::spss::sav::byte_order::ByteOrder;
 use crate::spss::sav::compression::compression_kind::CompressionKind;
 use crate::spss::sav::dictionary_buffer::DictionaryBuffer;
 use crate::spss::sav::dictionary_reader::DictionaryReader;
+use crate::spss::sav::dictionary_retention::DictionaryRetention;
 use crate::spss::sav::encoding_resolution::{declared_encoding, resolve};
 use crate::spss::sav::encoding_strategy::EncodingStrategy;
 use crate::spss::sav::float_format::FloatFormat;
@@ -28,6 +34,7 @@ use crate::spss::sav::header_parse::{
 };
 use crate::spss::sav::reader_options::ReaderOptions;
 use crate::spss::sav::reader_state::ReaderState;
+use crate::spss::sav::record_reader::RecordReader;
 use crate::spss::sav::sav_creation_timestamp::SavCreationTimestamp;
 use crate::spss::sav::sav_error::{Result, Section};
 use crate::spss::sav::sav_header::SavHeader;
@@ -40,8 +47,9 @@ use crate::spss::sav::sav_warning::SavWarning;
 /// (or [`from_file`](crate::spss::sav::sav_reader::SavReader::from_file)
 /// /
 /// [`from_reader`](crate::spss::sav::sav_reader::SavReader::from_reader)),
-/// then call [`read_header`](Self::read_header) to parse the file
-/// header and advance to the dictionary phase.
+/// then call either [`into_record_reader`](Self::into_record_reader) to
+/// go straight to the values or [`read_header`](Self::read_header) to
+/// walk the dictionary first.
 #[derive(Debug)]
 pub struct HeaderReader<R> {
     state: ReaderState<R>,
@@ -238,14 +246,80 @@ impl<R: Read> HeaderReader<R> {
     /// spec-defined offset; a panic here would indicate a bug in
     /// the reader rather than a malformed file. Release builds skip
     /// these checks.
-    pub fn read_header(mut self) -> Result<DictionaryReader<R>> {
+    pub fn read_header(self) -> Result<DictionaryReader<R>> {
+        self.read_dictionary(DictionaryRetention::All)
+    }
+
+    /// Parses the header and goes straight to the rows, without handing
+    /// out a single dictionary record.
+    ///
+    /// **The way to read a file for its values.** A consumer that wants
+    /// names and cells — a data frame, a database load, a conversion —
+    /// has no use for value labels, documents, attributes or multiple
+    /// response sets, and this is how it says so. Nothing that a correct
+    /// read depends on is given up: rows, widths, encoding, missing
+    /// tagging, the declared case count and the variable names all come
+    /// out exactly as they would from
+    /// [`read_header`](Self::read_header) followed by
+    /// [`DictionaryReader::into_record_reader`](crate::spss::sav::dictionary_reader::DictionaryReader::into_record_reader).
+    ///
+    /// The difference is memory. Going through the dictionary phase
+    /// retains every record so it can be handed out, and a real file's
+    /// value labels run to megabytes; this discards each payload as it is
+    /// scanned instead. What that costs is the content of the discarded
+    /// records — value labels, display parameters and attributes do not
+    /// reach [`SavSchema`](crate::spss::sav::sav_schema::SavSchema), and
+    /// warnings those records would have raised are suppressed with them.
+    /// Reach for [`read_header`](Self::read_header) when any of that is
+    /// wanted; the two differ in nothing else.
+    ///
+    /// # Errors
+    ///
+    /// As [`read_header`](Self::read_header), plus whatever
+    /// [`DictionaryReader::into_record_reader`](crate::spss::sav::dictionary_reader::DictionaryReader::into_record_reader)
+    /// would return. Structural validation is unaffected by the
+    /// discarding: a malformed record still fails the read regardless whether
+    /// its payload was kept.
+    ///
+    /// # Panics
+    ///
+    /// As [`read_header`](Self::read_header).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use spss_sav::spss::sav::sav_reader::SavReader;
+    ///
+    /// let mut reader = SavReader::new()
+    ///     .from_path("data.sav")?
+    ///     .into_record_reader()?;
+    ///
+    /// while let Some(record) = reader.read_record()? {
+    ///     for cell in record.values() {
+    ///         // ...
+    ///     }
+    /// }
+    /// # Ok::<(), spss_sav::spss::sav::sav_error::SavError>(())
+    /// ```
+    //noinspection RsSelfConvention
+    pub fn into_record_reader(self) -> Result<RecordReader<R>> {
+        self.read_dictionary(DictionaryRetention::Minimal)?
+            .into_record_reader()
+    }
+
+    /// Reads the header and the dictionary section, retaining as much of
+    /// the latter as `retention` asks for.
+    ///
+    /// Shared by the two terminal methods, which differ in nothing but
+    /// that argument and where they stop.
+    fn read_dictionary(mut self, retention: DictionaryRetention) -> Result<DictionaryReader<R>> {
         self.state.warnings_mut().clear();
         let raw = self.read_raw_header()?;
 
         // Walk the dictionary so the file's declared encoding becomes
         // reachable, then resolve it before decoding any text at all —
         // including the header's own two text fields.
-        let buffer = DictionaryBuffer::read(&mut self.state, raw.byte_order, &self.options)?;
+        let buffer = DictionaryBuffer::read(&mut self.state, raw.byte_order, retention)?;
         let file_encoding = resolve(
             self.options.encoding_strategy(),
             buffer.declared_encoding_label(),

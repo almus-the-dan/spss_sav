@@ -21,10 +21,10 @@ use crate::spss::sav::header_format::{
     CANONICAL_BIAS, FILE_LABEL_LEN, HEADER_LEN, LAYOUT_CODE_VALUES, MAGIC_FL2, PRODUCT_NAME_LEN,
     TRAILING_PADDING_LEN,
 };
+use crate::spss::sav::record_reader::RecordReader;
 use crate::spss::sav::sav_error::{Field, FormatErrorKind, SavError};
 use crate::spss::sav::sav_reader::SavReader;
 use crate::spss::sav::sav_warning::SavWarning;
-use crate::spss::sav::skippable_content::SkippableContent;
 
 /// Asserts that `err` is a dictionary `UnexpectedValue` format error
 /// tagged with `expected`.
@@ -122,24 +122,17 @@ pub(crate) fn open_with(
         .unwrap()
 }
 
-/// Like [`open`], but skipping the given dictionary content.
-pub(crate) fn open_skipping(
-    bytes: Vec<u8>,
-    skipped: &[SkippableContent],
-) -> DictionaryReader<Cursor<Vec<u8>>> {
-    try_open_skipping(bytes, skipped).unwrap()
+/// Opens `bytes` through the values-only path, which retains no
+/// dictionary record at all.
+pub(crate) fn open_minimal(bytes: Vec<u8>) -> RecordReader<Cursor<Vec<u8>>> {
+    try_open_minimal(bytes).unwrap()
 }
 
-/// Like [`open_skipping`], but surfaces the error rather than panicking.
-pub(crate) fn try_open_skipping(
-    bytes: Vec<u8>,
-    skipped: &[SkippableContent],
-) -> Result<DictionaryReader<Cursor<Vec<u8>>>, SavError> {
-    let mut reader = SavReader::new();
-    for &content in skipped {
-        reader = reader.skip_dictionary_content(content);
-    }
-    reader.from_reader(Cursor::new(bytes)).read_header()
+/// Like [`open_minimal`], but surfaces the error rather than panicking.
+pub(crate) fn try_open_minimal(bytes: Vec<u8>) -> Result<RecordReader<Cursor<Vec<u8>>>, SavError> {
+    SavReader::new()
+        .from_reader(Cursor::new(bytes))
+        .into_record_reader()
 }
 
 /// Appends a subtype-3 machine integer info record declaring

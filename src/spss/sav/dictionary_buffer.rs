@@ -44,11 +44,11 @@ use crate::spss::sav::dictionary_parse::{
     value_label_entry_size,
 };
 use crate::spss::sav::dictionary_record_kind::DictionaryRecordKind;
+use crate::spss::sav::dictionary_retention::DictionaryRetention;
 use crate::spss::sav::extension_envelope::ExtensionEnvelope;
 use crate::spss::sav::extensions::extension_subtype::ExtensionSubtype;
 use crate::spss::sav::extensions::{character_encoding, machine_integer_info};
 use crate::spss::sav::raw_missing_values::RawMissingValues;
-use crate::spss::sav::reader_options::ReaderOptions;
 use crate::spss::sav::reader_state::{ReaderState, u32_as_usize};
 use crate::spss::sav::sav_error::{Field, FormatErrorKind, Result, SavError, Section};
 use crate::spss::sav::sav_warning::SavWarning;
@@ -73,10 +73,11 @@ pub(crate) struct DictionaryBuffer {
 /// The bare minimum needed to reconstruct the data layout, kept aside
 /// from the records themselves.
 ///
-/// Retained unconditionally, before any skip decision, so the layout can
-/// be derived at finalization no matter what the caller did with the
-/// records — pulled them, skipped them, filtered them out up front, or
-/// never touched the reader at all. That turns "filtering can never
+/// Retained whatever the
+/// [`DictionaryRetention`](crate::spss::sav::dictionary_retention::DictionaryRetention),
+/// so the layout can be derived at finalization no matter what the caller
+/// did with the records — pulled them, passed over them, declined the
+/// whole dictionary, or never touched the reader at all. That turns "filtering can never
 /// break a data read" from a rule someone has to remember into
 /// something the types make true.
 ///
@@ -163,12 +164,12 @@ impl DictionaryBuffer {
     pub fn read<R: Read>(
         state: &mut ReaderState<R>,
         byte_order: ByteOrder,
-        options: &ReaderOptions,
+        retention: DictionaryRetention,
     ) -> Result<Self> {
         let mut scan = Scan {
             state,
             byte_order,
-            options,
+            retention,
             pending_continuations: 0,
             primaries: Vec::new(),
             physical_variable_count: 0,
@@ -239,7 +240,7 @@ struct Scan<'a, R> {
     /// Which content the caller asked not to be retained. Consulted
     /// before each record's bulk is read, so a skipped record's bytes
     /// are discarded through a bounded window rather than allocated.
-    options: &'a ReaderOptions,
+    retention: DictionaryRetention,
     /// Continuation records still expected for the most recent
     /// string-variable primary. Must reach `0` before any other record
     /// kind, including the terminator.
@@ -293,7 +294,7 @@ impl<R: Read> Scan<'_, R> {
                     return Ok(());
                 }
                 RECORD_TYPE_VALUE_LABEL => {
-                    let skipped = self.options.skips(DictionaryRecordKind::ValueLabelSet);
+                    let skipped = !self.retention.keeps_records();
                     let record = self.read_value_label_record(skipped)?;
                     record.map(BufferedRecordPayload::ValueLabelSet)
                 }
@@ -307,7 +308,7 @@ impl<R: Read> Scan<'_, R> {
                     ));
                 }
                 RECORD_TYPE_DOCUMENT => {
-                    let skipped = self.options.skips(DictionaryRecordKind::Document);
+                    let skipped = !self.retention.keeps_records();
                     let record = self.read_document_record(skipped)?;
                     record.map(BufferedRecordPayload::Document)
                 }
@@ -662,15 +663,14 @@ impl<R: Read> Scan<'_, R> {
     /// Neither peek validates: an unreadable declaration simply does not
     /// contribute to resolution, and the record's own `read` helper
     /// raises the complaint when it is handed to the caller.
-    /// Returns `Ok(None)` when the caller asked for this subtype to be
-    /// skipped, in which case the payload bytes are discarded rather
-    /// than allocated.
+    /// Returns `Ok(None)` when nothing is being retained, in which case
+    /// the payload bytes are discarded rather than allocated.
     ///
     /// The two encoding-declaring subtypes are absorbed first regardless.
-    /// They are read here rather than merely yielded, so honoring a skip
+    /// They are read here rather than merely yielded, so discarding one
     /// before the peek would change which encoding the whole file
-    /// decodes with — exactly what skipping must never do. Both are a
-    /// few dozen bytes, so reading them costs nothing.
+    /// decodes with — exactly what declining the dictionary must never
+    /// do. Both are a few dozen bytes, so reading them costs nothing.
     fn read_extension_record(&mut self) -> Result<Option<ExtensionEnvelope>> {
         let header = self.read_extension_header()?;
         let subtype = ExtensionSubtype::from_code(header.subtype);
@@ -680,7 +680,7 @@ impl<R: Read> Scan<'_, R> {
         );
         let must_absorb = declares_encoding || is_layout_bearing(subtype);
 
-        if !must_absorb && self.options.skips(DictionaryRecordKind::Extension(subtype)) {
+        if !must_absorb && !self.retention.keeps_records() {
             self.state.skip(header.payload_len, Section::Dictionary)?;
             return Ok(None);
         }
@@ -698,7 +698,7 @@ impl<R: Read> Scan<'_, R> {
             }
             _ => {}
         }
-        if must_absorb && self.options.skips(DictionaryRecordKind::Extension(subtype)) {
+        if must_absorb && !self.retention.keeps_records() {
             return Ok(None);
         }
         Ok(Some(envelope))
@@ -709,7 +709,7 @@ impl<R: Read> Scan<'_, R> {
     /// payload's byte length from them.
     ///
     /// Separate from reading the payload so the subtype is known — and
-    /// a skip decision reachable — before any payload bytes are
+    /// a retention decision reachable — before any payload bytes are
     /// allocated.
     fn read_extension_header(&mut self) -> Result<ExtensionHeader> {
         let subtype = self.state.read_i32(self.byte_order, Section::Dictionary)?;
@@ -805,11 +805,11 @@ mod tests {
     use crate::spss::sav::dictionary_record_kind::DictionaryRecordKind;
     use crate::spss::sav::encoding_provenance::EncodingProvenance;
     use crate::spss::sav::extensions::extension_subtype::ExtensionSubtype;
+    use crate::spss::sav::record_reader::RecordReader;
     use crate::spss::sav::sav_error::{FormatErrorKind, SavError};
     use crate::spss::sav::sav_warning::SavWarning;
-    use crate::spss::sav::skippable_content::SkippableContent;
     use crate::spss::sav::test_support::{
-        build_header, open, open_skipping, try_open_skipping, write_character_code_record,
+        build_header, open, open_minimal, try_open_minimal, write_character_code_record,
         write_extension_record, write_numeric_variable, write_rec_type, write_terminator,
         write_u32,
     };
@@ -847,7 +847,8 @@ mod tests {
     }
 
     /// A file with one numeric variable, a value-label pair, a document
-    /// record, and a UUID extension — one of every skippable kind.
+    /// record, and a UUID extension — one of every record kind the
+    /// values-only path discards.
     fn one_of_each() -> Vec<u8> {
         let mut bytes = build_header(LE);
         write_numeric_variable(&mut bytes, LE, *b"V1      ");
@@ -888,110 +889,83 @@ mod tests {
         );
     }
 
+    /// The values-only path keeps the variable records and discards the
+    /// rest, so the schema still describes every variable while the value
+    /// labels the file carried are simply absent.
     #[test]
-    fn skipping_documents_drops_only_documents() {
-        let mut reader = open_skipping(one_of_each(), &[SkippableContent::Documents]);
-        assert_eq!(
-            kinds(&mut reader),
-            vec![
-                DictionaryRecordKind::Variable,
-                DictionaryRecordKind::ValueLabelSet,
-                DictionaryRecordKind::Extension(ExtensionSubtype::Uuid),
-            ],
+    fn the_values_only_path_keeps_the_variables_and_drops_the_rest() {
+        let reader = open_minimal(one_of_each());
+        let schema = reader.schema();
+        assert_eq!(schema.variable_count(), 1);
+        assert_eq!(schema.variables()[0].short_name(), "V1");
+        assert!(
+            schema.variables()[0].value_labels().is_none(),
+            "the value-label payload was never retained",
         );
     }
 
+    /// And it reads the same rows a full dictionary walk would. The
+    /// fixture declares no data, so the assertion is that the row source
+    /// agrees about the layout and reports a clean end.
     #[test]
-    fn skipping_value_labels_drops_only_value_labels() {
-        let mut reader = open_skipping(one_of_each(), &[SkippableContent::ValueLabels]);
-        assert_eq!(
-            kinds(&mut reader),
-            vec![
-                DictionaryRecordKind::Variable,
-                DictionaryRecordKind::Document,
-                DictionaryRecordKind::Extension(ExtensionSubtype::Uuid),
-            ],
-        );
+    fn the_values_only_path_agrees_with_a_full_walk_on_the_variables() {
+        let full = {
+            let mut reader = open(one_of_each());
+            while reader.read_record().unwrap().is_some() {}
+            reader.into_record_reader().expect("finalize")
+        };
+        let minimal = open_minimal(one_of_each());
+
+        let names = |reader: &RecordReader<Cursor<Vec<u8>>>| -> Vec<String> {
+            reader
+                .schema()
+                .variables()
+                .iter()
+                .map(|variable| variable.full_name().to_owned())
+                .collect()
+        };
+        assert_eq!(names(&minimal), names(&full));
+        assert_eq!(minimal.case_count(), full.case_count());
     }
 
+    /// Structural validation still runs for a discarded record. A type-4
+    /// index past the end of the dictionary errors regardless whether the
+    /// value labels are being retained.
     #[test]
-    fn skipping_one_extension_subtype_leaves_the_others() {
-        let mut reader = open_skipping(
-            one_of_each(),
-            &[SkippableContent::Extension(ExtensionSubtype::Uuid)],
-        );
-        assert_eq!(
-            kinds(&mut reader),
-            vec![
-                DictionaryRecordKind::Variable,
-                DictionaryRecordKind::ValueLabelSet,
-                DictionaryRecordKind::Document,
-            ],
-        );
-    }
-
-    /// Variable records have no `SkippableContent` spelling, so the only
-    /// thing to assert is that skipping everything else leaves them.
-    #[test]
-    fn variables_survive_skipping_everything_else() {
-        let mut reader = open_skipping(
-            one_of_each(),
-            &[
-                SkippableContent::ValueLabels,
-                SkippableContent::Documents,
-                SkippableContent::Extension(ExtensionSubtype::Uuid),
-            ],
-        );
-        assert_eq!(kinds(&mut reader), vec![DictionaryRecordKind::Variable]);
-    }
-
-    /// Invariant 1: structural validation still runs for skipped
-    /// records. A type-4 index past the end of the dictionary errors
-    /// whether or not value labels are being retained.
-    #[test]
-    fn skipped_value_labels_still_validate_their_indices() {
+    fn discarded_value_labels_still_validate_their_indices() {
         let mut bytes = build_header(LE);
         write_numeric_variable(&mut bytes, LE, *b"V1      ");
         // Index 2 is past the only variable.
         write_value_label_pair(&mut bytes, &[(1.0, b"one")], &[2]);
         write_terminator(&mut bytes, LE);
 
-        let err = try_open_skipping(bytes, &[SkippableContent::ValueLabels])
-            .expect_err("dangling index must still error");
+        let err = try_open_minimal(bytes).expect_err("dangling index must still error");
         match err {
             SavError::Format(e) => assert_eq!(e.kind(), FormatErrorKind::DanglingValueLabel),
             other => panic!("expected Format error, got {other:?}"),
         }
     }
 
-    /// Invariant 2: the encoding-declaring subtypes are absorbed even
-    /// when the caller asked to skip them, so the file still decodes
-    /// with the encoding it declared rather than the fallback.
+    /// The encoding-declaring subtypes are absorbed even on the
+    /// values-only path, so the file still decodes with the encoding it
+    /// declared rather than the fallback.
     #[test]
-    fn skipping_the_character_code_record_still_resolves_the_encoding() {
+    fn the_values_only_path_still_resolves_a_declared_character_code() {
         let mut bytes = build_header(LE);
         write_numeric_variable(&mut bytes, LE, *b"V1      ");
         write_character_code_record(&mut bytes, LE, 65001); // UTF-8
         write_terminator(&mut bytes, LE);
 
-        let mut reader = open_skipping(
-            bytes,
-            &[SkippableContent::Extension(
-                ExtensionSubtype::MachineIntegerInfo,
-            )],
-        );
+        let reader = open_minimal(bytes);
         assert_eq!(
             reader.encoding_provenance(),
             EncodingProvenance::Codepage(encoding_rs::UTF_8),
         );
-        // Absorbed, but not handed out.
-        assert_eq!(kinds(&mut reader), vec![DictionaryRecordKind::Variable]);
     }
 
-    /// Skipping the subtype-20 record likewise still lets it govern the
-    /// encoding.
+    /// The subtype-20 record likewise still governs the encoding.
     #[test]
-    fn skipping_the_character_encoding_record_still_resolves_the_encoding() {
+    fn the_values_only_path_still_resolves_a_declared_encoding_label() {
         let mut bytes = build_header(LE);
         write_numeric_variable(&mut bytes, LE, *b"V1      ");
         let label = b"UTF-8";
@@ -1005,23 +979,17 @@ mod tests {
         );
         write_terminator(&mut bytes, LE);
 
-        let mut reader = open_skipping(
-            bytes,
-            &[SkippableContent::Extension(
-                ExtensionSubtype::CharacterEncoding,
-            )],
-        );
+        let reader = open_minimal(bytes);
         assert_eq!(
             reader.encoding_provenance(),
             EncodingProvenance::Label(encoding_rs::UTF_8),
         );
-        assert_eq!(kinds(&mut reader), vec![DictionaryRecordKind::Variable]);
     }
 
-    /// Warnings a skipped record would have raised are suppressed along
-    /// with it — nothing will be handed out to attribute them to.
+    /// Warnings a discarded record would have raised are suppressed with
+    /// it — nothing will be handed out to attribute them to.
     #[test]
-    fn skipped_records_raise_no_warnings() {
+    fn discarded_records_raise_no_warnings() {
         let mut bytes = build_header(LE);
         write_numeric_variable(&mut bytes, LE, *b"V1      ");
         // Duplicate value-label keys warn when retained.
@@ -1038,11 +1006,15 @@ mod tests {
         }
         assert!(saw_duplicate, "baseline should warn");
 
-        let mut skipped = open_skipping(bytes, &[SkippableContent::ValueLabels]);
-        while let Some(record) = skipped.read_record().unwrap() {
-            let _ = record;
-            assert!(skipped.warnings().is_empty(), "{:?}", skipped.warnings());
-        }
+        let minimal = open_minimal(bytes);
+        assert!(
+            !minimal
+                .warnings()
+                .iter()
+                .any(|w| matches!(w, SavWarning::DuplicateValueLabelKey { .. })),
+            "{:?}",
+            minimal.warnings(),
+        );
     }
 
     #[test]
@@ -1143,18 +1115,5 @@ mod tests {
             Some(DictionaryRecordKind::Document),
         );
         assert!(reader.warnings().is_empty());
-    }
-
-    /// The two mechanisms compose without overlap: a record skipped up
-    /// front was never buffered, so `peek_kind` never offers it.
-    #[test]
-    fn option_skipped_records_are_invisible_to_peek() {
-        let mut reader = open_skipping(one_of_each(), &[SkippableContent::Documents]);
-        let mut seen = Vec::new();
-        while let Some(kind) = reader.peek_kind() {
-            seen.push(kind);
-            reader.read_record().unwrap();
-        }
-        assert!(!seen.contains(&DictionaryRecordKind::Document));
     }
 }

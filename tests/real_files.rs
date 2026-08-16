@@ -24,7 +24,6 @@ use spss_sav::spss::sav::encoding_provenance::EncodingProvenance;
 use spss_sav::spss::sav::encoding_strategy::EncodingStrategy;
 use spss_sav::spss::sav::extensions::category_label_source::CategoryLabelSource;
 use spss_sav::spss::sav::extensions::extension_record::ExtensionRecord;
-use spss_sav::spss::sav::extensions::extension_subtype::ExtensionSubtype;
 use spss_sav::spss::sav::extensions::float_sentinels::FloatSentinels;
 use spss_sav::spss::sav::extensions::multiple_response_set::MultipleResponseSet;
 use spss_sav::spss::sav::extensions::multiple_response_set_kind::MultipleResponseSetKind;
@@ -39,7 +38,6 @@ use spss_sav::spss::sav::sav_record::SavRecord;
 use spss_sav::spss::sav::sav_variable::SavVariable;
 use spss_sav::spss::sav::sav_variable_header::SavVariableHeader;
 use spss_sav::spss::sav::sav_warning::SavWarning;
-use spss_sav::spss::sav::skippable_content::SkippableContent;
 use spss_sav::spss::sav::text::Text;
 use spss_sav::spss::sav::value::Value;
 use spss_sav::spss::sav::variable_type::VariableType;
@@ -80,42 +78,6 @@ const ENCODING_WINDOWS_1252: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/encoding_windows1252.sav"
 );
-
-/// A reader with every category of dictionary content excluded up front
-/// — all sixteen recognized extension subtypes, the unrecognized ones as
-/// a group, the value-label sets, and the documents.
-///
-/// Shared by the tests that assert what survives a maximal skip, so the
-/// list cannot drift between them. Nothing here can be omitted quietly:
-/// `SkippableContent` is `#[non_exhaustive]`, so a category added later
-/// has to be added here deliberately.
-fn skipping_all_dictionary_content() -> SavReader {
-    let mut reader = SavReader::new()
-        .skip_dictionary_content(SkippableContent::Documents)
-        .skip_dictionary_content(SkippableContent::ValueLabels);
-    for subtype in [
-        ExtensionSubtype::MachineIntegerInfo,
-        ExtensionSubtype::FloatInfo,
-        ExtensionSubtype::VariableSets,
-        ExtensionSubtype::MultipleResponseSets,
-        ExtensionSubtype::ExtraProductInfo,
-        ExtensionSubtype::DisplayParameters,
-        ExtensionSubtype::Uuid,
-        ExtensionSubtype::LongVariableNames,
-        ExtensionSubtype::VeryLongStrings,
-        ExtensionSubtype::ExtendedNumberOfCases,
-        ExtensionSubtype::FileAttributes,
-        ExtensionSubtype::VariableAttributes,
-        ExtensionSubtype::MultipleResponseSetsExtended,
-        ExtensionSubtype::CharacterEncoding,
-        ExtensionSubtype::LongValueLabels,
-        ExtensionSubtype::LongMissingValues,
-        ExtensionSubtype::Unrecognized,
-    ] {
-        reader = reader.skip_dictionary_content(SkippableContent::Extension(subtype));
-    }
-    reader
-}
 
 /// Reads every dictionary record from `path`, asserting the header
 /// along the way, and returns the records.
@@ -811,17 +773,15 @@ fn case_count_comes_through_finalization() {
     assert_eq!(reader.case_count(), Some(2));
 }
 
-/// The load-bearing invariant: skipping every skippable record must not
+/// The load-bearing invariant: retaining no dictionary record must not
 /// change the layout the rows are read through. Subtype 14 is what
-/// collapses the very long string, and skipping it must not un-collapse
+/// collapses the very long string, and discarding it must not un-collapse
 /// anything the data reader depends on.
 #[test]
-fn skipping_everything_skippable_leaves_the_data_layout_intact() {
-    let stripped = skipping_all_dictionary_content()
+fn the_values_only_path_leaves_the_data_layout_intact() {
+    let stripped = SavReader::new()
         .from_path(COMPREHENSIVE)
         .expect("open fixture")
-        .read_header()
-        .expect("read header")
         .into_record_reader()
         .expect("finalize");
 
@@ -842,22 +802,20 @@ fn skipping_everything_skippable_leaves_the_data_layout_intact() {
     assert_eq!(stripped.case_count(), Some(2));
 }
 
-/// Subtypes 13 and 22 are absorbed into the buffer's skeleton before any
-/// skip decision, so the schema takes them from there rather than from
-/// the record handed out. Excluding them up front therefore costs the
-/// schema nothing — the long names and the very long string's declared
-/// missing values survive a maximal skip.
+/// Subtypes 13 and 22 are absorbed into the buffer's skeleton whatever
+/// the retention, and the schema takes them from there rather than from
+/// the record handed out. So the values-only path costs the schema
+/// nothing on either: the long names and the very long string's declared
+/// missing values both survive.
 ///
 /// This is what makes a value reader able to name its columns while
-/// retaining none of the dictionary: without it `full_name` degrades to
-/// the eight-byte short name, silently.
+/// retaining none of the dictionary — without it `full_name` would
+/// degrade to the eight-byte short name, silently.
 #[test]
-fn skipping_everything_skippable_keeps_the_names_and_long_missing_values() {
-    let stripped = skipping_all_dictionary_content()
+fn the_values_only_path_keeps_the_names_and_long_missing_values() {
+    let stripped = SavReader::new()
         .from_path(COMPREHENSIVE)
         .expect("open fixture")
-        .read_header()
-        .expect("read header")
         .into_record_reader()
         .expect("finalize");
     let plain = finalize_comprehensive();
@@ -1471,21 +1429,19 @@ fn the_schema_and_the_row_reader_agree_on_what_is_missing() {
     assert_eq!(checked, 24, "three rows of eight variables");
 }
 
-/// Missing-value tagging must survive the caller filtering the
-/// dictionary out from under it.
+/// Missing-value tagging must survive the caller declining the whole
+/// dictionary.
 ///
 /// Subtype 22 became layout-bearing when rows started reporting
-/// declared-missing cells, so it is now retained the way subtypes 4, 13,
-/// 14 and 16 always were — before any skip decision, in the buffer's
-/// skeleton. Naming it here, alongside every other skippable thing,
-/// is what proves that: the rows come back identical to a plain read.
+/// declared-missing cells, so it is retained the way subtypes 4, 13, 14
+/// and 16 always were — in the buffer's skeleton, whatever the retention.
+/// Reading the file for its values alone is what proves it: the rows come
+/// back identical to a full walk.
 #[test]
-fn skipping_the_whole_dictionary_leaves_missing_tagging_intact() {
-    let mut reader = skipping_all_dictionary_content()
+fn the_values_only_path_leaves_missing_tagging_intact() {
+    let mut reader = SavReader::new()
         .from_path(COMPRESSION_NONE)
         .expect("open fixture")
-        .read_header()
-        .expect("read header")
         .into_record_reader()
         .expect("finalize");
 

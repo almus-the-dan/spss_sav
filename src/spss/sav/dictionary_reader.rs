@@ -169,10 +169,10 @@ impl<R> DictionaryReader<R> {
     /// pass has already read. Use it to decide whether the next record
     /// is worth decoding before paying to decode it.
     ///
-    /// Records excluded up front via
-    /// [`SavReader::skip_dictionary_content`](crate::spss::sav::sav_reader::SavReader::skip_dictionary_content)
-    /// were never buffered, so this never sees them — the two
-    /// mechanisms compose without overlap.
+    /// Every record the file carried is offered here. A caller who wants
+    /// none of them does not reach this phase at all — that is what
+    /// [`HeaderReader::into_record_reader`](crate::spss::sav::header_reader::HeaderReader::into_record_reader)
+    /// is for.
     #[must_use]
     #[inline]
     pub fn peek_kind(&self) -> Option<DictionaryRecordKind> {
@@ -183,13 +183,14 @@ impl<R> DictionaryReader<R> {
     /// kind passed over, or `None` once every record has been consumed.
     ///
     /// This says "I do not want this record", not "do not read this
-    /// record". The bytes were read during
+    /// record". The bytes were read and retained during
     /// [`read_header`](crate::spss::sav::header_reader::HeaderReader::read_header)
-    /// regardless — the up-front
-    /// [`SavReader::skip_dictionary_content`](crate::spss::sav::sav_reader::SavReader::skip_dictionary_content)
-    /// is where the memory win lives. What this saves is the decode and
-    /// the allocations behind it, for a record the caller has looked at
-    /// with [`peek_kind`](Self::peek_kind) and decided against.
+    /// regardless — a caller who wants nothing retained wants
+    /// [`HeaderReader::into_record_reader`](crate::spss::sav::header_reader::HeaderReader::into_record_reader)
+    /// instead, which is where the memory win lives. What this saves is
+    /// the decode and the allocations behind it, for a record the caller
+    /// has looked at with [`peek_kind`](Self::peek_kind) and decided
+    /// against.
     ///
     /// So it saves that work only where nobody else needs it. A record
     /// the schema draws on is decoded and folded in anyway and simply
@@ -497,11 +498,12 @@ impl<R: Read> DictionaryReader<R> {
     ///
     /// Two of those five, subtypes 13 and 22, feed the schema as well, and
     /// [`finalize_from_skeleton`](Self::finalize_from_skeleton) sets them
-    /// from the skeleton for the same reason. So a caller who excludes
-    /// everything skippable still gets long variable names and a very
-    /// long string's declared missing values; what such a caller does
-    /// lose is the content of the records whose payloads were never
-    /// retained — value labels, documents, display parameters,
+    /// from the skeleton for the same reason. So the values-only path
+    /// through
+    /// [`HeaderReader::into_record_reader`](crate::spss::sav::header_reader::HeaderReader::into_record_reader)
+    /// still gets long variable names and a very long string's declared
+    /// missing values; what it does lose is the content of the payloads
+    /// it never retained — value labels, documents, display parameters,
     /// attributes, and long-string value labels.
     pub fn into_record_reader(mut self) -> Result<RecordReader<R>> {
         self.state.warnings_mut().clear();

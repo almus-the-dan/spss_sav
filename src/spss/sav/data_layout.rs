@@ -28,10 +28,10 @@ use crate::spss::sav::variable_type::VariableType;
 /// Kept separate from
 /// [`SavSchema`](crate::spss::sav::sav_schema::SavSchema) because the
 /// two are assembled from different sources. This is derived from a
-/// skeleton the buffering pass sets aside *before any skip decision*,
+/// skeleton the buffering pass sets aside *whatever is being retained*,
 /// where the schema is accumulated from records as they are handed out.
 /// That difference is the guarantee: neither
-/// [`skip_dictionary_content`](crate::spss::sav::sav_reader::SavReader::skip_dictionary_content)
+/// [`HeaderReader::into_record_reader`](crate::spss::sav::header_reader::HeaderReader::into_record_reader)
 /// nor
 /// [`skip_record`](crate::spss::sav::dictionary_reader::DictionaryReader::skip_record)
 /// can leave the record reader unable to do its job, and nothing has to
@@ -43,8 +43,8 @@ use crate::spss::sav::variable_type::VariableType;
 /// handed to the schema from here, so no filtering choice can lose it.
 /// The rest is skip-safe by discipline: `schema_draws_on` has to name
 /// every record kind that `accumulate` still consumes, and missing one
-/// loses data silently. Content whose payload an up-front skip declines
-/// to retain is gone either way, which is what that option is for.
+/// loses data silently. Content whose payload the values-only path never
+/// retained is gone either way, which is what that path is for.
 ///
 /// The two overlap on the declared missing values, which a correct read
 /// needs and the schema also presents. The rest of the schema — labels,
