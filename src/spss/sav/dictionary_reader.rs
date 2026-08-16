@@ -1,6 +1,6 @@
 //! Streaming reader for the SAV dictionary section.
 //!
-//! Sits between [`HeaderReader`](crate::spss::sav::header_reader::HeaderReader)
+//! Sits between [`SavReader`](crate::spss::sav::sav_reader::SavReader)
 //! and the (future) record reader. Yields one
 //! [`DictionaryRecord`](crate::spss::sav::dictionary_record::DictionaryRecord)
 //! at a time — variable records, value-label sets,
@@ -8,7 +8,7 @@
 //! the header and the `999` end-of-dictionary marker.
 //!
 //! The records were already read off the wire by
-//! [`HeaderReader::into_dictionary_reader`](crate::spss::sav::header_reader::HeaderReader::into_dictionary_reader),
+//! [`SavReader::into_dictionary_reader`](crate::spss::sav::sav_reader::SavReader::into_dictionary_reader),
 //! which had to walk the whole dictionary to find the file's declared
 //! encoding (see the crate-internal `DictionaryBuffer`).
 //! This phase therefore decodes rather than reads: it turns each
@@ -65,7 +65,7 @@ use crate::spss::sav::sav_warning::SavWarning;
 /// Streaming reader for the SAV dictionary section.
 ///
 /// Created by
-/// [`HeaderReader::into_dictionary_reader`](crate::spss::sav::header_reader::HeaderReader::into_dictionary_reader).
+/// [`SavReader::into_dictionary_reader`](crate::spss::sav::sav_reader::SavReader::into_dictionary_reader).
 /// Pull individual records via [`read_record`](Self::read_record)
 /// until it returns `Ok(None)`, or skip straight to record reading via
 /// [`into_record_reader`](Self::into_record_reader) which auto-consumes
@@ -129,7 +129,7 @@ impl<R> DictionaryReader<R> {
     }
 
     /// The file header parsed by the upstream
-    /// [`HeaderReader`](crate::spss::sav::header_reader::HeaderReader).
+    /// [`SavReader`](crate::spss::sav::sav_reader::SavReader).
     ///
     /// Complete as it stands — every field comes from the 176-byte
     /// preamble, so nothing here changes as the dictionary is read.
@@ -142,7 +142,7 @@ impl<R> DictionaryReader<R> {
     /// The encoding the reader applied, and where it came from.
     ///
     /// Known from the moment this reader exists: resolving it is what
-    /// [`HeaderReader::into_dictionary_reader`](crate::spss::sav::header_reader::HeaderReader::into_dictionary_reader)
+    /// [`SavReader::into_dictionary_reader`](crate::spss::sav::sav_reader::SavReader::into_dictionary_reader)
     /// walked the dictionary for.
     #[must_use]
     #[inline]
@@ -152,7 +152,7 @@ impl<R> DictionaryReader<R> {
 
     /// Warnings accumulated by the most recent
     /// [`read_record`](Self::read_record) call (or by
-    /// [`HeaderReader::into_dictionary_reader`](crate::spss::sav::header_reader::HeaderReader::into_dictionary_reader)
+    /// [`SavReader::into_dictionary_reader`](crate::spss::sav::sav_reader::SavReader::into_dictionary_reader)
     /// for the first call). Cleared at the start of each `read_record`
     /// invocation.
     #[must_use]
@@ -171,7 +171,7 @@ impl<R> DictionaryReader<R> {
     ///
     /// Every record the file carried is offered here. A caller who wants
     /// none of them does not reach this phase at all — that is what
-    /// [`HeaderReader::into_record_reader`](crate::spss::sav::header_reader::HeaderReader::into_record_reader)
+    /// [`SavReader::into_record_reader`](crate::spss::sav::sav_reader::SavReader::into_record_reader)
     /// is for.
     #[must_use]
     #[inline]
@@ -184,9 +184,9 @@ impl<R> DictionaryReader<R> {
     ///
     /// This says "I do not want this record", not "do not read this
     /// record". The bytes were read and retained during
-    /// [`into_dictionary_reader`](crate::spss::sav::header_reader::HeaderReader::into_dictionary_reader)
+    /// [`into_dictionary_reader`](crate::spss::sav::sav_reader::SavReader::into_dictionary_reader)
     /// regardless — a caller who wants nothing retained wants
-    /// [`HeaderReader::into_record_reader`](crate::spss::sav::header_reader::HeaderReader::into_record_reader)
+    /// [`SavReader::into_record_reader`](crate::spss::sav::sav_reader::SavReader::into_record_reader)
     /// instead, which is where the memory win lives. What this saves is
     /// the decode and the allocations behind it, for a record the caller
     /// has looked at with [`peek_kind`](Self::peek_kind) and decided
@@ -500,7 +500,7 @@ impl<R: Read> DictionaryReader<R> {
     /// [`finalize_from_skeleton`](Self::finalize_from_skeleton) sets them
     /// from the skeleton for the same reason. So the values-only path
     /// through
-    /// [`HeaderReader::into_record_reader`](crate::spss::sav::header_reader::HeaderReader::into_record_reader)
+    /// [`SavReader::into_record_reader`](crate::spss::sav::sav_reader::SavReader::into_record_reader)
     /// still gets long variable names and a very long string's declared
     /// missing values; what it does lose is the content of the payloads
     /// it never retained — value labels, documents, display parameters,

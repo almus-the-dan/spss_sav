@@ -54,8 +54,6 @@ pub mod float_format;
 mod header_format;
 /// Pure parse helpers for the SAV file header.
 mod header_parse;
-/// Reader for the 176-byte SAV file header.
-pub mod header_reader;
 /// A single data record decoded on demand.
 pub mod lazy_sav_record;
 /// Measurement level of a SAV variable.
@@ -72,7 +70,7 @@ pub mod raw_missing_values;
 pub mod raw_value_label_entry;
 /// Wire-level value-label set from a paired type-3 + type-4 record.
 pub mod raw_value_label_set;
-/// Crate-internal bundle of the options set on a `SavReader`.
+/// Crate-internal bundle of the options set on a `SavReaderBuilder`.
 mod reader_options;
 /// Crate-internal per-reader state.
 mod reader_state;
@@ -92,8 +90,10 @@ pub mod sav_format;
 pub mod sav_format_kind;
 /// SAV file header.
 pub mod sav_header;
-/// Entry point for reading a SAV file.
+/// An opened SAV file, and the two directions reading can take from it.
 pub mod sav_reader;
+/// Entry point for reading a SAV file.
+pub mod sav_reader_builder;
 /// A single decoded SAV data record.
 pub mod sav_record;
 /// Schema of variables in a SAV file, and the accumulator that builds one.

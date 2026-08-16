@@ -23,7 +23,7 @@ use crate::spss::sav::header_format::{
 };
 use crate::spss::sav::record_reader::RecordReader;
 use crate::spss::sav::sav_error::{Field, FormatErrorKind, SavError};
-use crate::spss::sav::sav_reader::SavReader;
+use crate::spss::sav::sav_reader_builder::SavReaderBuilder;
 use crate::spss::sav::sav_warning::SavWarning;
 
 /// Asserts that `err` is a dictionary `UnexpectedValue` format error
@@ -115,7 +115,7 @@ pub(crate) fn open_with(
     bytes: Vec<u8>,
     strategy: EncodingStrategy,
 ) -> DictionaryReader<Cursor<Vec<u8>>> {
-    SavReader::new()
+    SavReaderBuilder::new()
         .encoding_strategy(strategy)
         .from_reader(Cursor::new(bytes))
         .into_dictionary_reader()
@@ -130,7 +130,7 @@ pub(crate) fn open_minimal(bytes: Vec<u8>) -> RecordReader<Cursor<Vec<u8>>> {
 
 /// Like [`open_minimal`], but surfaces the error rather than panicking.
 pub(crate) fn try_open_minimal(bytes: Vec<u8>) -> Result<RecordReader<Cursor<Vec<u8>>>, SavError> {
-    SavReader::new()
+    SavReaderBuilder::new()
         .from_reader(Cursor::new(bytes))
         .into_record_reader()
 }
@@ -172,7 +172,7 @@ pub(crate) fn write_character_code_record(
 /// `into_dictionary_reader`, which walks every record to find the file's declared
 /// encoding, so tests asserting those errors open the file this way.
 pub(crate) fn try_open(bytes: Vec<u8>) -> Result<DictionaryReader<Cursor<Vec<u8>>>, SavError> {
-    SavReader::new()
+    SavReaderBuilder::new()
         .from_reader(Cursor::new(bytes))
         .into_dictionary_reader()
 }

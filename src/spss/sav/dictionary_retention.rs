@@ -6,10 +6,10 @@
 ///
 /// Not a caller-facing option. Which variant applies is decided by the
 /// terminal method the caller reaches for on
-/// [`HeaderReader`](crate::spss::sav::header_reader::HeaderReader):
-/// [`into_dictionary_reader`](crate::spss::sav::header_reader::HeaderReader::into_dictionary_reader)
+/// [`SavReader`](crate::spss::sav::sav_reader::SavReader):
+/// [`into_dictionary_reader`](crate::spss::sav::sav_reader::SavReader::into_dictionary_reader)
 /// hands out dictionary records and so needs [`All`](Self::All), while
-/// [`into_record_reader`](crate::spss::sav::header_reader::HeaderReader::into_record_reader)
+/// [`into_record_reader`](crate::spss::sav::sav_reader::SavReader::into_record_reader)
 /// goes straight to the rows and so needs [`Minimal`](Self::Minimal).
 /// Expressing it that way rather than as a flag is deliberate: a caller
 /// cannot ask for records they have already declared they do not want.
@@ -18,7 +18,7 @@
 /// something the dictionary phase can be told later. A SAV file declares
 /// its text encoding in extension records at the end of the dictionary,
 /// so the whole section is walked by
-/// [`into_dictionary_reader`](crate::spss::sav::header_reader::HeaderReader::into_dictionary_reader)
+/// [`into_dictionary_reader`](crate::spss::sav::sav_reader::SavReader::into_dictionary_reader)
 /// before any text can be decoded. By the time that returns, whatever
 /// was going to be retained is already resident.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

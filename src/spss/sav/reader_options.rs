@@ -1,10 +1,10 @@
-//! Crate-internal bundle of the options set on a [`SavReader`].
+//! Crate-internal bundle of the options set on a [`SavReaderBuilder`].
 
 use crate::spss::sav::encoding_strategy::EncodingStrategy;
 
 /// Everything
-/// [`SavReader`](crate::spss::sav::sav_reader::SavReader) accumulated,
-/// threaded through the reader chain as one value.
+/// [`SavReaderBuilder`](crate::spss::sav::sav_reader_builder::SavReaderBuilder)
+/// accumulated, threaded through the reader chain as one value.
 ///
 /// Bundled rather than passed positionally so that adding the next
 /// option does not change every constructor signature between the
@@ -13,10 +13,9 @@ use crate::spss::sav::encoding_strategy::EncodingStrategy;
 /// consumed earlier than the rest still lives here rather than
 /// traveling alongside.
 ///
-/// How much of the dictionary is retained is deliberately *not* here.
-/// It is settled by which terminal method the caller reaches for on
-/// [`HeaderReader`](crate::spss::sav::header_reader::HeaderReader) —
-/// see
+/// How much of the dictionary is retained is deliberately *not* here. It
+/// is settled by which terminal method the caller reaches for on
+/// [`SavReader`](crate::spss::sav::sav_reader::SavReader) — see
 /// [`DictionaryRetention`](crate::spss::sav::dictionary_retention::DictionaryRetention).
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ReaderOptions {

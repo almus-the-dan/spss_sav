@@ -9,7 +9,7 @@
 //! Three points it exists to make:
 //!
 //! 1. **None of the dictionary needs retaining.**
-//!    [`HeaderReader::into_record_reader`](spss_sav::spss::sav::header_reader::HeaderReader::into_record_reader)
+//!    [`SavReader::into_record_reader`](spss_sav::spss::sav::sav_reader::SavReader::into_record_reader)
 //!    is the whole of how that is said, and the reader still names its
 //!    columns and reads its rows correctly: everything a correct read
 //!    depends on is absorbed whatever is retained.
@@ -44,7 +44,7 @@ use std::env;
 use std::error::Error;
 use std::hint::black_box;
 
-use spss_sav::spss::sav::sav_reader::SavReader;
+use spss_sav::spss::sav::sav_reader_builder::SavReaderBuilder;
 use spss_sav::spss::sav::string_value::StringValue;
 use spss_sav::spss::sav::value::Value;
 
@@ -64,7 +64,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     // would hand out every dictionary record, which means retaining all
     // of them — and a real file's value labels run to megabytes. This
     // discards each payload as it is scanned.
-    let mut reader = SavReader::new().from_path(&path)?.into_record_reader()?;
+    let mut reader = SavReaderBuilder::new()
+        .from_path(&path)?
+        .into_record_reader()?;
 
     // Snapshot what the loop needs before the first read: `schema()`
     // borrows the reader, `read_record` takes it mutably, so the two

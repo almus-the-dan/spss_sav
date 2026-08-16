@@ -33,7 +33,7 @@ use spss_sav::spss::sav::raw_missing_values::RawMissingValues;
 use spss_sav::spss::sav::raw_value_label_set::RawValueLabelSet;
 use spss_sav::spss::sav::record_reader::RecordReader;
 use spss_sav::spss::sav::sav_error::{FormatErrorKind, SavError, Section};
-use spss_sav::spss::sav::sav_reader::SavReader;
+use spss_sav::spss::sav::sav_reader_builder::SavReaderBuilder;
 use spss_sav::spss::sav::sav_record::SavRecord;
 use spss_sav::spss::sav::sav_variable::SavVariable;
 use spss_sav::spss::sav::sav_variable_header::SavVariableHeader;
@@ -82,8 +82,10 @@ const ENCODING_WINDOWS_1252: &str = concat!(
 /// Reads every dictionary record from `path`, asserting the header
 /// along the way, and returns the records.
 fn read_dictionary(path: &str) -> Vec<DictionaryRecord> {
-    let header_reader = SavReader::new().from_path(path).expect("open fixture");
-    let mut dictionary_reader = header_reader.into_dictionary_reader().expect("read header");
+    let sav_reader = SavReaderBuilder::new()
+        .from_path(path)
+        .expect("open fixture");
+    let mut dictionary_reader = sav_reader.into_dictionary_reader().expect("read header");
 
     assert_header(&dictionary_reader);
 
@@ -123,8 +125,10 @@ fn assert_header(dictionary_reader: &DictionaryReader<BufReader<File>>) {
 /// the encoding fixtures carry a different variable set than
 /// `comprehensive.sav`, and the file label is the point of interest.
 fn read_encoding_fixture(path: &str) -> (String, Vec<DictionaryRecord>) {
-    let header_reader = SavReader::new().from_path(path).expect("open fixture");
-    let mut dictionary_reader = header_reader.into_dictionary_reader().expect("read header");
+    let sav_reader = SavReaderBuilder::new()
+        .from_path(path)
+        .expect("open fixture");
+    let mut dictionary_reader = sav_reader.into_dictionary_reader().expect("read header");
     let file_label = dictionary_reader.header().file_label().to_owned();
 
     let mut records = Vec::new();
@@ -284,10 +288,10 @@ fn comprehensive_value_labels_and_documents() {
 /// one-ULP gap between `LOWEST` and system-missing.
 #[test]
 fn comprehensive_float_sentinels_match_our_defaults() {
-    let header_reader = SavReader::new()
+    let sav_reader = SavReaderBuilder::new()
         .from_path(COMPREHENSIVE)
         .expect("open fixture");
-    let mut dictionary_reader = header_reader.into_dictionary_reader().expect("read header");
+    let mut dictionary_reader = sav_reader.into_dictionary_reader().expect("read header");
     let encoding = dictionary_reader.header().float_encoding();
 
     let mut sentinels = None;
@@ -551,7 +555,7 @@ fn encoding_fixtures_report_a_label_provenance() {
         (ENCODING_WINDOWS_1252, encoding_rs::WINDOWS_1252),
     ];
     for (path, expected) in cases {
-        let dictionary_reader = SavReader::new()
+        let dictionary_reader = SavReaderBuilder::new()
             .from_path(path)
             .expect("open fixture")
             .into_dictionary_reader()
@@ -570,7 +574,7 @@ fn encoding_fixtures_report_a_label_provenance() {
 /// record it is about.
 #[test]
 fn override_wins_and_warns_when_the_file_disagrees() {
-    let mut dictionary_reader = SavReader::new()
+    let mut dictionary_reader = SavReaderBuilder::new()
         .encoding_strategy(EncodingStrategy::Override(encoding_rs::WINDOWS_1252))
         .from_path(ENCODING_UTF8)
         .expect("open fixture")
@@ -614,7 +618,7 @@ fn override_wins_and_warns_when_the_file_disagrees() {
 /// Opens the comprehensive fixture and finalizes straight through to the
 /// record reader without pulling a single dictionary record by hand.
 fn finalize_comprehensive() -> spss_sav::spss::sav::record_reader::RecordReader<BufReader<File>> {
-    SavReader::new()
+    SavReaderBuilder::new()
         .from_path(COMPREHENSIVE)
         .expect("open fixture")
         .into_dictionary_reader()
@@ -779,7 +783,7 @@ fn case_count_comes_through_finalization() {
 /// anything the data reader depends on.
 #[test]
 fn the_values_only_path_leaves_the_data_layout_intact() {
-    let stripped = SavReader::new()
+    let stripped = SavReaderBuilder::new()
         .from_path(COMPREHENSIVE)
         .expect("open fixture")
         .into_record_reader()
@@ -813,7 +817,7 @@ fn the_values_only_path_leaves_the_data_layout_intact() {
 /// degrade to the eight-byte short name, silently.
 #[test]
 fn the_values_only_path_keeps_the_names_and_long_missing_values() {
-    let stripped = SavReader::new()
+    let stripped = SavReaderBuilder::new()
         .from_path(COMPREHENSIVE)
         .expect("open fixture")
         .into_record_reader()
@@ -872,7 +876,7 @@ fn the_values_only_path_keeps_the_names_and_long_missing_values() {
 /// those spaces picks the wrong variable or none at all.
 #[test]
 fn weight_variable_resolves_across_all_three_index_spaces() {
-    let reader = SavReader::new()
+    let reader = SavReaderBuilder::new()
         .from_path(WEIGHTED)
         .expect("open fixture")
         .into_dictionary_reader()
@@ -927,7 +931,7 @@ fn skipping_every_record_produces_the_same_schema_as_reading_them() {
             .collect()
     }
 
-    let mut read_all = SavReader::new()
+    let mut read_all = SavReaderBuilder::new()
         .from_path(COMPREHENSIVE)
         .expect("open fixture")
         .into_dictionary_reader()
@@ -935,7 +939,7 @@ fn skipping_every_record_produces_the_same_schema_as_reading_them() {
     while read_all.read_record().expect("read record").is_some() {}
     let read_all = read_all.into_record_reader().expect("finalize");
 
-    let mut skipped = SavReader::new()
+    let mut skipped = SavReaderBuilder::new()
         .from_path(COMPREHENSIVE)
         .expect("open fixture")
         .into_dictionary_reader()
@@ -1012,7 +1016,7 @@ const COMPRESSION_ROWS: [[&str; 8]; 3] = [
 ];
 
 fn record_reader(path: &str) -> RecordReader<BufReader<File>> {
-    SavReader::new()
+    SavReaderBuilder::new()
         .from_path(path)
         .expect("open fixture")
         .into_dictionary_reader()
@@ -1321,7 +1325,7 @@ fn the_bytecode_fixture_makes_command_groups_straddle_rows() {
 const COMPRESSION_ROW_LEN: usize = 5 * 8 + 8 + 8 + 256 + 48;
 
 fn reader_over(bytes: Vec<u8>) -> RecordReader<Cursor<Vec<u8>>> {
-    SavReader::new()
+    SavReaderBuilder::new()
         .from_reader(Cursor::new(bytes))
         .into_dictionary_reader()
         .expect("read header")
@@ -1439,7 +1443,7 @@ fn the_schema_and_the_row_reader_agree_on_what_is_missing() {
 /// back identical to a full walk.
 #[test]
 fn the_values_only_path_leaves_missing_tagging_intact() {
-    let mut reader = SavReader::new()
+    let mut reader = SavReaderBuilder::new()
         .from_path(COMPRESSION_NONE)
         .expect("open fixture")
         .into_record_reader()

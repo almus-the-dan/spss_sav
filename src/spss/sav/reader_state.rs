@@ -27,7 +27,7 @@ use crate::spss::sav::sav_warning::SavWarning;
 /// The chunk lives on the stack, so this is a stack-frame budget rather
 /// than a bound on anything retained — which is why it is kilobytes and
 /// not the tens of kilobytes a heap window would justify. Chunk size
-/// barely shows up in any case: `SavReader::from_path` and `from_file`
+/// barely shows up in any case: `SavReaderBuilder::from_path` and `from_file`
 /// wrap the file in a [`BufReader`](std::io::BufReader), so a discard
 /// read is a copy out of that buffer rather than a syscall.
 const SKIP_CHUNK_LEN: usize = 1024;

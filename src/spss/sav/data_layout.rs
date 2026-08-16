@@ -31,7 +31,7 @@ use crate::spss::sav::variable_type::VariableType;
 /// skeleton the buffering pass sets aside *whatever is being retained*,
 /// where the schema is accumulated from records as they are handed out.
 /// That difference is the guarantee: neither
-/// [`HeaderReader::into_record_reader`](crate::spss::sav::header_reader::HeaderReader::into_record_reader)
+/// [`SavReader::into_record_reader`](crate::spss::sav::sav_reader::SavReader::into_record_reader)
 /// nor
 /// [`skip_record`](crate::spss::sav::dictionary_reader::DictionaryReader::skip_record)
 /// can leave the record reader unable to do its job, and nothing has to
