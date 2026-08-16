@@ -38,7 +38,6 @@ use crate::spss::sav::record_reader::RecordReader;
 use crate::spss::sav::sav_creation_timestamp::SavCreationTimestamp;
 use crate::spss::sav::sav_error::{Result, Section};
 use crate::spss::sav::sav_header::SavHeader;
-use crate::spss::sav::sav_warning::SavWarning;
 
 /// An opened SAV file, positioned at its first byte.
 ///
@@ -79,18 +78,6 @@ impl<R> SavReader<R> {
     #[inline]
     pub fn encoding_strategy(&self) -> EncodingStrategy {
         self.options.encoding_strategy()
-    }
-
-    /// Warnings accumulated so far, which is none: nothing has been read
-    /// at this point, and both terminal methods consume the reader rather
-    /// than leaving one around to observe.
-    ///
-    /// Kept for symmetry with the phases that follow, each of which
-    /// reports its own.
-    #[must_use]
-    #[inline]
-    pub fn warnings(&self) -> &[SavWarning] {
-        self.state.warnings()
     }
 }
 
