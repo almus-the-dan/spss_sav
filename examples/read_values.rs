@@ -9,9 +9,9 @@
 //! Three points it exists to make:
 //!
 //! 1. **Only the dictionary content that influences reading is worth
-//!    retaining.** Value labels, documents and long-string value labels
-//!    are presentation, and a real file can carry megabytes of them, so
-//!    they are skipped. Nothing about that can change how a row reads:
+//!    retaining.** Every skippable category is skipped but one — see
+//!    [`UNNEEDED`] for the list and for why the long variable names are
+//!    the sole exception. Nothing about that can change how a row reads:
 //!    the records the data layout depends on are absorbed whatever a
 //!    caller asks to skip. See
 //!    [`SkippableContent`](spss_sav::spss::sav::skippable_content::SkippableContent).
@@ -60,6 +60,46 @@ const DEFAULT_PATH: &str = concat!(
     "/tests/fixtures/compression_bytecode.sav"
 );
 
+/// Every category of dictionary content a value reader does not need,
+/// stated outright — there is deliberately no "skip everything"
+/// shorthand.
+///
+/// One extension is missing from the list, and the omission is the point:
+/// **subtype 13, the long variable names.** Skip it and the schema falls
+/// back to the eight-byte uppercase short names, so a variable declared
+/// `household_income` arrives as `HOUSEHOL`. It is the only dictionary
+/// record besides the variable records themselves that a consumer reading
+/// nothing but values still depends on.
+///
+/// The rest divides in two. Presentation content — value labels,
+/// documents, attributes, multiple response sets, display parameters,
+/// the product and UUID strings — is dropped outright. The
+/// layout-bearing subtypes (3, 4, 14, 16, 20 and 22) are absorbed
+/// whatever a caller asks to skip, so naming them here stops them being
+/// decoded and handed over without changing anything about how a row
+/// reads: row count, widths, encoding, and missing tagging come out
+/// identical either way.
+const UNNEEDED: [SkippableContent; 18] = [
+    SkippableContent::ValueLabels,
+    SkippableContent::Documents,
+    SkippableContent::Extension(ExtensionSubtype::MachineIntegerInfo),
+    SkippableContent::Extension(ExtensionSubtype::FloatInfo),
+    SkippableContent::Extension(ExtensionSubtype::VariableSets),
+    SkippableContent::Extension(ExtensionSubtype::MultipleResponseSets),
+    SkippableContent::Extension(ExtensionSubtype::ExtraProductInfo),
+    SkippableContent::Extension(ExtensionSubtype::DisplayParameters),
+    SkippableContent::Extension(ExtensionSubtype::Uuid),
+    SkippableContent::Extension(ExtensionSubtype::VeryLongStrings),
+    SkippableContent::Extension(ExtensionSubtype::ExtendedNumberOfCases),
+    SkippableContent::Extension(ExtensionSubtype::FileAttributes),
+    SkippableContent::Extension(ExtensionSubtype::VariableAttributes),
+    SkippableContent::Extension(ExtensionSubtype::MultipleResponseSetsExtended),
+    SkippableContent::Extension(ExtensionSubtype::CharacterEncoding),
+    SkippableContent::Extension(ExtensionSubtype::LongValueLabels),
+    SkippableContent::Extension(ExtensionSubtype::LongMissingValues),
+    SkippableContent::Extension(ExtensionSubtype::Unrecognized),
+];
+
 fn main() -> Result<(), Box<dyn Error>> {
     let path = env::args()
         .nth(1)
@@ -67,13 +107,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Open, walk the dictionary, and land in the data section. Skipping
     // is a memory win rather than an I/O one — the bytes are still read,
-    // they are just discarded instead of retained and decoded.
-    let mut reader = SavReader::new()
-        .skip_dictionary_content(SkippableContent::ValueLabels)
-        .skip_dictionary_content(SkippableContent::Documents)
-        .skip_dictionary_content(SkippableContent::Extension(
-            ExtensionSubtype::LongValueLabels,
-        ))
+    // they are just discarded instead of retained and decoded, which is
+    // what keeps a dictionary carrying megabytes of value labels from
+    // being held in memory whole.
+    let mut reader = UNNEEDED
+        .into_iter()
+        .fold(SavReader::new(), SavReader::skip_dictionary_content)
         .from_path(&path)?
         .read_header()?
         .into_record_reader()?;

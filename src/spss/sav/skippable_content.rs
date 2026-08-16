@@ -28,9 +28,9 @@ use crate::spss::sav::extensions::extension_subtype::ExtensionSubtype;
 /// 2. **Skipping means "don't yield it, don't retain it for me" — not
 ///    "don't read it."** The reader still absorbs whatever the schema
 ///    and the data layout require, so no combination of skips can break
-///    a data read. Subtypes 3, 4, 13, 14, 16 and 20 are load-bearing:
-///    skipping them stops them reaching the caller but the reader
-///    still consumes what it needs from them.
+///    a data read. Subtypes 3, 4, 13, 14, 16, 20 and 22 are
+///    load-bearing: skipping them stops them reaching the caller but the
+///    reader still consumes what it needs from them.
 ///
 /// Variable records are deliberately absent. They are unskippable by
 /// construction — their trailing blocks must be parsed to find the next
