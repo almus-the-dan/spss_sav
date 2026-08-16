@@ -14,7 +14,7 @@
 //! says whether the dictionary's content is wanted:
 //! [`HeaderReader::into_record_reader`](crate::spss::sav::header_reader::HeaderReader::into_record_reader)
 //! goes straight to the rows and retains none of it, while
-//! [`HeaderReader::read_header`](crate::spss::sav::header_reader::HeaderReader::read_header)
+//! [`HeaderReader::into_dictionary_reader`](crate::spss::sav::header_reader::HeaderReader::into_dictionary_reader)
 //! hands out every dictionary record first.
 
 use std::fs::File;
@@ -55,7 +55,7 @@ use crate::spss::sav::sav_error::{Result, SavError, Section};
 ///
 /// let mut dictionary = SavReader::new()
 ///     .from_path("data.sav")?
-///     .read_header()?;
+///     .into_dictionary_reader()?;
 ///
 /// while let Some(record) = dictionary.read_record()? {
 ///     // ...

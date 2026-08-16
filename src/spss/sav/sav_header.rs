@@ -103,7 +103,7 @@ impl SavHeader {
     ///
     /// Both inputs come from the 176-byte preamble, so the encoding is
     /// available the moment
-    /// [`HeaderReader::read_header`](crate::spss::sav::header_reader::HeaderReader::read_header)
+    /// [`HeaderReader::into_dictionary_reader`](crate::spss::sav::header_reader::HeaderReader::into_dictionary_reader)
     /// returns — no dictionary record is needed. Extension subtype 3
     /// declares a floating-point representation too, but the header
     /// stays authoritative: a disagreement raises

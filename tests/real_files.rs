@@ -83,7 +83,7 @@ const ENCODING_WINDOWS_1252: &str = concat!(
 /// along the way, and returns the records.
 fn read_dictionary(path: &str) -> Vec<DictionaryRecord> {
     let header_reader = SavReader::new().from_path(path).expect("open fixture");
-    let mut dictionary_reader = header_reader.read_header().expect("read header");
+    let mut dictionary_reader = header_reader.into_dictionary_reader().expect("read header");
 
     assert_header(&dictionary_reader);
 
@@ -124,7 +124,7 @@ fn assert_header(dictionary_reader: &DictionaryReader<BufReader<File>>) {
 /// `comprehensive.sav`, and the file label is the point of interest.
 fn read_encoding_fixture(path: &str) -> (String, Vec<DictionaryRecord>) {
     let header_reader = SavReader::new().from_path(path).expect("open fixture");
-    let mut dictionary_reader = header_reader.read_header().expect("read header");
+    let mut dictionary_reader = header_reader.into_dictionary_reader().expect("read header");
     let file_label = dictionary_reader.header().file_label().to_owned();
 
     let mut records = Vec::new();
@@ -287,7 +287,7 @@ fn comprehensive_float_sentinels_match_our_defaults() {
     let header_reader = SavReader::new()
         .from_path(COMPREHENSIVE)
         .expect("open fixture");
-    let mut dictionary_reader = header_reader.read_header().expect("read header");
+    let mut dictionary_reader = header_reader.into_dictionary_reader().expect("read header");
     let encoding = dictionary_reader.header().float_encoding();
 
     let mut sentinels = None;
@@ -543,7 +543,7 @@ fn encoding_utf8_decodes_accented_text() {
 /// Both fixtures declare their encoding in a subtype-20 record, so the
 /// reader reports it as [`EncodingProvenance::Label`] rather than falling
 /// back — and reports it before any record has been read, since
-/// resolving it is what `read_header` walked the dictionary for.
+/// resolving it is what `into_dictionary_reader` walked the dictionary for.
 #[test]
 fn encoding_fixtures_report_a_label_provenance() {
     let cases = [
@@ -554,7 +554,7 @@ fn encoding_fixtures_report_a_label_provenance() {
         let dictionary_reader = SavReader::new()
             .from_path(path)
             .expect("open fixture")
-            .read_header()
+            .into_dictionary_reader()
             .expect("read header");
         assert_eq!(
             dictionary_reader.encoding_provenance(),
@@ -574,7 +574,7 @@ fn override_wins_and_warns_when_the_file_disagrees() {
         .encoding_strategy(EncodingStrategy::Override(encoding_rs::WINDOWS_1252))
         .from_path(ENCODING_UTF8)
         .expect("open fixture")
-        .read_header()
+        .into_dictionary_reader()
         .expect("read header");
 
     assert_eq!(
@@ -617,7 +617,7 @@ fn finalize_comprehensive() -> spss_sav::spss::sav::record_reader::RecordReader<
     SavReader::new()
         .from_path(COMPREHENSIVE)
         .expect("open fixture")
-        .read_header()
+        .into_dictionary_reader()
         .expect("read header")
         .into_record_reader()
         .expect("finalize")
@@ -875,7 +875,7 @@ fn weight_variable_resolves_across_all_three_index_spaces() {
     let reader = SavReader::new()
         .from_path(WEIGHTED)
         .expect("open fixture")
-        .read_header()
+        .into_dictionary_reader()
         .expect("read header")
         .into_record_reader()
         .expect("finalize");
@@ -930,7 +930,7 @@ fn skipping_every_record_produces_the_same_schema_as_reading_them() {
     let mut read_all = SavReader::new()
         .from_path(COMPREHENSIVE)
         .expect("open fixture")
-        .read_header()
+        .into_dictionary_reader()
         .expect("read header");
     while read_all.read_record().expect("read record").is_some() {}
     let read_all = read_all.into_record_reader().expect("finalize");
@@ -938,7 +938,7 @@ fn skipping_every_record_produces_the_same_schema_as_reading_them() {
     let mut skipped = SavReader::new()
         .from_path(COMPREHENSIVE)
         .expect("open fixture")
-        .read_header()
+        .into_dictionary_reader()
         .expect("read header");
     while skipped.skip_record().expect("skip record").is_some() {}
     let skipped = skipped.into_record_reader().expect("finalize");
@@ -1015,7 +1015,7 @@ fn record_reader(path: &str) -> RecordReader<BufReader<File>> {
     SavReader::new()
         .from_path(path)
         .expect("open fixture")
-        .read_header()
+        .into_dictionary_reader()
         .expect("read header")
         .into_record_reader()
         .expect("finalize")
@@ -1323,7 +1323,7 @@ const COMPRESSION_ROW_LEN: usize = 5 * 8 + 8 + 8 + 256 + 48;
 fn reader_over(bytes: Vec<u8>) -> RecordReader<Cursor<Vec<u8>>> {
     SavReader::new()
         .from_reader(Cursor::new(bytes))
-        .read_header()
+        .into_dictionary_reader()
         .expect("read header")
         .into_record_reader()
         .expect("finalize")

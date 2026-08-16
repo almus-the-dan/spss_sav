@@ -6,7 +6,7 @@
 //!
 //! Two methods lead onward, and choosing between them is how a caller
 //! declares whether the dictionary's content is wanted:
-//! [`read_header`](crate::spss::sav::header_reader::HeaderReader::read_header)
+//! [`into_dictionary_reader`](crate::spss::sav::header_reader::HeaderReader::into_dictionary_reader)
 //! advances to the dictionary phase and hands out every record, while
 //! [`into_record_reader`](crate::spss::sav::header_reader::HeaderReader::into_record_reader)
 //! skips that phase and retains none of them. They read the same rows;
@@ -48,8 +48,9 @@ use crate::spss::sav::sav_warning::SavWarning;
 /// /
 /// [`from_reader`](crate::spss::sav::sav_reader::SavReader::from_reader)),
 /// then call either [`into_record_reader`](Self::into_record_reader) to
-/// go straight to the values or [`read_header`](Self::read_header) to
-/// walk the dictionary first.
+/// go straight to the values or
+/// [`into_dictionary_reader`](Self::into_dictionary_reader) to walk the
+/// dictionary first.
 #[derive(Debug)]
 pub struct HeaderReader<R> {
     state: ReaderState<R>,
@@ -73,8 +74,9 @@ impl<R> HeaderReader<R> {
         self.options.encoding_strategy()
     }
 
-    /// Warnings accumulated so far. Empty before
-    /// [`read_header`](Self::read_header) is called.
+    /// Warnings accumulated so far. Empty until the header has been read,
+    /// which neither terminal method leaves a `HeaderReader` around to
+    /// observe — both consume it.
     #[must_use]
     #[inline]
     pub fn warnings(&self) -> &[SavWarning] {
@@ -246,8 +248,8 @@ impl<R: Read> HeaderReader<R> {
     /// spec-defined offset; a panic here would indicate a bug in
     /// the reader rather than a malformed file. Release builds skip
     /// these checks.
-    pub fn read_header(self) -> Result<DictionaryReader<R>> {
-        self.read_dictionary(DictionaryRetention::All)
+    pub fn into_dictionary_reader(self) -> Result<DictionaryReader<R>> {
+        self.into_dictionary_reader_retaining(DictionaryRetention::All)
     }
 
     /// Parses the header and goes straight to the rows, without handing
@@ -260,7 +262,7 @@ impl<R: Read> HeaderReader<R> {
     /// read depends on is given up: rows, widths, encoding, missing
     /// tagging, the declared case count and the variable names all come
     /// out exactly as they would from
-    /// [`read_header`](Self::read_header) followed by
+    /// [`into_dictionary_reader`](Self::into_dictionary_reader) followed by
     /// [`DictionaryReader::into_record_reader`](crate::spss::sav::dictionary_reader::DictionaryReader::into_record_reader).
     ///
     /// The difference is memory. Going through the dictionary phase
@@ -270,12 +272,14 @@ impl<R: Read> HeaderReader<R> {
     /// records — value labels, display parameters and attributes do not
     /// reach [`SavSchema`](crate::spss::sav::sav_schema::SavSchema), and
     /// warnings those records would have raised are suppressed with them.
-    /// Reach for [`read_header`](Self::read_header) when any of that is
-    /// wanted; the two differ in nothing else.
+    /// Reach for
+    /// [`into_dictionary_reader`](Self::into_dictionary_reader) when any
+    /// of that is wanted; the two differ in nothing else.
     ///
     /// # Errors
     ///
-    /// As [`read_header`](Self::read_header), plus whatever
+    /// As [`into_dictionary_reader`](Self::into_dictionary_reader), plus
+    /// whatever
     /// [`DictionaryReader::into_record_reader`](crate::spss::sav::dictionary_reader::DictionaryReader::into_record_reader)
     /// would return. Structural validation is unaffected by the
     /// discarding: a malformed record still fails the read regardless whether
@@ -283,7 +287,7 @@ impl<R: Read> HeaderReader<R> {
     ///
     /// # Panics
     ///
-    /// As [`read_header`](Self::read_header).
+    /// As [`into_dictionary_reader`](Self::into_dictionary_reader).
     ///
     /// # Examples
     ///
@@ -301,9 +305,8 @@ impl<R: Read> HeaderReader<R> {
     /// }
     /// # Ok::<(), spss_sav::spss::sav::sav_error::SavError>(())
     /// ```
-    //noinspection RsSelfConvention
     pub fn into_record_reader(self) -> Result<RecordReader<R>> {
-        self.read_dictionary(DictionaryRetention::Minimal)?
+        self.into_dictionary_reader_retaining(DictionaryRetention::Minimal)?
             .into_record_reader()
     }
 
@@ -312,7 +315,10 @@ impl<R: Read> HeaderReader<R> {
     ///
     /// Shared by the two terminal methods, which differ in nothing but
     /// that argument and where they stop.
-    fn read_dictionary(mut self, retention: DictionaryRetention) -> Result<DictionaryReader<R>> {
+    fn into_dictionary_reader_retaining(
+        mut self,
+        retention: DictionaryRetention,
+    ) -> Result<DictionaryReader<R>> {
         self.state.warnings_mut().clear();
         let raw = self.read_raw_header()?;
 
@@ -442,7 +448,7 @@ mod tests {
             buf.extend_from_slice(&[0u8; TRAILING_PADDING_LEN]);
             assert_eq!(buf.len(), HEADER_LEN);
 
-            // `read_header` walks the dictionary to find the declared
+            // The dictionary is walked to find the declared
             // encoding, so even a header-only fixture needs that
             // declaration and a terminator to end the walk.
             if let Some(label) = self.encoding_label {
@@ -486,7 +492,7 @@ mod tests {
     {
         SavReader::new()
             .from_reader(Cursor::new(bytes))
-            .read_header()
+            .into_dictionary_reader()
     }
 
     fn read_with(
@@ -497,7 +503,7 @@ mod tests {
         SavReader::new()
             .encoding_strategy(strategy)
             .from_reader(Cursor::new(bytes))
-            .read_header()
+            .into_dictionary_reader()
     }
 
     // -- Happy paths --------------------------------------------------------

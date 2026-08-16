@@ -60,7 +60,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .nth(1)
         .unwrap_or_else(|| DEFAULT_PATH.to_owned());
 
-    // Straight to the data section. Going through `read_header` instead
+    // Straight to the data section. `into_dictionary_reader` instead
     // would hand out every dictionary record, which means retaining all
     // of them — and a real file's value labels run to megabytes. This
     // discards each payload as it is scanned.

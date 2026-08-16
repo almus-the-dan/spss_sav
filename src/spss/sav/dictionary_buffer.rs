@@ -77,9 +77,9 @@ pub(crate) struct DictionaryBuffer {
 /// [`DictionaryRetention`](crate::spss::sav::dictionary_retention::DictionaryRetention),
 /// so the layout can be derived at finalization no matter what the caller
 /// did with the records — pulled them, passed over them, declined the
-/// whole dictionary, or never touched the reader at all. That turns "filtering can never
-/// break a data read" from a rule someone has to remember into
-/// something the types make true.
+/// whole dictionary, or never touched the reader at all. That turns
+/// "filtering can never break a data read" from a rule someone has to
+/// remember into something the types make true.
 ///
 /// It costs a short name, a type and a raw missing-value slot per
 /// variable, plus a copy of at most five tiny extension records.

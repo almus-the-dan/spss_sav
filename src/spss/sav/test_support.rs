@@ -118,7 +118,7 @@ pub(crate) fn open_with(
     SavReader::new()
         .encoding_strategy(strategy)
         .from_reader(Cursor::new(bytes))
-        .read_header()
+        .into_dictionary_reader()
         .unwrap()
 }
 
@@ -169,12 +169,12 @@ pub(crate) fn write_character_code_record(
 /// Like [`open`], but surfaces the error rather than panicking.
 ///
 /// Structural errors anywhere in the dictionary surface from
-/// `read_header`, which walks every record to find the file's declared
+/// `into_dictionary_reader`, which walks every record to find the file's declared
 /// encoding, so tests asserting those errors open the file this way.
 pub(crate) fn try_open(bytes: Vec<u8>) -> Result<DictionaryReader<Cursor<Vec<u8>>>, SavError> {
     SavReader::new()
         .from_reader(Cursor::new(bytes))
-        .read_header()
+        .into_dictionary_reader()
 }
 
 /// Appends a 4-byte record-type tag in `byte_order`.

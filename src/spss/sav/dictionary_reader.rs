@@ -8,14 +8,14 @@
 //! the header and the `999` end-of-dictionary marker.
 //!
 //! The records were already read off the wire by
-//! [`HeaderReader::read_header`](crate::spss::sav::header_reader::HeaderReader::read_header),
+//! [`HeaderReader::into_dictionary_reader`](crate::spss::sav::header_reader::HeaderReader::into_dictionary_reader),
 //! which had to walk the whole dictionary to find the file's declared
 //! encoding (see the crate-internal `DictionaryBuffer`).
 //! This phase therefore decodes rather than reads: it turns each
 //! buffered record into a
 //! [`DictionaryRecord`](crate::spss::sav::dictionary_record::DictionaryRecord)
 //! using the resolved encoding. Structural errors have already surfaced from
-//! `read_header`; what can still fail here is per-subtype extension
+//! `into_dictionary_reader`; what can still fail here is per-subtype extension
 //! payload validation, which never had to run to find record
 //! boundaries.
 
@@ -65,7 +65,7 @@ use crate::spss::sav::sav_warning::SavWarning;
 /// Streaming reader for the SAV dictionary section.
 ///
 /// Created by
-/// [`HeaderReader::read_header`](crate::spss::sav::header_reader::HeaderReader::read_header).
+/// [`HeaderReader::into_dictionary_reader`](crate::spss::sav::header_reader::HeaderReader::into_dictionary_reader).
 /// Pull individual records via [`read_record`](Self::read_record)
 /// until it returns `Ok(None)`, or skip straight to record reading via
 /// [`into_record_reader`](Self::into_record_reader) which auto-consumes
@@ -142,7 +142,7 @@ impl<R> DictionaryReader<R> {
     /// The encoding the reader applied, and where it came from.
     ///
     /// Known from the moment this reader exists: resolving it is what
-    /// [`HeaderReader::read_header`](crate::spss::sav::header_reader::HeaderReader::read_header)
+    /// [`HeaderReader::into_dictionary_reader`](crate::spss::sav::header_reader::HeaderReader::into_dictionary_reader)
     /// walked the dictionary for.
     #[must_use]
     #[inline]
@@ -152,7 +152,7 @@ impl<R> DictionaryReader<R> {
 
     /// Warnings accumulated by the most recent
     /// [`read_record`](Self::read_record) call (or by
-    /// [`HeaderReader::read_header`](crate::spss::sav::header_reader::HeaderReader::read_header)
+    /// [`HeaderReader::into_dictionary_reader`](crate::spss::sav::header_reader::HeaderReader::into_dictionary_reader)
     /// for the first call). Cleared at the start of each `read_record`
     /// invocation.
     #[must_use]
@@ -184,7 +184,7 @@ impl<R> DictionaryReader<R> {
     ///
     /// This says "I do not want this record", not "do not read this
     /// record". The bytes were read and retained during
-    /// [`read_header`](crate::spss::sav::header_reader::HeaderReader::read_header)
+    /// [`into_dictionary_reader`](crate::spss::sav::header_reader::HeaderReader::into_dictionary_reader)
     /// regardless — a caller who wants nothing retained wants
     /// [`HeaderReader::into_record_reader`](crate::spss::sav::header_reader::HeaderReader::into_record_reader)
     /// instead, which is where the memory win lives. What this saves is
@@ -451,7 +451,7 @@ impl<R: Read> DictionaryReader<R> {
     /// Returns [`SavError::Format`](crate::spss::sav::sav_error::SavError::Format)
     /// when an extension record's payload does not match its subtype's
     /// declared shape. Structural errors cannot occur here — they
-    /// surfaced from `read_header`.
+    /// surfaced from `into_dictionary_reader`.
     pub fn read_record(&mut self) -> Result<Option<DictionaryRecord>> {
         self.state.warnings_mut().clear();
         let Some(buffered) = self.buffer.next_record() else {
